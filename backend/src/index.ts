@@ -1,13 +1,15 @@
 import express from "express";
 import cors from "cors";
 import cookieParser from "cookie-parser";
-import { env } from "./env.js";
+import { env, assertApiProductionConfig } from "./env.js";
 import { healthRouter } from "./routes/health.js";
 import { authRouter } from "./routes/auth.js";
 import { adminRouter } from "./routes/admin.js";
 import { catalogRouter } from "./routes/catalog.js";
 import { generateRouter } from "./routes/generate.js";
 import { loadUser, requireAdmin, requireAuth } from "./middleware/auth.js";
+
+assertApiProductionConfig();
 
 const app = express();
 

@@ -21,6 +21,9 @@ let _connection: Redis | null = null;
 export function getBullConnection(): Redis {
   if (!_connection) {
     _connection = new Redis(env.REDIS_URL, { maxRetriesPerRequest: null, lazyConnect: true });
+    // Prevent an unhandled 'error' event (which would crash the process) when
+    // Redis is briefly unreachable; BullMQ reconnects on its own.
+    _connection.on("error", (e: Error) => console.error("⚠️ Redis (bull) error:", e.message));
   }
   return _connection;
 }

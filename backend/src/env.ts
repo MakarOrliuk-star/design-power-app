@@ -43,25 +43,10 @@ const schema = z
     CLOUDINARY_CLOUD_NAME: z.string().optional(),
     CLOUDINARY_API_KEY: z.string().optional(),
     CLOUDINARY_API_SECRET: z.string().optional(),
-  })
-  .superRefine((val, ctx) => {
-    if (val.NODE_ENV === "production") {
-      if (!val.JWT_SECRET || val.JWT_SECRET.length < 16) {
-        ctx.addIssue({
-          code: z.ZodIssueCode.custom,
-          path: ["JWT_SECRET"],
-          message: "JWT_SECRET (>=16 chars) is required in production",
-        });
-      }
-      if (!val.GOOGLE_CLIENT_ID || !val.GOOGLE_CLIENT_SECRET) {
-        ctx.addIssue({
-          code: z.ZodIssueCode.custom,
-          path: ["GOOGLE_CLIENT_ID"],
-          message: "Google OAuth credentials are required in production",
-        });
-      }
-    }
   });
+// NOTE: auth-only requirements (JWT_SECRET, Google creds) are NOT enforced here —
+// the worker process imports this module too and must boot without them. The API
+// entrypoint (index.ts) asserts those in production via assertApiProductionConfig().
 
 const parsed = schema.safeParse(process.env);
 
@@ -96,3 +81,18 @@ export const cloudinaryConfigured = Boolean(
 );
 export const personPipelineReady = falConfigured && nanoGptConfigured && cloudinaryConfigured;
 export const itemPipelineReady = nanoGptConfigured && cloudinaryConfigured;
+
+/**
+ * API-only production guard. The API needs a real JWT secret + Google OAuth creds;
+ * the worker does not, so this is called from index.ts (not at module load).
+ */
+export function assertApiProductionConfig(): void {
+  if (!isProd) return;
+  const missing: string[] = [];
+  if (!env.JWT_SECRET || env.JWT_SECRET.length < 16) missing.push("JWT_SECRET (>=16 chars)");
+  if (!googleOAuthConfigured) missing.push("GOOGLE_CLIENT_ID + GOOGLE_CLIENT_SECRET");
+  if (missing.length) {
+    console.error("❌ Missing required production config for the API: " + missing.join(", "));
+    process.exit(1);
+  }
+}

@@ -16,6 +16,9 @@ export const redis =
     lazyConnect: true,
   });
 
+// Avoid an unhandled 'error' event crashing the process if Redis blips.
+redis.on("error", (e: Error) => console.error("⚠️ Redis error:", e.message));
+
 if (!isProd) globalForRedis.redis = redis;
 
 let connecting: Promise<void> | null = null;
