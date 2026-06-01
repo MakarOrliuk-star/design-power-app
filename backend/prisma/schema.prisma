@@ -1,13 +1,244 @@
-// This is your Prisma schema file,
-// learn more about it in the docs: https://pris.ly/d/prisma-schema
-
-// Get a free hosted Postgres database in seconds: `npx create-db`
+// Prisma schema for the Design Power image generator (rewrite).
+// Approved in Phase 0. v1 scope: Person (fal.ai) + Item (nano-gpt), Google OAuth
+// + email allowlist with an admin-managed UI. Edit/Background/Smartico/Figma are
+// out of v1 (reserved enum values are added when those land).
+// Docs: https://pris.ly/d/prisma-schema
 
 generator client {
-  provider = "prisma-client"
-  output   = "../generated/prisma"
+  provider     = "prisma-client"
+  output       = "../generated/prisma"
+  runtime      = "nodejs"
+  moduleFormat = "esm"
 }
 
 datasource db {
   provider = "postgresql"
+}
+
+// ============================================================
+// Auth & Allowlist
+// ============================================================
+
+enum Role {
+  ADMIN
+  DESIGNER
+}
+
+model User {
+  id          String          @id @default(cuid())
+  email       String          @unique
+  name        String?
+  avatarUrl   String?
+  googleId    String?         @unique
+  role        Role            @default(DESIGNER)
+  isActive    Boolean         @default(true)
+  createdAt   DateTime        @default(now())
+  lastLoginAt DateTime?
+
+  generations Generation[]
+  batches     Batch[]
+  favorites   BrandFavorite[]
+
+  @@index([email])
+}
+
+/// Allowlist: login is permitted only for emails present here (or an active User).
+model AllowedEmail {
+  id        String   @id @default(cuid())
+  email     String   @unique
+  note      String?
+  addedBy   String? // email of the admin who added it
+  createdAt DateTime @default(now())
+}
+
+// ============================================================
+// Catalog
+// ============================================================
+
+model Brand {
+  id           String              @id @default(cuid())
+  name         String              @unique // e.g. "Spinogambino(Men)"
+  smarticoName String? // canonical Smartico name (unused in v1)
+  isActive     Boolean             @default(true)
+  createdAt    DateTime            @default(now())
+
+  categories   BrandCategoryLink[]
+  nanoRef      BrandNanoRef?
+  prompts      PromptTemplate[]
+  favorites    BrandFavorite[]
+}
+
+/// Brand tabs in the picker: Favorites / All Aramuz / Korea / Sport / ...
+model BrandCategory {
+  id     String              @id @default(cuid())
+  name   String              @unique
+  order  Int                 @default(0)
+  brands BrandCategoryLink[]
+}
+
+model BrandCategoryLink {
+  brandId    String
+  categoryId String
+  brand      Brand         @relation(fields: [brandId], references: [id], onDelete: Cascade)
+  category   BrandCategory @relation(fields: [categoryId], references: [id], onDelete: Cascade)
+
+  @@id([brandId, categoryId])
+}
+
+model BrandFavorite {
+  userId  String
+  brandId String
+  user    User   @relation(fields: [userId], references: [id], onDelete: Cascade)
+  brand   Brand  @relation(fields: [brandId], references: [id], onDelete: Cascade)
+
+  @@id([userId, brandId])
+}
+
+model Theme {
+  id    String @id @default(cuid())
+  name  String @unique
+  order Int    @default(0)
+}
+
+/// Pre-baked references + style prompt per brand (legacy "NanoRefs" tab).
+model BrandNanoRef {
+  id               String   @id @default(cuid())
+  brandId          String   @unique
+  brand            Brand    @relation(fields: [brandId], references: [id], onDelete: Cascade)
+  referenceImages  String[] // 1..3 Cloudinary URLs
+  stylePrompt      String
+  cloudinaryFolder String?
+  updatedAt        DateTime @updatedAt
+}
+
+enum PromptType {
+  PERSON
+  ITEM
+}
+
+/// System prompts (legacy "Prompts" tab).
+/// PERSON -> system content for the nano-gpt chat prompt builder.
+/// ITEM   -> wrapper template; {{prompt}} marks where user text is injected.
+model PromptTemplate {
+  id        String     @id @default(cuid())
+  type      PromptType
+  key       String // brand name (PERSON) or style name (ITEM)
+  brandId   String?
+  brand     Brand?     @relation(fields: [brandId], references: [id])
+  content   String
+  updatedAt DateTime   @updatedAt
+
+  @@unique([type, key])
+}
+
+// ============================================================
+// Generation
+// ============================================================
+
+enum RefMode {
+  ALL
+  EACH
+}
+
+enum BatchStatus {
+  IN_PROGRESS
+  COMPLETED
+  PARTIAL_FAILURE
+  FAILED
+  CANCELLED
+}
+
+enum ActionType {
+  FULL // Person full generation
+  CREATE_ITEM // Create Items (nano-gpt)
+  NANO_REF // Brand-locked Person generation
+}
+
+enum GenerationStatus {
+  QUEUED
+  PROCESSING
+  DONE
+  FAILED
+  CANCELLED
+  READY_FOR_RETRY
+}
+
+enum JobProvider {
+  FAL
+  NANO_GPT
+}
+
+enum JobStatus {
+  QUEUED
+  PROCESSING
+  DONE
+  FAILED
+  CANCELLED
+}
+
+model Batch {
+  id            String       @id @default(cuid())
+  legacyBatchId String?      @unique // e.g. "PERSON_20260601_120000_ABC123"
+  userId        String
+  user          User         @relation(fields: [userId], references: [id])
+  actionType    ActionType
+  theme         String?
+  description   String?
+  status        BatchStatus  @default(IN_PROGRESS)
+  refMode       RefMode? // Person only
+  createdAt     DateTime     @default(now())
+
+  generations   Generation[]
+  jobs          Job[]
+
+  @@index([userId, createdAt])
+}
+
+/// One row = one generated image (legacy RefSheet row).
+model Generation {
+  id                String           @id @default(cuid())
+  batchId           String?
+  batch             Batch?           @relation(fields: [batchId], references: [id])
+  userId            String
+  user              User             @relation(fields: [userId], references: [id])
+  brandName         String // denormalized, matches the legacy sheet
+  theme             String?
+  description       String? // prompt / [NANO_REF] etc.
+  referenceImages   String[]
+  generatedImageUrl String?
+  status            GenerationStatus @default(QUEUED)
+  statusMessage     String? // human-readable status text
+  actionType        ActionType
+  isEdit            Boolean          @default(false)
+  createdAt         DateTime         @default(now())
+  updatedAt         DateTime         @updatedAt
+
+  job               Job?
+
+  @@index([userId, createdAt])
+  @@index([brandName])
+  @@index([status])
+}
+
+/// Async job ledger (legacy "_jobs" tab); bridges Generation rows to fal/nano-gpt.
+/// Synced with the BullMQ queue at runtime.
+model Job {
+  id                String      @id @default(cuid())
+  provider          JobProvider
+  type              PromptType // PERSON | ITEM
+  providerRequestId String?     @unique // fal request_id
+  generationId      String      @unique
+  generation        Generation  @relation(fields: [generationId], references: [id], onDelete: Cascade)
+  batchId           String?
+  batch             Batch?      @relation(fields: [batchId], references: [id])
+  status            JobStatus   @default(QUEUED)
+  statusUrl         String?
+  cancelUrl         String?
+  responseUrl       String?
+  cloudinaryFolder  String?
+  attempts          Int         @default(0)
+  createdAt         DateTime    @default(now())
+  updatedAt         DateTime    @updatedAt
+
+  @@index([status, type])
 }

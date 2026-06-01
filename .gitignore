@@ -1,0 +1,29 @@
+# Dependencies / build output
+node_modules/
+dist/
+.output/
+.nuxt/
+backend/generated/
+
+# Secrets — NEVER commit
+.env
+.env.*
+!.env.example
+
+# Make.com blueprints contain real API keys — keep out of git
+*.blueprint.json
+
+# Legacy reference (rewrite/code.txt has hardcoded legacy secrets) — keep out of git
+rewrite/
+
+# Internal planning docs — for us, not for the repo
+/REQUEST.md
+/SPEC.md
+/SETUP.md
+
+# Tooling state
+.omc/
+
+# OS / editor
+.DS_Store
+Thumbs.db
