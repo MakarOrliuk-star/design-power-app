@@ -75,7 +75,116 @@ async function patchUser(u: AdminUser, patch: Partial<Pick<AdminUser, "role" | "
   }
 }
 
-onMounted(load);
+// ---- Catalog: brand references (NanoRef) + prompts ----
+interface AdminBrand {
+  id: string;
+  name: string;
+  referenceImages: string[];
+  personPrompt: string;
+}
+interface ItemPrompt {
+  key: string;
+  content: string;
+}
+
+const brands = ref<AdminBrand[]>([]);
+const itemPrompts = ref<ItemPrompt[]>([]);
+const brandSearch = ref("");
+const savingId = ref<string | null>(null);
+const rowMsg = ref<Record<string, string>>({});
+const itemMsg = ref<Record<string, string>>({});
+
+const onlyIncomplete = ref(false);
+
+function refCount(b: AdminBrand): number {
+  return b.referenceImages.filter((s) => s.trim()).length;
+}
+function isComplete(b: AdminBrand): boolean {
+  return refCount(b) === 3 && b.personPrompt.trim().length > 0;
+}
+
+const filteredBrands = computed(() => {
+  const q = brandSearch.value.trim().toLowerCase();
+  return brands.value.filter((b) => {
+    if (q && !b.name.toLowerCase().includes(q)) return false;
+    if (onlyIncomplete.value && isComplete(b)) return false;
+    return true;
+  });
+});
+
+function padTo3(arr: string[]): string[] {
+  const a = [...arr];
+  while (a.length < 3) a.push("");
+  return a.slice(0, 3);
+}
+
+async function loadCatalog() {
+  try {
+    const res = await api<{ brands: AdminBrand[]; itemPrompts: ItemPrompt[] }>("/api/admin/catalog");
+    brands.value = res.brands.map((b) => ({ ...b, referenceImages: padTo3(b.referenceImages) }));
+    itemPrompts.value = res.itemPrompts;
+  } catch {
+    error.value = "Не удалось загрузить каталог.";
+  }
+}
+
+function fileToDataUrl(file: File): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const r = new FileReader();
+    r.onload = () => resolve(r.result as string);
+    r.onerror = reject;
+    r.readAsDataURL(file);
+  });
+}
+
+async function uploadRef(b: AdminBrand, slot: number, e: Event) {
+  const input = e.target as HTMLInputElement;
+  const file = input.files?.[0];
+  input.value = "";
+  if (!file) return;
+  rowMsg.value[b.id] = "Загрузка…";
+  try {
+    const dataUrl = await fileToDataUrl(file);
+    const res = await api<{ secure_url: string }>("/api/admin/upload", { method: "POST", body: { dataUrl } });
+    b.referenceImages[slot] = res.secure_url;
+    rowMsg.value[b.id] = "Картинка загружена — нажми Сохранить";
+  } catch {
+    rowMsg.value[b.id] = "Ошибка загрузки картинки";
+  }
+}
+
+async function saveBrand(b: AdminBrand) {
+  savingId.value = b.id;
+  rowMsg.value[b.id] = "";
+  try {
+    const referenceImages = b.referenceImages.map((s) => s.trim()).filter(Boolean);
+    await api(`/api/admin/brands/${b.id}/nanoref`, { method: "PUT", body: { referenceImages } });
+    await api("/api/admin/prompt", {
+      method: "PUT",
+      body: { type: "PERSON", key: b.name, content: b.personPrompt, brandId: b.id },
+    });
+    rowMsg.value[b.id] = "Сохранено ✓";
+  } catch {
+    rowMsg.value[b.id] = "Ошибка сохранения";
+  } finally {
+    savingId.value = null;
+  }
+}
+
+async function saveItemPrompt(p: ItemPrompt) {
+  itemMsg.value[p.key] = "";
+  try {
+    await api("/api/admin/prompt", { method: "PUT", body: { type: "ITEM", key: p.key, content: p.content } });
+    itemMsg.value[p.key] = "Сохранено ✓";
+  } catch {
+    itemMsg.value[p.key] = "Ошибка";
+  }
+}
+
+onMounted(() => {
+  void load();
+  void loadCatalog();
+});
 </script>
 
 <template>
@@ -144,6 +253,83 @@ onMounted(load);
           </tr>
         </tbody>
       </table>
+    </section>
+
+    <!-- Brand references + Person prompts -->
+    <section class="panel">
+      <h2>Референсы и промпты брендов (Person)</h2>
+      <p class="muted small">
+        Ref1/Ref2/Ref3 — заготовленные картинки бренда (Cloudinary URL или загрузка файла).
+        Промпт — системный «prompt writer» для nano-gpt; пусто = общий дефолт.
+      </p>
+      <div class="brand-filters">
+        <input v-model="brandSearch" class="search" type="text" placeholder="Поиск бренда…" />
+        <label class="checkbox">
+          <input v-model="onlyIncomplete" type="checkbox" />
+          Только незаполненные
+        </label>
+      </div>
+
+      <div class="brand-list">
+        <div v-for="b in filteredBrands" :key="b.id" class="brand-card">
+          <div class="brand-card__head">
+            <span class="brand-card__name">{{ b.name }}</span>
+            <span class="badges">
+              <span :class="['badge', refCount(b) === 3 ? 'badge--ok' : refCount(b) ? 'badge--warn' : 'badge--off']">
+                рефы {{ refCount(b) }}/3
+              </span>
+              <span :class="['badge', b.personPrompt.trim() ? 'badge--ok' : 'badge--off']">
+                {{ b.personPrompt.trim() ? "промпт ✓" : "промпт —" }}
+              </span>
+            </span>
+            <span v-if="rowMsg[b.id]" class="brand-card__msg">{{ rowMsg[b.id] }}</span>
+          </div>
+
+          <div class="refs">
+            <div v-for="(url, i) in b.referenceImages" :key="i" class="ref">
+              <div class="ref__preview">
+                <img v-if="url" :src="url" alt="" />
+                <span v-else class="ref__ph">Ref{{ i + 1 }}</span>
+              </div>
+              <input v-model="b.referenceImages[i]" class="ref__url" type="text" :placeholder="`Ref${i + 1} URL`" />
+              <label class="ref__upload">
+                Загрузить
+                <input type="file" accept="image/*" hidden @change="(e) => uploadRef(b, i, e)" />
+              </label>
+            </div>
+          </div>
+
+          <textarea
+            v-model="b.personPrompt"
+            class="prompt"
+            rows="4"
+            placeholder="Системный промпт PERSON для этого бренда (необязательно)"
+          />
+
+          <div class="brand-card__foot">
+            <button class="btn-primary" :disabled="savingId === b.id" @click="saveBrand(b)">
+              {{ savingId === b.id ? "Сохранение…" : "Сохранить" }}
+            </button>
+          </div>
+        </div>
+        <p v-if="!filteredBrands.length" class="muted">Ничего не найдено.</p>
+      </div>
+    </section>
+
+    <!-- Item style prompts -->
+    <section class="panel">
+      <h2>Промпты Item-стилей</h2>
+      <div v-for="p in itemPrompts" :key="p.key" class="item-prompt">
+        <div class="brand-card__head">
+          <span class="brand-card__name">{{ p.key }}</span>
+          <span v-if="itemMsg[p.key]" class="brand-card__msg">{{ itemMsg[p.key] }}</span>
+        </div>
+        <textarea v-model="p.content" class="prompt" rows="3" />
+        <div class="brand-card__foot">
+          <button class="btn-primary" @click="saveItemPrompt(p)">Сохранить</button>
+        </div>
+      </div>
+      <p v-if="!itemPrompts.length" class="muted">Стилей нет.</p>
     </section>
   </div>
 </template>
@@ -237,5 +423,158 @@ select {
   border: 1px solid var(--color-border);
   border-radius: var(--radius-sm);
   background: var(--color-white);
+}
+
+/* ---- catalog management ---- */
+.small {
+  font-size: 13px;
+  margin: 0 0 12px;
+}
+.search {
+  width: 100%;
+  max-width: 360px;
+  padding: 8px 14px;
+  margin-bottom: 16px;
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-pill);
+  background: var(--color-white);
+}
+.brand-list {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+.brand-card,
+.item-prompt {
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md);
+  background: var(--color-white);
+  padding: 16px;
+}
+.brand-card__head {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin-bottom: 12px;
+}
+.brand-card__name {
+  font-weight: 600;
+}
+.brand-card__msg {
+  margin-left: auto;
+  font-size: 13px;
+  color: var(--color-accent);
+}
+.badges {
+  display: inline-flex;
+  gap: 6px;
+}
+.badge {
+  font-size: 11px;
+  padding: 2px 9px;
+  border-radius: var(--radius-pill);
+  white-space: nowrap;
+}
+.badge--ok {
+  background: rgba(138, 56, 245, 0.12);
+  color: var(--color-accent);
+}
+.badge--warn {
+  background: rgba(244, 175, 64, 0.16);
+  color: #b9791b;
+}
+.badge--off {
+  background: var(--color-bubble);
+  color: var(--color-grey);
+}
+.brand-filters {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  margin-bottom: 16px;
+  flex-wrap: wrap;
+}
+.brand-filters .search {
+  margin-bottom: 0;
+}
+.checkbox {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 14px;
+  color: var(--color-text);
+  cursor: pointer;
+}
+.refs {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 12px;
+  margin-bottom: 12px;
+}
+.ref {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.ref__preview {
+  display: grid;
+  place-items: center;
+  aspect-ratio: 1;
+  border-radius: var(--radius-sm);
+  background: var(--color-bubble);
+  overflow: hidden;
+}
+.ref__preview img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+.ref__ph {
+  color: var(--color-grey);
+  font-size: 13px;
+}
+.ref__url {
+  width: 100%;
+  padding: 6px 10px;
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-sm);
+  background: var(--color-white);
+  font-size: 12px;
+}
+.ref__upload {
+  text-align: center;
+  padding: 6px 10px;
+  border: 1px dashed var(--color-border);
+  border-radius: var(--radius-sm);
+  font-size: 12px;
+  color: var(--color-grey);
+  cursor: pointer;
+}
+.ref__upload:hover {
+  border-color: var(--color-accent);
+  color: var(--color-accent);
+}
+.prompt {
+  width: 100%;
+  padding: 10px 12px;
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-sm);
+  background: var(--color-white);
+  font-family: inherit;
+  font-size: 13px;
+  line-height: 1.5;
+  color: var(--color-text);
+  resize: vertical;
+}
+.brand-card__foot {
+  display: flex;
+  justify-content: flex-end;
+  margin-top: 12px;
+}
+.item-prompt {
+  margin-bottom: 12px;
+}
+.item-prompt .prompt {
+  margin-top: 4px;
 }
 </style>

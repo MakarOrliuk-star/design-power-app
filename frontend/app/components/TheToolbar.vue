@@ -125,6 +125,19 @@ const total = (b: ActiveBatch) => b.status?.total ?? 0;
 
     <!-- Tool icons -->
     <div class="card card--tools">
+      <button
+        v-if="auth.isAdmin"
+        class="tool tool--admin"
+        type="button"
+        aria-label="Admin"
+        title="Админка"
+        @click="navigateTo('/admin')"
+      >
+        <svg viewBox="0 0 24 24" width="22" height="22" fill="none">
+          <path d="M12 3l7 3v5c0 4.5-3 8-7 10-4-2-7-5.5-7-10V6l7-3z" stroke="currentColor" stroke-width="1.6" stroke-linejoin="round" />
+          <path d="M9 12l2 2 4-4" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" />
+        </svg>
+      </button>
       <button class="tool" type="button" aria-label="Models">
         <svg viewBox="0 0 24 24" width="22" height="22" fill="none">
           <path d="M12 3l8 4.5v9L12 21l-8-4.5v-9L12 3z" stroke="currentColor" stroke-width="1.6" stroke-linejoin="round" />
