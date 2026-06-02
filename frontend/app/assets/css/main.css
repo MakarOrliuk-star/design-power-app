@@ -1,6 +1,39 @@
-/* Design Power — base tokens (from the Figma "UI pallete" board). Light theme. */
+/* Design Power — base tokens. Values sampled from the Figma SVG exports
+   (figma/icons/*.svg) so the UI matches pixel-for-pixel. Light theme. */
+
+/* Circular (Lineto, proprietary). Drop the .woff2/.woff files into
+   frontend/public/fonts/ — see public/fonts/README.txt. Until they exist the
+   font-display:swap fallback chain (rounded grotesque → system) renders. */
+@font-face {
+  font-family: "Circular";
+  src:
+    url("/fonts/CircularStd-Book.woff2") format("woff2"),
+    url("/fonts/CircularStd-Book.woff") format("woff");
+  font-weight: 450;
+  font-style: normal;
+  font-display: swap;
+}
+@font-face {
+  font-family: "Circular";
+  src:
+    url("/fonts/CircularStd-Medium.woff2") format("woff2"),
+    url("/fonts/CircularStd-Medium.woff") format("woff");
+  font-weight: 500;
+  font-style: normal;
+  font-display: swap;
+}
+@font-face {
+  font-family: "Circular";
+  src:
+    url("/fonts/CircularStd-Bold.woff2") format("woff2"),
+    url("/fonts/CircularStd-Bold.woff") format("woff");
+  font-weight: 700;
+  font-style: normal;
+  font-display: swap;
+}
+
 :root {
-  --color-bg: #f2f2f2; /* macaronka background (outside the 1280 container) */
+  --color-bg: #f2f2f2; /* macaronka background (behind the page container) */
   --color-window: #f7f7f7; /* window / panel fill */
   --color-bubble: #e5e5e5; /* bubble background */
   --color-text: #1f1f1f; /* primary text */
@@ -8,20 +41,34 @@
   --color-border: #cfcfcf; /* bubble borders */
   --color-white: #ffffff;
   --color-stop: #f47373; /* cancel / stop */
-  --color-stop-hover: #e85c5c;
+  --color-stop-hover: #e76060; /* stop hover (exact, from SVG) */
+  --color-accent: #8a38f5; /* purple accent: dashed placeholders, progress */
 
-  --gradient-active: linear-gradient(135deg, #7b61ff 0%, #b36be3 100%);
+  /* Generate button / progress gradient — horizontal, 3 stops (from SVG). */
+  --gradient-active: linear-gradient(
+    90deg,
+    #6a72d9 0%,
+    #8151aa 51%,
+    #dd88ed 100%
+  );
 
+  --radius-xs: 4px; /* image placeholders */
   --radius-sm: 8px;
   --radius-md: 14px;
   --radius-lg: 20px;
+  --radius-pill: 999px; /* bubbles / chips (rx≈18 in SVG) */
 
-  --container-width: 1280px;
+  /* Page width — single source of truth. ~1800 matches the Figma artboard
+     (≈1880) and lets the toolbar show full labels without squeezing. */
+  --container-width: 1800px;
+  --container-pad: 24px;
   --header-height: 64px;
 
+  --shadow-card: 0 1px 2px rgba(31, 31, 31, 0.04);
+
   --font-sans:
-    "Inter", -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica,
-    Arial, sans-serif;
+    "Circular", "Nunito Sans", -apple-system, BlinkMacSystemFont, "Segoe UI",
+    Roboto, Helvetica, Arial, sans-serif;
 }
 
 * {

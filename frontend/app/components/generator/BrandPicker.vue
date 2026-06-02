@@ -1,157 +1,169 @@
 <script setup lang="ts">
-import { ALL_CATEGORY, FAVORITES_CATEGORY } from "~/stores/generator";
+// Phase 5 — brand picker: category tab bar + "Add all", and an alphabetical,
+// scrollable list of brand bubbles. Clicking a bubble selects it (shows up in
+// Current styles + Each cards via the shared composable).
+//
+// Brands come from the master list (app/data/brands.ts = the `brand` table), so
+// new brands appear automatically. Phase 7 swaps the static import for a backend
+// load (GET /brands); grouping stays the same. Item has its own list (TODO).
+import { BRANDS, groupBrands } from "~/data/brands";
 
-const gen = useGeneratorStore();
+const { toggle, addMany, isSelected } = useSelectedStyles();
 
-const tabs = computed(() => [
-  { id: FAVORITES_CATEGORY, name: "Favorites" },
-  ...gen.categories.map((c) => ({ id: c.id, name: c.name })),
-  { id: ALL_CATEGORY, name: "All" },
-]);
+const categories = [
+  "Favorites",
+  "All Aramuz",
+  "Oscar, Corgi, Spinjoys",
+  "DJslot and Vinci",
+  "Korea",
+  "Sport",
+];
+const activeCategory = ref("All Aramuz");
+
+// Category filtering needs a brand->category map (from the table) — wired in
+// Phase 7. For now every category shows the full alphabetical list.
+const groups = computed(() => groupBrands(BRANDS));
+
+function addAll() {
+  addMany(groups.value.flatMap((g) => g.brands.map((b) => b.label)));
+}
 </script>
 
 <template>
-  <section class="panel">
-    <div class="search">
-      <input v-model="gen.search" type="text" :placeholder="gen.isItem ? 'Search styles' : 'Search'" />
-    </div>
-
-    <div class="bar">
-      <!-- Category tabs are Person-only; Item styles are a flat list. -->
-      <div v-if="!gen.isItem" class="tabs">
+  <section class="picker">
+    <div class="picker__bar">
+      <div class="cats">
         <button
-          v-for="t in tabs"
-          :key="t.id"
-          :class="['tab', { 'tab--active': gen.activeCategoryId === t.id }]"
-          @click="gen.activeCategoryId = t.id"
+          v-for="c in categories"
+          :key="c"
+          :class="['cat', { 'cat--on': activeCategory === c }]"
+          type="button"
+          @click="activeCategory = c"
         >
-          {{ t.name }}
+          {{ c }}
         </button>
       </div>
-      <span v-else class="item-hint">Item-стили</span>
-
-      <button v-if="gen.pickerItems.length" class="select-all" @click="gen.selectAllVisible()">
-        Выбрать все
-      </button>
+      <button class="addall" type="button" @click="addAll">Add all</button>
     </div>
 
-    <div v-if="gen.pickerItems.length" class="grid">
-      <div
-        v-for="it in gen.pickerItems"
-        :key="it.key"
-        :class="['brand', { 'brand--selected': gen.isSelected(it.key) }]"
-        @click="gen.toggleTarget(it.key)"
-      >
-        <span class="brand__name">{{ it.label }}</span>
-        <button
-          v-if="it.brand"
-          class="brand__fav"
-          :class="{ 'brand__fav--on': it.brand.isFavorite }"
-          title="В избранное"
-          @click.stop="gen.toggleFavorite(it.brand)"
-        >
-          ★
-        </button>
+    <div class="list">
+      <div v-for="g in groups" :key="g.letter" class="group">
+        <span class="group__letter">{{ g.letter }}</span>
+        <div class="group__brands">
+          <button
+            v-for="b in g.brands"
+            :key="b.id"
+            :class="['brand', { 'brand--on': isSelected(b.label) }]"
+            type="button"
+            @click="toggle(b.label)"
+          >
+            {{ b.label }}
+          </button>
+        </div>
       </div>
     </div>
-
-    <p v-else-if="gen.loaded" class="empty">
-      {{ gen.isItem ? "Стили не найдены (нужен seed Item-стилей)." : "Бренды не найдены (нужен seed)." }}
-    </p>
-    <p v-else class="empty">Загрузка…</p>
   </section>
 </template>
 
 <style scoped>
-.panel {
+.picker {
+  display: flex;
+  flex-direction: column;
+  gap: 22px;
+}
+
+/* category bar */
+.picker__bar {
+  display: flex;
+  align-items: center;
+  gap: 20px;
+}
+.cats {
+  display: flex;
+  flex: 1;
+  gap: 4px;
   background: var(--color-window);
   border: 1px solid var(--color-border);
-  border-radius: var(--radius-lg);
-  padding: 20px;
+  border-radius: var(--radius-pill);
+  padding: 5px;
 }
-.search input {
-  width: 100%;
-  padding: 10px 14px;
-  border: 1px solid var(--color-border);
-  border-radius: 999px;
-  background: var(--color-white);
-  margin-bottom: 16px;
+.cat {
+  border: none;
+  background: none;
+  padding: 9px 18px;
+  border-radius: var(--radius-pill);
+  font-family: inherit;
   font-size: 14px;
+  color: var(--color-grey);
+  white-space: nowrap;
 }
-.bar {
+.cat--on {
+  background: var(--color-white);
+  color: var(--color-text);
+  box-shadow: var(--shadow-card);
+}
+.addall {
+  flex: 0 0 auto;
+  border: none;
+  background: none;
+  padding: 0;
+  font-family: inherit;
+  font-size: 14px;
+  color: var(--color-text);
+}
+.addall:hover {
+  color: var(--color-accent);
+}
+
+/* alphabetical list */
+.list {
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md);
+  padding: 4px 20px;
+  max-height: 300px;
+  overflow-y: auto;
+}
+.group {
   display: flex;
-  align-items: center;
+  align-items: flex-start;
+  gap: 28px;
+  padding: 18px 0;
+  border-bottom: 1px solid var(--color-bubble);
+}
+.group:last-child {
+  border-bottom: none;
+}
+.group__letter {
+  flex: 0 0 32px;
+  font-size: 26px;
+  font-weight: 400;
+  line-height: 40px;
+  color: #c4c4c4;
+}
+.group__brands {
+  flex: 1;
+  display: flex;
+  flex-wrap: wrap;
   gap: 12px;
-  margin-bottom: 16px;
 }
-.tabs {
-  display: flex;
-  gap: 4px;
-  flex-wrap: wrap;
-  background: var(--color-bubble);
-  border-radius: 999px;
-  padding: 4px;
-}
-.tab {
-  border: none;
-  background: none;
-  padding: 6px 14px;
-  border-radius: 999px;
-  font-size: 13px;
-  color: var(--color-grey);
-}
-.tab--active {
-  background: var(--color-white);
-  color: var(--color-text);
-}
-.item-hint {
-  color: var(--color-grey);
-  font-size: 13px;
-  font-weight: 500;
-}
-.select-all {
-  margin-left: auto;
-  border: none;
-  background: none;
-  color: var(--color-grey);
-  font-weight: 500;
-}
-.select-all:hover {
-  color: var(--color-text);
-}
-.grid {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 8px;
-}
+
+/* brand bubbles */
 .brand {
-  display: inline-flex;
-  align-items: center;
-  gap: 8px;
-  padding: 8px 12px;
+  height: 40px;
+  padding: 0 20px;
   border: 1px solid var(--color-border);
-  border-radius: 999px;
+  border-radius: var(--radius-pill);
   background: var(--color-white);
-  cursor: pointer;
+  font-family: inherit;
   font-size: 14px;
-  user-select: none;
+  color: var(--color-text);
+  white-space: nowrap;
 }
-.brand--selected {
+.brand:hover {
+  border-color: var(--color-accent);
+}
+.brand--on {
   background: var(--color-bubble);
   border-color: var(--color-text);
-}
-.brand__fav {
-  border: none;
-  background: none;
-  color: var(--color-border);
-  font-size: 14px;
-  line-height: 1;
-}
-.brand__fav--on {
-  color: #f4b73b;
-}
-.empty {
-  color: var(--color-grey);
-  font-size: 14px;
 }
 </style>

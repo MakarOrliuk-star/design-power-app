@@ -1,85 +1,154 @@
 <script setup lang="ts">
-const gen = useGeneratorStore();
+// Phase 3 — left column "Current styles". Static markup on mock data so it
+// matches home.png 1:1; the generator store is reconnected in Phase 7.
+// Metrics from figma/icons/*.svg: bubbles 36px tall, radius 18 (pill),
+// 1px border; container has a small (~4px) radius.
+
+// Shared selection — removing here updates the Each cards on the right.
+const { selected, remove, clear } = useSelectedStyles();
+const search = "";
 </script>
 
 <template>
-  <section class="panel">
-    <header class="panel__head">
-      <h2>Current styles</h2>
-      <button v-if="gen.currentTargets.length" class="clear" @click="gen.clearAll()">
-        Clear all
-      </button>
-    </header>
+  <section class="cur">
+    <h2 class="cur__title">Current styles</h2>
 
-    <div v-if="gen.currentTargets.length" class="chips">
-      <span v-for="t in gen.currentTargets" :key="t.key" class="chip">
-        {{ t.label }}
-        <button class="chip__x" title="Убрать" @click="gen.removeTarget(t.key)">×</button>
+    <div class="cur__row">
+      <div class="search">
+        <input
+          class="search__input"
+          type="text"
+          :value="search"
+          placeholder="Search"
+        />
+        <span class="search__icon" aria-hidden="true">
+          <svg viewBox="0 0 24 24" width="18" height="18" fill="none">
+            <circle cx="11" cy="11" r="6.5" stroke="currentColor" stroke-width="1.8" />
+            <path d="M16 16l4 4" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" />
+          </svg>
+        </span>
+      </div>
+      <button class="cur__clear" type="button" @click="clear">Clear all</button>
+    </div>
+
+    <div class="cur__box">
+      <span v-for="s in selected" :key="s" class="bubble">
+        {{ s }}
+        <button class="bubble__x" type="button" aria-label="Remove" @click="remove(s)">
+          <svg viewBox="0 0 24 24" width="12" height="12" fill="none">
+            <path d="M6 6l12 12M18 6L6 18" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" />
+          </svg>
+        </button>
       </span>
     </div>
-    <p v-else class="empty">
-      {{ gen.isItem ? "Выберите стили ниже — они появятся здесь." : "Выберите бренды ниже — они появятся здесь." }}
-    </p>
   </section>
 </template>
 
 <style scoped>
-.panel {
-  background: var(--color-window);
-  border: 1px solid var(--color-border);
-  border-radius: var(--radius-lg);
-  padding: 20px;
-  min-height: 280px;
-}
-.panel__head {
+.cur {
   display: flex;
-  align-items: center;
-  justify-content: space-between;
-  margin-bottom: 16px;
+  flex-direction: column;
+  min-width: 0;
 }
-h2 {
-  margin: 0;
-  font-size: 16px;
-}
-.clear {
-  border: none;
-  background: none;
-  color: var(--color-grey);
-  font-weight: 500;
-}
-.clear:hover {
+.cur__title {
+  margin: 0 0 18px;
+  font-size: 24px;
+  font-weight: 700;
   color: var(--color-text);
 }
-.chips {
+
+/* search + clear all row */
+.cur__row {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  margin-bottom: 18px;
+}
+.search {
+  position: relative;
+  flex: 0 1 440px;
+}
+.search__input {
+  width: 100%;
+  height: 44px;
+  padding: 0 44px 0 18px;
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-pill);
+  background: var(--color-white);
+  font-family: inherit;
+  font-size: 14px;
+  color: var(--color-text);
+  outline: none;
+}
+.search__input::placeholder {
+  color: var(--color-grey);
+}
+.search__input:focus {
+  border-color: var(--color-accent);
+}
+.search__icon {
+  position: absolute;
+  right: 16px;
+  top: 50%;
+  transform: translateY(-50%);
+  display: grid;
+  place-items: center;
+  color: var(--color-grey);
+  pointer-events: none;
+}
+.cur__clear {
+  margin-left: auto;
+  border: none;
+  background: none;
+  padding: 0;
+  font-family: inherit;
+  font-size: 14px;
+  color: var(--color-text);
+}
+.cur__clear:hover {
+  color: var(--color-accent);
+}
+
+/* bubble container */
+.cur__box {
+  flex: 1;
+  min-height: 360px;
+  padding: 18px;
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md);
+  background: var(--color-white);
   display: flex;
   flex-wrap: wrap;
-  gap: 8px;
+  align-content: flex-start;
+  gap: 12px;
 }
-.chip {
+
+/* bubbles (pills) */
+.bubble {
   display: inline-flex;
   align-items: center;
-  gap: 6px;
-  padding: 6px 10px 6px 14px;
-  background: var(--color-white);
+  gap: 8px;
+  height: 36px;
+  padding: 0 8px 0 16px;
   border: 1px solid var(--color-border);
-  border-radius: 999px;
+  border-radius: var(--radius-pill);
+  background: var(--color-white);
   font-size: 14px;
+  color: var(--color-text);
+  white-space: nowrap;
 }
-.chip__x {
+.bubble__x {
+  display: grid;
+  place-items: center;
+  width: 22px;
+  height: 22px;
   border: none;
+  border-radius: 7px;
   background: var(--color-bubble);
-  border-radius: 50%;
-  width: 18px;
-  height: 18px;
-  line-height: 1;
   color: var(--color-grey);
 }
-.chip__x:hover {
+.bubble__x:hover {
   background: var(--color-stop);
   color: var(--color-white);
-}
-.empty {
-  color: var(--color-grey);
-  font-size: 14px;
 }
 </style>
