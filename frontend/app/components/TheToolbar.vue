@@ -7,10 +7,21 @@
 import type { ActiveBatch } from "~/stores/generator";
 
 const gen = useGeneratorStore();
+const { theme, toggle: toggleTheme } = useTheme();
 
 const promptName = ""; // empty -> shows the "Empty" placeholder
 
-const user = { email: "aperchenko@cortexu.io", initials: "Ag" };
+// Logged-in user (from the session / auth store).
+const auth = useAuthStore();
+const userEmail = computed(() => auth.user?.email ?? "");
+const userInitials = computed(() => {
+  const u = auth.user;
+  if (!u) return "";
+  const base = (u.name && u.name.trim()) || u.email || "";
+  const parts = base.split(/[\s@._-]+/).filter(Boolean);
+  const letters = parts.slice(0, 2).map((p) => p[0]).join("");
+  return (letters || base.slice(0, 2)).toUpperCase();
+});
 
 const pct = (b: ActiveBatch) => b.status?.progress ?? 0;
 const done = (b: ActiveBatch) => b.status?.completed ?? 0;
@@ -120,7 +131,13 @@ const total = (b: ActiveBatch) => b.status?.total ?? 0;
           <path d="M4 7.5l8 4.5 8-4.5M12 12v9" stroke="currentColor" stroke-width="1.6" stroke-linejoin="round" />
         </svg>
       </button>
-      <button class="tool" type="button" aria-label="Enhance">
+      <button
+        class="tool"
+        type="button"
+        aria-label="Open Result"
+        title="Result"
+        @click="navigateTo('/result')"
+      >
         <svg viewBox="0 0 24 24" width="22" height="22" fill="none">
           <path d="M12 3l1.8 4.2L18 9l-4.2 1.8L12 15l-1.8-4.2L6 9l4.2-1.8L12 3z" stroke="currentColor" stroke-width="1.6" stroke-linejoin="round" />
           <path d="M18 14l.9 2.1L21 17l-2.1.9L18 20l-.9-2.1L15 17l2.1-.9L18 14z" stroke="currentColor" stroke-width="1.4" stroke-linejoin="round" />
@@ -133,12 +150,26 @@ const total = (b: ActiveBatch) => b.status?.total ?? 0;
           <path d="M5 17l4.5-4.5 3.5 3.5 3-3L19 16" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" />
         </svg>
       </button>
+      <button
+        class="tool"
+        type="button"
+        :aria-label="theme === 'dark' ? 'Switch to light theme' : 'Switch to dark theme'"
+        @click="toggleTheme"
+      >
+        <svg v-if="theme === 'dark'" viewBox="0 0 24 24" width="22" height="22" fill="none">
+          <circle cx="12" cy="12" r="4.5" stroke="currentColor" stroke-width="1.6" />
+          <path d="M12 2v2M12 20v2M2 12h2M20 12h2M5 5l1.4 1.4M17.6 17.6L19 19M19 5l-1.4 1.4M6.4 17.6L5 19" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" />
+        </svg>
+        <svg v-else viewBox="0 0 24 24" width="22" height="22" fill="none">
+          <path d="M20 14.5A8 8 0 119.5 4 6.5 6.5 0 0020 14.5z" stroke="currentColor" stroke-width="1.6" stroke-linejoin="round" />
+        </svg>
+      </button>
     </div>
 
     <!-- User -->
     <div class="card card--user">
-      <span class="user__email">{{ user.email }}</span>
-      <span class="user__avatar">{{ user.initials }}</span>
+      <span class="user__email">{{ userEmail }}</span>
+      <span class="user__avatar">{{ userInitials }}</span>
     </div>
   </div>
 </template>

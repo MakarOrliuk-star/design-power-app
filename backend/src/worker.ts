@@ -21,13 +21,13 @@ const connection = getBullConnection();
 
 const personWorker = new Worker<GenerationJobData, void, "submit">(
   PERSON_QUEUE,
-  (job) => processPersonJob(job.data.generationId),
+  (job) => processPersonJob(job.data.generationId, job.data.aspectRatio),
   { connection, concurrency: 8, lockDuration: LONG_LOCK_MS },
 );
 
 const itemWorker = new Worker<GenerationJobData, void, "generate">(
   ITEM_QUEUE,
-  (job) => processItemJob(job.data.generationId),
+  (job) => processItemJob(job.data.generationId, job.data.aspectRatio),
   { connection, concurrency: 5, lockDuration: LONG_LOCK_MS },
 );
 

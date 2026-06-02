@@ -126,7 +126,7 @@ const example = "Neon casino banner, purple & gold";
 /* segmented control */
 .seg {
   display: inline-flex;
-  background: #f0f0f0;
+  background: var(--color-segment);
   border-radius: var(--radius-pill);
   padding: 3px;
 }
@@ -149,7 +149,7 @@ const example = "Neon casino banner, purple & gold";
 .tabs {
   display: flex;
   gap: 6px;
-  background: #f0f0f0;
+  background: var(--color-segment);
   border-radius: var(--radius-pill);
   padding: 5px;
   margin-bottom: 18px;

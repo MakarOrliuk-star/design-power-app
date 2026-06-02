@@ -23,7 +23,11 @@ const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
  * Empty imageUrls → text-to-image (nano-banana-2); non-empty → image-to-image
  * (nano-banana-2/edit). Light retry on 5xx/429/network.
  */
-export async function runPersonFal(prompt: string, imageUrls: string[]): Promise<FalRunResult> {
+export async function runPersonFal(
+  prompt: string,
+  imageUrls: string[],
+  aspectRatio = "1:1",
+): Promise<FalRunResult> {
   const hasImages = imageUrls.length > 0;
   const model = hasImages ? "fal-ai/nano-banana-2/edit" : "fal-ai/nano-banana-2";
   const endpoint = `https://fal.run/${model}`;
@@ -31,7 +35,7 @@ export async function runPersonFal(prompt: string, imageUrls: string[]): Promise
   const body: Record<string, unknown> = {
     prompt,
     num_images: 1,
-    aspect_ratio: "1:1",
+    aspect_ratio: aspectRatio,
     output_format: "png",
     resolution: "1K",
   };

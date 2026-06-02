@@ -20,6 +20,8 @@ interface PersonParams {
   userRefUrls: string[]; // global (ALL) user refs
   perBrandRefUrls?: Record<string, string[]>; // per-brand (EACH) user refs
   perBrandCounts?: Record<string, number>; // per-brand (EACH) image count
+  aspectRatio: string; // global (ALL) fal aspect_ratio
+  perBrandAspect?: Record<string, string>; // per-brand (EACH) aspect_ratio
 }
 
 interface ItemParams {
@@ -29,6 +31,11 @@ interface ItemParams {
   sharedDescription: string;
   perStylePrompts: Record<string, string>;
   imageCount: number;
+  userRefUrls: string[]; // global (ALL) user refs
+  perStyleRefUrls?: Record<string, string[]>; // per-style (EACH) user refs
+  perStyleCounts?: Record<string, number>; // per-style (EACH) image count
+  aspectRatio: string; // global (ALL) fal aspect_ratio
+  perStyleAspect?: Record<string, string>; // per-style (EACH) aspect_ratio
 }
 
 export interface CreateBatchResult {
@@ -53,6 +60,7 @@ export async function createPersonBatch(p: PersonParams): Promise<CreateBatchRes
     brandName: string;
     userText: string;
     imageUrls: string[];
+    aspect: string;
   }
   const specs: Spec[] = [];
 
@@ -61,20 +69,23 @@ export async function createPersonBatch(p: PersonParams): Promise<CreateBatchRes
     const userText = (
       isEach ? p.perBrandPrompts[brand.id] || p.sharedDescription : p.sharedDescription
     ).trim();
-    // EACH: the brand's own uploaded refs + count; ALL: the shared global ones.
+    // EACH: the brand's own uploaded refs / count / aspect; ALL: the shared globals.
     const userRefs = isEach ? p.perBrandRefUrls?.[brand.id] ?? [] : p.userRefUrls;
     const count = isEach ? p.perBrandCounts?.[brand.id] ?? p.imageCount : p.imageCount;
+    const aspect = (isEach ? p.perBrandAspect?.[brand.id] : undefined) || p.aspectRatio;
     const refs = brand.nanoRef?.referenceImages ?? [];
 
-    const base: string[][] =
-      refs.length > 0
-        ? refs.map((r) => (userRefs.length ? [r, ...userRefs] : [r]))
-        : [userRefs.length ? [...userRefs] : []];
-
-    for (let n = 0; n < count; n++) {
-      for (const imageUrls of base) {
-        specs.push({ brandName: brand.name, userText, imageUrls });
-      }
+    // ADDENDUM §6: ONE fal job per output image. Iteration i pairs the i-th brand
+    // reference (cycled if count > refs) with the user's uploaded image(s); same
+    // prompt for all, so each image is a different pose of the same brand.
+    for (let i = 0; i < count; i++) {
+      const brandRef = refs.length > 0 ? refs[i % refs.length] : undefined;
+      const imageUrls = brandRef
+        ? userRefs.length
+          ? [brandRef, ...userRefs]
+          : [brandRef]
+        : [...userRefs]; // no brand ref → just the user image(s)
+      specs.push({ brandName: brand.name, userText, imageUrls, aspect });
     }
   }
   if (specs.length === 0) throw new Error("nothing_to_generate");
@@ -89,7 +100,7 @@ export async function createPersonBatch(p: PersonParams): Promise<CreateBatchRes
     },
   });
 
-  const generationIds: string[] = [];
+  const created: { generationId: string; aspect: string }[] = [];
   for (const spec of specs) {
     const gen = await prisma.generation.create({
       data: {
@@ -114,23 +125,24 @@ export async function createPersonBatch(p: PersonParams): Promise<CreateBatchRes
       },
       select: { id: true },
     });
-    generationIds.push(gen.id);
+    created.push({ generationId: gen.id, aspect: spec.aspect });
   }
 
   await getPersonQueue().addBulk(
-    generationIds.map((generationId) => ({
+    created.map(({ generationId, aspect }) => ({
       name: "submit" as const,
-      data: { generationId, batchId: batch.id },
+      data: { generationId, batchId: batch.id, aspectRatio: aspect },
     })),
   );
 
-  return { batchId: batch.id, count: generationIds.length };
+  return { batchId: batch.id, count: created.length };
 }
 
 /**
- * Item (nano-gpt). Each selected brand is the style key; `imageCount` images per
- * brand, generated synchronously by the item worker (legacy `processCreateItems`
- * + `processPendingItemJobs`).
+ * Item (fal — ADDENDUM §2). Each selected style is the prompt-template key;
+ * generation runs through `fal-ai/nano-banana-2/edit` in the item worker. Item
+ * has no pre-baked brand refs, so each image is img2img on the user's upload
+ * (or text-to-image when none), repeated `imageCount` times per style.
  */
 export async function createItemBatch(p: ItemParams): Promise<CreateBatchResult> {
   const styles = [...new Set(p.styles.map((s) => s.trim()).filter(Boolean))];
@@ -145,12 +157,17 @@ export async function createItemBatch(p: ItemParams): Promise<CreateBatchResult>
     },
   });
 
-  const generationIds: string[] = [];
+  const created: { generationId: string; aspect: string }[] = [];
   for (const style of styles) {
     // brandName stores the style name here (it's the row label + the ITEM
     // prompt-template lookup key used by the item worker).
     const userText = (p.perStylePrompts[style] || p.sharedDescription).trim();
-    for (let n = 0; n < p.imageCount; n++) {
+    // Per-style refs/count/aspect when provided (EACH), else the global ones (ALL).
+    const userRefs = p.perStyleRefUrls?.[style]?.length ? p.perStyleRefUrls[style]! : p.userRefUrls;
+    const count = p.perStyleCounts?.[style] ?? p.imageCount;
+    const aspect = p.perStyleAspect?.[style] || p.aspectRatio;
+
+    for (let i = 0; i < count; i++) {
       const gen = await prisma.generation.create({
         data: {
           batchId: batch.id,
@@ -158,13 +175,13 @@ export async function createItemBatch(p: ItemParams): Promise<CreateBatchResult>
           brandName: style,
           theme: p.themeName,
           description: userText,
-          referenceImages: [],
+          referenceImages: [...userRefs],
           actionType: "CREATE_ITEM",
           status: "QUEUED",
           statusMessage: "⏳ Queued",
           job: {
             create: {
-              provider: "NANO_GPT",
+              provider: "FAL",
               type: "ITEM",
               status: "QUEUED",
               batchId: batch.id,
@@ -174,16 +191,16 @@ export async function createItemBatch(p: ItemParams): Promise<CreateBatchResult>
         },
         select: { id: true },
       });
-      generationIds.push(gen.id);
+      created.push({ generationId: gen.id, aspect });
     }
   }
 
   await getItemQueue().addBulk(
-    generationIds.map((generationId) => ({
+    created.map(({ generationId, aspect }) => ({
       name: "generate" as const,
-      data: { generationId, batchId: batch.id },
+      data: { generationId, batchId: batch.id, aspectRatio: aspect },
     })),
   );
 
-  return { batchId: batch.id, count: generationIds.length };
+  return { batchId: batch.id, count: created.length };
 }

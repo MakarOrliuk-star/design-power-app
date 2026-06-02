@@ -43,6 +43,7 @@
   --color-stop: #f47373; /* cancel / stop */
   --color-stop-hover: #e76060; /* stop hover (exact, from SVG) */
   --color-accent: #8a38f5; /* purple accent: dashed placeholders, progress */
+  --color-segment: #f0f0f0; /* segmented-control track (tabs, All/Each) */
 
   /* Generate button / progress gradient — horizontal, 3 stops (from SVG). */
   --gradient-active: linear-gradient(
@@ -71,8 +72,29 @@
     Roboto, Helvetica, Arial, sans-serif;
 }
 
+/* Dark theme — toggled via <html data-theme="dark">. Brand colors (accent,
+   stop, gradient) are kept; only neutral surfaces/text are remapped. */
+:root[data-theme="dark"] {
+  --color-bg: #121214; /* app background behind the container */
+  --color-window: #1b1b1f; /* window / panel fill */
+  --color-bubble: #2a2a30; /* bubble background */
+  --color-text: #ececf1; /* primary text */
+  --color-grey: #9a9aa5; /* icons / muted */
+  --color-border: #3a3a42; /* borders */
+  --color-white: #1e1e23; /* "surface" — cards/boards become dark panels */
+  --color-segment: #2a2a30; /* segmented-control track */
+  --shadow-card: 0 1px 2px rgba(0, 0, 0, 0.4);
+}
+
 * {
   box-sizing: border-box;
+}
+
+html {
+  color-scheme: light;
+}
+html[data-theme="dark"] {
+  color-scheme: dark;
 }
 
 html,

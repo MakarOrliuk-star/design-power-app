@@ -1,6 +1,6 @@
 import { readFile } from "node:fs/promises";
 import { prisma } from "../src/lib/prisma.js";
-import { BRANDS, CATEGORIES, THEMES } from "./seed-data/catalog.ts";
+import { BRANDS, CATEGORIES, THEMES, BRAND_CATEGORIES } from "./seed-data/catalog.ts";
 
 /**
  * Idempotent seed (upserts) — safe to re-run.
@@ -35,6 +35,29 @@ async function main() {
     await prisma.brand.upsert({ where: { name }, create: { name }, update: {} });
   }
 
+  // Brand → category links (BrandCategoryLink) from BRAND_CATEGORIES.
+  let linkCount = 0;
+  for (const [categoryName, brandNames] of Object.entries(BRAND_CATEGORIES)) {
+    const category = await prisma.brandCategory.findUnique({
+      where: { name: categoryName },
+      select: { id: true },
+    });
+    if (!category) continue;
+    for (const brandName of brandNames) {
+      const brand = await prisma.brand.findUnique({ where: { name: brandName }, select: { id: true } });
+      if (!brand) {
+        console.warn(`⚠️ link skipped — brand not found: ${brandName}`);
+        continue;
+      }
+      await prisma.brandCategoryLink.upsert({
+        where: { brandId_categoryId: { brandId: brand.id, categoryId: category.id } },
+        create: { brandId: brand.id, categoryId: category.id },
+        update: {},
+      });
+      linkCount++;
+    }
+  }
+
   // Item style prompts (extracted from CREATE_ITEMS.blueprint.json)
   const stylesUrl = new URL("./seed-data/item-styles.json", import.meta.url);
   const styles = JSON.parse(await readFile(stylesUrl, "utf8")) as { style: string; prompt: string }[];
@@ -48,7 +71,8 @@ async function main() {
 
   console.log(
     `✅ Seeded: ${THEMES.length} themes, ${CATEGORIES.length} categories, ` +
-      `${uniqueBrands.length} brands, ${styles.length} item-style prompts`,
+      `${uniqueBrands.length} brands, ${linkCount} brand-category links, ` +
+      `${styles.length} item-style prompts`,
   );
 }
 

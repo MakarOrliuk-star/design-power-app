@@ -87,6 +87,7 @@ export const useGeneratorStore = defineStore("generator", () => {
   const prompt = ref("");
   const imageCount = ref(1);
   const refImages = ref<string[]>([]); // base64 data URLs (Person)
+  const aspectRatio = ref("1:1"); // fal aspect_ratio, global (ALL)
 
   // Selections (separate per target kind)
   const selectedBrandIds = ref<string[]>([]); // Person
@@ -95,6 +96,7 @@ export const useGeneratorStore = defineStore("generator", () => {
   const perStylePrompts = ref<Record<string, string>>({}); // Item EACH (by style)
   const perTargetRefs = ref<Record<string, string[]>>({}); // EACH reference uploads (base64) by key
   const perTargetCounts = ref<Record<string, number>>({}); // EACH per-card quantity by key
+  const perTargetAspect = ref<Record<string, string>>({}); // EACH per-card aspect_ratio by key
 
   // Run / progress — multiple concurrent batches, each polled independently.
   const submitting = ref(false);
@@ -153,11 +155,7 @@ export const useGeneratorStore = defineStore("generator", () => {
   // Non-blocking: launching a run does NOT disable the UI — you can configure and
   // start another generation while earlier ones are still in flight (TASK Phase 2).
   const canRun = computed(
-    () =>
-      selList().length > 0 &&
-      Boolean(themeId.value) &&
-      activeTab.value !== "BACKGROUND" &&
-      !submitting.value,
+    () => selList().length > 0 && activeTab.value !== "BACKGROUND" && !submitting.value,
   );
 
   function isSelected(key: string) {
@@ -198,6 +196,12 @@ export const useGeneratorStore = defineStore("generator", () => {
   }
   function setTargetRefs(key: string, value: string[]) {
     perTargetRefs.value[key] = value;
+  }
+  function targetAspect(key: string): string {
+    return perTargetAspect.value[key] ?? "1:1";
+  }
+  function setTargetAspect(key: string, value: string) {
+    perTargetAspect.value[key] = value;
   }
 
   async function load() {
@@ -255,8 +259,8 @@ export const useGeneratorStore = defineStore("generator", () => {
       statusError.value = "Background пока не поддерживается.";
       return;
     }
-    if (selList().length === 0 || !themeId.value) {
-      statusError.value = isItem.value ? "Выберите стили и тему." : "Выберите бренды и тему.";
+    if (selList().length === 0) {
+      statusError.value = isItem.value ? "Выберите стили." : "Выберите бренды.";
       return;
     }
     submitting.value = true;
@@ -270,6 +274,11 @@ export const useGeneratorStore = defineStore("generator", () => {
             prompt: prompt.value,
             perBrandPrompts: perStylePrompts.value,
             imageCount: imageCount.value,
+            referenceImages: refImages.value, // global (ALL) img2img ref
+            perBrandRefs: perTargetRefs.value, // per-style (EACH)
+            perBrandCounts: perTargetCounts.value, // per-style (EACH)
+            aspectRatio: aspectRatio.value, // global (ALL)
+            perBrandAspect: perTargetAspect.value, // per-style (EACH)
           }
         : {
             contentType: "PERSON" as const,
@@ -282,6 +291,8 @@ export const useGeneratorStore = defineStore("generator", () => {
             referenceImages: refImages.value, // global (ALL)
             perBrandRefs: perTargetRefs.value, // per-target (EACH)
             perBrandCounts: perTargetCounts.value, // per-target (EACH)
+            aspectRatio: aspectRatio.value, // global (ALL)
+            perBrandAspect: perTargetAspect.value, // per-target (EACH)
           };
       const res = await useApi()<{ batchId: string; count: number }>("/api/generate", {
         method: "POST",
@@ -377,12 +388,14 @@ export const useGeneratorStore = defineStore("generator", () => {
     prompt,
     imageCount,
     refImages,
+    aspectRatio,
     selectedBrandIds,
     selectedStyles,
     perBrandPrompts,
     perStylePrompts,
     perTargetRefs,
     perTargetCounts,
+    perTargetAspect,
     submitting,
     statusError,
     batches,
@@ -404,6 +417,8 @@ export const useGeneratorStore = defineStore("generator", () => {
     setTargetCount,
     targetRefs,
     setTargetRefs,
+    targetAspect,
+    setTargetAspect,
     load,
     toggleFavorite,
     submit,

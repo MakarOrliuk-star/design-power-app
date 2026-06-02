@@ -1,20 +1,22 @@
 import { prisma } from "../lib/prisma.js";
 import { buildItemPrompt } from "../services/prompts.js";
-import { generateItemImage } from "../lib/nanogpt.js";
-import { uploadBase64, withRetry } from "../lib/cloudinary.js";
+import { runPersonFal } from "../lib/fal.js";
+import { uploadFromUrl, withRetry } from "../lib/cloudinary.js";
 import { finalizeSuccess, finalizeFailure } from "../services/finalize.js";
 
 /**
- * Item worker step: wrap the prompt, generate synchronously via nano-gpt, upload
- * the base64 result to Cloudinary, finalize the row. Mirrors the legacy
- * `processPendingItemJobs`.
+ * Item worker step (ADDENDUM §2): wrap the prompt with the ITEM template, then
+ * generate via `fal-ai/nano-banana-2/edit` (img2img on the user's uploaded ref
+ * when present, else text-to-image), upload the result URL to Cloudinary, and
+ * finalize the row. Same fal client as Person.
  */
-export async function processItemJob(generationId: string): Promise<void> {
+export async function processItemJob(generationId: string, aspectRatio = "1:1"): Promise<void> {
   const gen = await prisma.generation.findUnique({
     where: { id: generationId },
     select: {
       brandName: true,
       description: true,
+      referenceImages: true,
       job: { select: { id: true, cloudinaryFolder: true } },
     },
   });
@@ -22,26 +24,27 @@ export async function processItemJob(generationId: string): Promise<void> {
 
   const jobId = gen.job.id;
   const folder = gen.job.cloudinaryFolder ?? `brands/${gen.brandName}`;
+  await prisma.job.update({ where: { id: jobId }, data: { status: "PROCESSING" } });
+  await prisma.generation.update({
+    where: { id: generationId },
+    data: { status: "PROCESSING", statusMessage: "⏳ Generating" },
+  });
+
   const finalPrompt = await buildItemPrompt(gen.brandName, gen.description ?? "");
 
-  const gen1 = await generateItemImage(finalPrompt);
-  if (!gen1.success || !gen1.b64) {
+  const fal = await runPersonFal(finalPrompt, gen.referenceImages, aspectRatio);
+  if (!fal.success || !fal.imageUrl) {
     await prisma.job.update({ where: { id: jobId }, data: { status: "FAILED" } });
-    await finalizeFailure(generationId, gen1.error ?? "nano-gpt failed");
+    await finalizeFailure(generationId, `fal: ${fal.error ?? "unknown"}`);
     return;
   }
 
-  const fileName = `${gen.brandName}_item_${Date.now()}`;
   const up = await withRetry(
-    () => uploadBase64(gen1.b64!, fileName, folder),
+    () => uploadFromUrl(fal.imageUrl!, `${gen.brandName}_item_${Date.now()}`, folder),
     `${gen.brandName}#${generationId}`,
   );
-
   if (up.success && up.secure_url) {
-    await prisma.job.update({
-      where: { id: jobId },
-      data: { status: "DONE", responseUrl: up.secure_url },
-    });
+    await prisma.job.update({ where: { id: jobId }, data: { status: "DONE", responseUrl: up.secure_url } });
     await finalizeSuccess(generationId, up.secure_url);
   } else {
     await prisma.job.update({ where: { id: jobId }, data: { status: "FAILED" } });

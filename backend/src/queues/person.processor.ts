@@ -14,7 +14,7 @@ import { finalizeSuccess, finalizeFailure } from "../services/finalize.js";
  *   finalize the row. fal.run blocks until the image is ready, so the BullMQ
  *   person worker is configured with a long lock duration.
  */
-export async function processPersonJob(generationId: string): Promise<void> {
+export async function processPersonJob(generationId: string, aspectRatio = "1:1"): Promise<void> {
   const gen = await prisma.generation.findUnique({
     where: { id: generationId },
     select: {
@@ -36,9 +36,13 @@ export async function processPersonJob(generationId: string): Promise<void> {
   });
 
   const userText = gen.description ?? "";
-  const prompt = await buildPromptMemoized(gen.batchId ?? "", gen.brandName, userText);
+  const builtPrompt = await buildPromptMemoized(gen.batchId ?? "", gen.brandName, userText);
+  // ADDENDUM §7: two refs are blended via the PROMPT (nano-banana-2/edit has no
+  // strength/controlnet weights). First image = brand style ref; the rest = the
+  // user-uploaded image.
+  const prompt = withBlendingHint(builtPrompt, gen.referenceImages.length);
 
-  const fal = await runPersonFal(prompt, gen.referenceImages);
+  const fal = await runPersonFal(prompt, gen.referenceImages, aspectRatio);
   if (!fal.success || !fal.imageUrl) {
     await prisma.job.update({ where: { id: jobId }, data: { status: "FAILED" } });
     await finalizeFailure(generationId, `fal: ${fal.error ?? "unknown"}`);
@@ -56,6 +60,12 @@ export async function processPersonJob(generationId: string): Promise<void> {
     await prisma.job.update({ where: { id: jobId }, data: { status: "FAILED" } });
     await finalizeFailure(generationId, `Cloudinary: ${up.error ?? "unknown"}`);
   }
+}
+
+/** Append a blending directive when 2+ reference images are sent to fal. */
+function withBlendingHint(prompt: string, imageCount: number): string {
+  if (imageCount < 2) return prompt;
+  return `${prompt} Use the first reference image for the brand style, wardrobe and overall look; take the subject identity and pose from the additional reference image. Blend them into one coherent result.`;
 }
 
 async function buildPromptMemoized(

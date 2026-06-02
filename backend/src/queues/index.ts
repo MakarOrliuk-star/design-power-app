@@ -15,6 +15,7 @@ export const ITEM_QUEUE = "item";
 export interface GenerationJobData {
   generationId: string;
   batchId: string;
+  aspectRatio?: string; // fal aspect_ratio (Person); durable across retries
 }
 
 let _connection: Redis | null = null;

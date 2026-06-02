@@ -54,10 +54,16 @@ function setQty(n: number) {
   quantity.value = Math.min(MAX_QTY, Math.max(MIN_QTY, n));
 }
 
-const formats = [
-  { label: "Image", icon: "image" },
-  { label: "1:1", icon: "square" },
-  { label: "9:16", icon: "portrait" },
+// Aspect ratio (R5) — bound to the store like prompt/quantity/refs.
+const aspect = computed<string>({
+  get: () => (props.targetKey === null ? gen.aspectRatio : gen.targetAspect(props.targetKey)),
+  set: (v) =>
+    props.targetKey === null ? (gen.aspectRatio = v) : gen.setTargetAspect(props.targetKey, v),
+});
+
+const ASPECTS = [
+  { value: "1:1", icon: "square" },
+  { value: "9:16", icon: "portrait" },
 ] as const;
 </script>
 
@@ -119,22 +125,24 @@ const formats = [
         >+</button>
       </div>
 
-      <span v-for="f in formats" :key="f.label" class="fmt">
+      <button
+        v-for="a in ASPECTS"
+        :key="a.value"
+        type="button"
+        :class="['fmt', { 'fmt--on': aspect === a.value }]"
+        :aria-pressed="aspect === a.value"
+        @click="aspect = a.value"
+      >
         <span class="fmt__ic" aria-hidden="true">
-          <svg v-if="f.icon === 'image'" viewBox="0 0 24 24" width="13" height="13" fill="none">
-            <rect x="3.5" y="5" width="17" height="14" rx="2.5" stroke="currentColor" stroke-width="1.6" />
-            <circle cx="9" cy="10" r="1.4" stroke="currentColor" stroke-width="1.3" />
-            <path d="M5 17l4.5-4 3.5 3 3-2.5L19 16" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" />
-          </svg>
-          <svg v-else-if="f.icon === 'square'" viewBox="0 0 24 24" width="13" height="13" fill="none">
+          <svg v-if="a.icon === 'square'" viewBox="0 0 24 24" width="13" height="13" fill="none">
             <rect x="5" y="5" width="14" height="14" rx="2" stroke="currentColor" stroke-width="1.6" />
           </svg>
           <svg v-else viewBox="0 0 24 24" width="13" height="13" fill="none">
             <rect x="7" y="4" width="10" height="16" rx="2" stroke="currentColor" stroke-width="1.6" />
           </svg>
         </span>
-        {{ f.label }}
-      </span>
+        {{ a.value }}
+      </button>
     </div>
   </div>
 </template>
@@ -290,8 +298,18 @@ const formats = [
   border-radius: var(--radius-pill);
   background: var(--color-window);
   border: 1px solid var(--color-border);
+  font-family: inherit;
   font-size: 12px;
   color: var(--color-grey);
+  cursor: pointer;
+}
+.fmt:hover {
+  border-color: var(--color-accent);
+}
+.fmt--on {
+  background: var(--color-white);
+  border-color: var(--color-accent);
+  color: var(--color-text);
 }
 .fmt__ic {
   display: inline-grid;

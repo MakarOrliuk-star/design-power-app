@@ -14,7 +14,7 @@ const generateSchema = z.object({
   contentType: z.enum(["PERSON", "ITEM"]),
   brandIds: z.array(z.string()).default([]), // Person targets (brand IDs)
   styles: z.array(z.string()).default([]), // Item targets (style names)
-  themeId: z.string().min(1),
+  themeId: z.string().optional(), // theme removed from the core flow (optional metadata)
   refMode: z.enum(["ALL", "EACH"]).default("ALL"),
   prompt: z.string().default(""),
   perBrandPrompts: z.record(z.string()).default({}), // keyed by brandId (Person) or style (Item)
@@ -22,6 +22,8 @@ const generateSchema = z.object({
   referenceImages: z.array(z.string()).default([]), // base64 data URLs (Person ALL global)
   perBrandRefs: z.record(z.array(z.string())).default({}), // base64 per brandId (Person EACH)
   perBrandCounts: z.record(z.number().int().min(1).max(4)).default({}), // per brandId (Person EACH)
+  aspectRatio: z.string().default("1:1"), // fal aspect_ratio (Person ALL global)
+  perBrandAspect: z.record(z.string()).default({}), // fal aspect_ratio per brandId (Person EACH)
 });
 
 // ---- Run ----
@@ -52,51 +54,59 @@ generateRouter.post("/generate", async (req: Request, res: Response) => {
     return;
   }
 
-  const theme = await prisma.theme.findUnique({ where: { id: d.themeId }, select: { name: true } });
-  if (!theme) {
-    res.status(400).json({ error: "invalid_theme" });
-    return;
+  // Theme is optional metadata now — look it up only if supplied.
+  let themeName = "";
+  if (d.themeId) {
+    const theme = await prisma.theme.findUnique({ where: { id: d.themeId }, select: { name: true } });
+    if (!theme) {
+      res.status(400).json({ error: "invalid_theme" });
+      return;
+    }
+    themeName = theme.name;
   }
 
   try {
-    if (d.contentType === "PERSON") {
-      const day = new Date().toISOString().slice(0, 10);
+    // Upload user reference images to Cloudinary (shared by Person + Item).
+    const day = new Date().toISOString().slice(0, 10);
 
-      // Upload the global (ALL) user reference images to Cloudinary first.
-      const userRefUrls: string[] = [];
-      for (const [i, dataUrl] of d.referenceImages.entries()) {
+    // Global (ALL) refs.
+    const userRefUrls: string[] = [];
+    for (const [i, dataUrl] of d.referenceImages.entries()) {
+      const up = await withRetry(
+        () => uploadBase64(dataUrl, `userref_${Date.now()}_${i}`, `brands/person_userref/${day}`),
+        `userref#${i}`,
+      );
+      if (up.success && up.secure_url) userRefUrls.push(up.secure_url);
+    }
+
+    // Per-key (EACH) refs, keyed by brandId (Person) or style name (Item).
+    const perKeyRefUrls: Record<string, string[]> = {};
+    for (const [key, dataUrls] of Object.entries(d.perBrandRefs)) {
+      const urls: string[] = [];
+      for (const [i, dataUrl] of dataUrls.entries()) {
         const up = await withRetry(
-          () => uploadBase64(dataUrl, `userref_${Date.now()}_${i}`, `brands/person_userref/${day}`),
-          `userref#${i}`,
+          () => uploadBase64(dataUrl, `userref_${key}_${Date.now()}_${i}`, `brands/person_userref/${day}`),
+          `userref:${key}#${i}`,
         );
-        if (up.success && up.secure_url) userRefUrls.push(up.secure_url);
+        if (up.success && up.secure_url) urls.push(up.secure_url);
       }
+      if (urls.length) perKeyRefUrls[key] = urls;
+    }
 
-      // Upload the per-brand (EACH) user reference images, keyed by brandId.
-      const perBrandRefUrls: Record<string, string[]> = {};
-      for (const [brandId, dataUrls] of Object.entries(d.perBrandRefs)) {
-        const urls: string[] = [];
-        for (const [i, dataUrl] of dataUrls.entries()) {
-          const up = await withRetry(
-            () => uploadBase64(dataUrl, `userref_${brandId}_${Date.now()}_${i}`, `brands/person_userref/${day}`),
-            `userref:${brandId}#${i}`,
-          );
-          if (up.success && up.secure_url) urls.push(up.secure_url);
-        }
-        if (urls.length) perBrandRefUrls[brandId] = urls;
-      }
-
+    if (d.contentType === "PERSON") {
       const result = await createPersonBatch({
         userId,
         brandIds: d.brandIds,
-        themeName: theme.name,
+        themeName,
         refMode: d.refMode,
         sharedDescription: d.prompt,
         perBrandPrompts: d.perBrandPrompts,
         imageCount: d.imageCount,
         userRefUrls,
-        perBrandRefUrls,
+        perBrandRefUrls: perKeyRefUrls,
         perBrandCounts: d.perBrandCounts,
+        aspectRatio: d.aspectRatio,
+        perBrandAspect: d.perBrandAspect,
       });
       res.json(result);
       return;
@@ -105,10 +115,15 @@ generateRouter.post("/generate", async (req: Request, res: Response) => {
     const result = await createItemBatch({
       userId,
       styles: d.styles,
-      themeName: theme.name,
+      themeName,
       sharedDescription: d.prompt,
       perStylePrompts: d.perBrandPrompts,
       imageCount: d.imageCount,
+      userRefUrls,
+      perStyleRefUrls: perKeyRefUrls,
+      perStyleCounts: d.perBrandCounts,
+      aspectRatio: d.aspectRatio,
+      perStyleAspect: d.perBrandAspect,
     });
     res.json(result);
   } catch (err) {
