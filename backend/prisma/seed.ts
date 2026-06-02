@@ -1,6 +1,7 @@
 import { readFile } from "node:fs/promises";
 import { prisma } from "../src/lib/prisma.js";
 import { BRANDS, CATEGORIES, THEMES, BRAND_CATEGORIES } from "./seed-data/catalog.ts";
+import { BRAND_NANO_REFS } from "./seed-data/nano-refs.ts";
 
 /**
  * Idempotent seed (upserts) — safe to re-run.
@@ -58,6 +59,25 @@ async function main() {
     }
   }
 
+  // Brand reference images (BrandNanoRef) for Person generation.
+  let nanoCount = 0;
+  for (const [brandName, urls] of Object.entries(BRAND_NANO_REFS)) {
+    const brand = await prisma.brand.findUnique({ where: { name: brandName }, select: { id: true } });
+    if (!brand) {
+      console.warn(`⚠️ nanoref skipped — brand not found: ${brandName}`);
+      continue;
+    }
+    const referenceImages = urls.filter(Boolean);
+    await prisma.brandNanoRef.upsert({
+      where: { brandId: brand.id },
+      // stylePrompt is unused by the generation flow (prompt comes from
+      // PromptTemplate/default); keep any existing value on re-seed.
+      create: { brandId: brand.id, referenceImages, stylePrompt: "" },
+      update: { referenceImages },
+    });
+    nanoCount++;
+  }
+
   // Item style prompts (extracted from CREATE_ITEMS.blueprint.json)
   const stylesUrl = new URL("./seed-data/item-styles.json", import.meta.url);
   const styles = JSON.parse(await readFile(stylesUrl, "utf8")) as { style: string; prompt: string }[];
@@ -72,7 +92,7 @@ async function main() {
   console.log(
     `✅ Seeded: ${THEMES.length} themes, ${CATEGORIES.length} categories, ` +
       `${uniqueBrands.length} brands, ${linkCount} brand-category links, ` +
-      `${styles.length} item-style prompts`,
+      `${nanoCount} brand nano-refs, ${styles.length} item-style prompts`,
   );
 }
 
