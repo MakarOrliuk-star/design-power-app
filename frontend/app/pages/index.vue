@@ -1,9 +1,13 @@
 <script setup lang="ts">
-// Home — the generator. Toolbar (Phase 2) + unified white board holding the two
-// columns (Phases 3-4) and the brand picker (Phase 5), with a floating "Assets"
-// button. All sections are static mock; the generator store is reconnected in
-// Phase 7.
+// Home — the generator. Toolbar + unified white board holding the two columns
+// and the brand picker, with a floating "Assets" button. Wired to the generator
+// store (R1): catalog loads on mount, with a static fallback when the API is down.
 useHead({ title: "Design Power — Home" });
+
+const gen = useGeneratorStore();
+onMounted(() => {
+  if (!gen.loaded) void gen.load();
+});
 </script>
 
 <template>

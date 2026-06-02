@@ -1,4 +1,5 @@
 import { defineStore } from "pinia";
+import { BRANDS, formatBrand } from "~/data/brands";
 
 export interface BrandItem {
   id: string;
@@ -44,6 +45,14 @@ export interface BatchStatus {
   }[];
 }
 
+/** One launched generation, polled independently so runs stay concurrent. */
+export interface ActiveBatch {
+  id: string;
+  kind: "person" | "item";
+  createdAt: number;
+  status: BatchStatus | null;
+}
+
 export const FAVORITES_CATEGORY = "__favorites__";
 export const ALL_CATEGORY = "__all__";
 
@@ -72,7 +81,7 @@ export const useGeneratorStore = defineStore("generator", () => {
   // Config shared across tabs
   const activeTab = ref<ContentTab>("PERSON");
   const refMode = ref<RefMode>("ALL");
-  const activeCategoryId = ref<string>(FAVORITES_CATEGORY);
+  const activeCategoryId = ref<string>(ALL_CATEGORY);
   const search = ref("");
   const themeId = ref<string>("");
   const prompt = ref("");
@@ -84,13 +93,16 @@ export const useGeneratorStore = defineStore("generator", () => {
   const selectedStyles = ref<string[]>([]); // Item
   const perBrandPrompts = ref<Record<string, string>>({}); // Person EACH (by brandId)
   const perStylePrompts = ref<Record<string, string>>({}); // Item EACH (by style)
+  const perTargetRefs = ref<Record<string, string[]>>({}); // EACH reference uploads (base64) by key
+  const perTargetCounts = ref<Record<string, number>>({}); // EACH per-card quantity by key
 
-  // Run / progress
+  // Run / progress — multiple concurrent batches, each polled independently.
   const submitting = ref(false);
   const statusError = ref("");
-  const batchId = ref<string | null>(null);
-  const batchStatus = ref<BatchStatus | null>(null);
-  let pollTimer: ReturnType<typeof setTimeout> | null = null;
+  const batches = ref<ActiveBatch[]>([]);
+  const timers = new Map<string, ReturnType<typeof setTimeout>>();
+  // Completion notifications (R4): one toast per batch that finishes.
+  const toasts = ref<{ id: string; message: string }[]>([]);
 
   const isItem = computed(() => activeTab.value === "ITEM");
 
@@ -118,7 +130,7 @@ export const useGeneratorStore = defineStore("generator", () => {
         .filter((s) => !q || s.toLowerCase().includes(q))
         .map((s) => ({ key: s, label: s, brand: null }));
     }
-    return visibleBrands.value.map((b) => ({ key: b.id, label: b.name, brand: b }));
+    return visibleBrands.value.map((b) => ({ key: b.id, label: formatBrand(b.name), brand: b }));
   });
 
   function selList(): string[] {
@@ -130,19 +142,22 @@ export const useGeneratorStore = defineStore("generator", () => {
     return selectedBrandIds.value
       .map((id) => brandById.value.get(id))
       .filter((b): b is BrandItem => b !== undefined)
-      .map((b) => ({ key: b.id, label: b.name }));
+      .map((b) => ({ key: b.id, label: formatBrand(b.name) }));
   });
 
   const targetPrompts = computed(() => (isItem.value ? perStylePrompts.value : perBrandPrompts.value));
 
-  const isRunning = computed(() => batchStatus.value !== null && !batchStatus.value.isComplete);
+  const runningCount = computed(
+    () => batches.value.filter((b) => b.status === null || !b.status.isComplete).length,
+  );
+  // Non-blocking: launching a run does NOT disable the UI — you can configure and
+  // start another generation while earlier ones are still in flight (TASK Phase 2).
   const canRun = computed(
     () =>
       selList().length > 0 &&
       Boolean(themeId.value) &&
       activeTab.value !== "BACKGROUND" &&
-      !submitting.value &&
-      !isRunning.value,
+      !submitting.value,
   );
 
   function isSelected(key: string) {
@@ -168,6 +183,23 @@ export const useGeneratorStore = defineStore("generator", () => {
     for (const it of pickerItems.value) if (!l.includes(it.key)) l.push(it.key);
   }
 
+  // ---- Per-target (EACH) editing: prompt / quantity / reference uploads ----
+  function setTargetPrompt(key: string, value: string) {
+    (isItem.value ? perStylePrompts : perBrandPrompts).value[key] = value;
+  }
+  function targetCount(key: string): number {
+    return perTargetCounts.value[key] ?? 1;
+  }
+  function setTargetCount(key: string, value: number) {
+    perTargetCounts.value[key] = value;
+  }
+  function targetRefs(key: string): string[] {
+    return perTargetRefs.value[key] ?? [];
+  }
+  function setTargetRefs(key: string, value: string[]) {
+    perTargetRefs.value[key] = value;
+  }
+
   async function load() {
     if (loading.value) return;
     loading.value = true;
@@ -184,9 +216,27 @@ export const useGeneratorStore = defineStore("generator", () => {
       itemStyles.value = res.itemStyles;
       if (!themeId.value && res.themes[0]) themeId.value = res.themes[0].id;
       loaded.value = true;
+    } catch {
+      // Graceful offline fallback: the static master brand list so the picker
+      // still works when the API is unreachable. Categories/themes/itemStyles
+      // stay empty (only the "All" picker tab is meaningful offline).
+      if (!loaded.value) loadFallback();
     } finally {
       loading.value = false;
     }
+  }
+
+  /** Populate brands from the bundled master list (deduped by name). */
+  function loadFallback() {
+    const seen = new Set<string>();
+    const list: BrandItem[] = [];
+    for (const name of BRANDS) {
+      if (seen.has(name)) continue;
+      seen.add(name);
+      list.push({ id: name, name, categoryIds: [], isFavorite: false, hasNanoRef: false });
+    }
+    brands.value = list;
+    activeCategoryId.value = ALL_CATEGORY;
   }
 
   async function toggleFavorite(brand: BrandItem) {
@@ -210,6 +260,7 @@ export const useGeneratorStore = defineStore("generator", () => {
       return;
     }
     submitting.value = true;
+    const kind: "person" | "item" = isItem.value ? "item" : "person";
     try {
       const body = isItem.value
         ? {
@@ -228,13 +279,15 @@ export const useGeneratorStore = defineStore("generator", () => {
             prompt: prompt.value,
             perBrandPrompts: perBrandPrompts.value,
             imageCount: imageCount.value,
-            referenceImages: refImages.value,
+            referenceImages: refImages.value, // global (ALL)
+            perBrandRefs: perTargetRefs.value, // per-target (EACH)
+            perBrandCounts: perTargetCounts.value, // per-target (EACH)
           };
       const res = await useApi()<{ batchId: string; count: number }>("/api/generate", {
         method: "POST",
         body,
       });
-      batchId.value = res.batchId;
+      batches.value = [...batches.value, { id: res.batchId, kind, createdAt: Date.now(), status: null }];
       startPolling(res.batchId);
     } catch (e: unknown) {
       const code = (e as { data?: { error?: string } })?.data?.error;
@@ -245,27 +298,68 @@ export const useGeneratorStore = defineStore("generator", () => {
   }
 
   function startPolling(id: string) {
-    if (pollTimer) clearTimeout(pollTimer);
-    batchStatus.value = null;
     void pollOnce(id);
   }
   async function pollOnce(id: string) {
+    if (!batches.value.some((b) => b.id === id)) return; // dismissed
     try {
       const s = await useApi()<BatchStatus>(`/api/batches/${id}`);
-      batchStatus.value = s;
-      if (!s.isComplete) pollTimer = setTimeout(() => void pollOnce(id), 3000);
+      const entry = batches.value.find((b) => b.id === id);
+      if (!entry) return;
+      const wasComplete = entry.status?.isComplete ?? false;
+      entry.status = s;
+      if (!s.isComplete) {
+        timers.set(id, setTimeout(() => void pollOnce(id), 3000));
+      } else {
+        timers.delete(id);
+        // Fire the completion toast once, on the QUEUED/PROCESSING → done edge.
+        if (!wasComplete) pushToast("Все готово переходите в результат");
+      }
     } catch {
-      pollTimer = setTimeout(() => void pollOnce(id), 5000);
+      if (batches.value.some((b) => b.id === id))
+        timers.set(id, setTimeout(() => void pollOnce(id), 5000));
     }
   }
-  async function stop() {
-    if (!batchId.value) return;
+
+  /** Best-effort cancel of one batch (queued jobs); keeps it in the list. */
+  async function stop(id: string) {
     try {
-      await useApi()(`/api/batches/${batchId.value}/stop`, { method: "POST" });
-      void pollOnce(batchId.value);
+      await useApi()(`/api/batches/${id}/stop`, { method: "POST" });
+      void pollOnce(id);
     } catch {
       /* ignore */
     }
+  }
+
+  function pushToast(message: string) {
+    const id = `${Date.now()}_${Math.random().toString(36).slice(2, 7)}`;
+    toasts.value = [...toasts.value, { id, message }];
+  }
+  function dismissToast(id: string) {
+    toasts.value = toasts.value.filter((t) => t.id !== id);
+  }
+
+  /** Remove a batch from the toolbar and stop polling it. */
+  function dismiss(id: string) {
+    const t = timers.get(id);
+    if (t) clearTimeout(t);
+    timers.delete(id);
+    batches.value = batches.value.filter((b) => b.id !== id);
+  }
+
+  /** Toolbar × on a job card: cancel if still running, then remove it. */
+  async function cancelAndDismiss(id: string) {
+    const entry = batches.value.find((b) => b.id === id);
+    if (entry && (entry.status === null || !entry.status.isComplete)) await stop(id);
+    dismiss(id);
+  }
+
+  /** Toolbar global stop: cancel every still-running batch. */
+  async function stopAllRunning() {
+    const ids = batches.value
+      .filter((b) => b.status === null || !b.status.isComplete)
+      .map((b) => b.id);
+    await Promise.all(ids.map((id) => stop(id)));
   }
 
   return {
@@ -287,25 +381,36 @@ export const useGeneratorStore = defineStore("generator", () => {
     selectedStyles,
     perBrandPrompts,
     perStylePrompts,
+    perTargetRefs,
+    perTargetCounts,
     submitting,
     statusError,
-    batchId,
-    batchStatus,
+    batches,
+    toasts,
     isItem,
     visibleBrands,
     pickerItems,
     currentTargets,
     targetPrompts,
-    isRunning,
+    runningCount,
     canRun,
     isSelected,
     toggleTarget,
     removeTarget,
     clearAll,
     selectAllVisible,
+    setTargetPrompt,
+    targetCount,
+    setTargetCount,
+    targetRefs,
+    setTargetRefs,
     load,
     toggleFavorite,
     submit,
     stop,
+    dismiss,
+    cancelAndDismiss,
+    stopAllRunning,
+    dismissToast,
   };
 });

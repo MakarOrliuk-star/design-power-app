@@ -1,32 +1,31 @@
 <script setup lang="ts">
-// Phase 5 — brand picker: category tab bar + "Add all", and an alphabetical,
-// scrollable list of brand bubbles. Clicking a bubble selects it (shows up in
-// Current styles + Each cards via the shared composable).
-//
-// Brands come from the master list (app/data/brands.ts = the `brand` table), so
-// new brands appear automatically. Phase 7 swaps the static import for a backend
-// load (GET /brands); grouping stays the same. Item has its own list (TODO).
-import { BRANDS, groupBrands } from "~/data/brands";
+// Brand picker (R1: wired to the generator store): category tab bar + "Add all",
+// and an alphabetical, scrollable list of brand/style bubbles. The list comes
+// from gen.pickerItems (already filtered by the search box + active category);
+// clicking a bubble toggles it into the selection (Current styles + Each cards).
+import { FAVORITES_CATEGORY, ALL_CATEGORY } from "~/stores/generator";
 
-const { toggle, addMany, isSelected } = useSelectedStyles();
+const gen = useGeneratorStore();
 
-const categories = [
-  "Favorites",
-  "All Aramuz",
-  "Oscar, Corgi, Spinjoys",
-  "DJslot and Vinci",
-  "Korea",
-  "Sport",
-];
-const activeCategory = ref("All Aramuz");
+// Favorites + All are always present; the rest come from the catalog.
+const tabs = computed(() => [
+  { id: FAVORITES_CATEGORY, name: "Favorites" },
+  { id: ALL_CATEGORY, name: "All" },
+  ...gen.categories.map((c) => ({ id: c.id, name: c.name })),
+]);
 
-// Category filtering needs a brand->category map (from the table) — wired in
-// Phase 7. For now every category shows the full alphabetical list.
-const groups = computed(() => groupBrands(BRANDS));
-
-function addAll() {
-  addMany(groups.value.flatMap((g) => g.brands.map((b) => b.label)));
-}
+// Bucket the (already filtered) picker items alphabetically for the A–Z list.
+const groups = computed(() => {
+  const map = new Map<string, { key: string; label: string }[]>();
+  for (const it of gen.pickerItems) {
+    const letter = (it.label[0] ?? "#").toUpperCase();
+    if (!map.has(letter)) map.set(letter, []);
+    map.get(letter)!.push({ key: it.key, label: it.label });
+  }
+  return [...map.entries()]
+    .sort(([a], [b]) => a.localeCompare(b))
+    .map(([letter, items]) => ({ letter, items }));
+});
 </script>
 
 <template>
@@ -34,16 +33,16 @@ function addAll() {
     <div class="picker__bar">
       <div class="cats">
         <button
-          v-for="c in categories"
-          :key="c"
-          :class="['cat', { 'cat--on': activeCategory === c }]"
+          v-for="c in tabs"
+          :key="c.id"
+          :class="['cat', { 'cat--on': gen.activeCategoryId === c.id }]"
           type="button"
-          @click="activeCategory = c"
+          @click="gen.activeCategoryId = c.id"
         >
-          {{ c }}
+          {{ c.name }}
         </button>
       </div>
-      <button class="addall" type="button" @click="addAll">Add all</button>
+      <button class="addall" type="button" @click="gen.selectAllVisible()">Add all</button>
     </div>
 
     <div class="list">
@@ -51,16 +50,17 @@ function addAll() {
         <span class="group__letter">{{ g.letter }}</span>
         <div class="group__brands">
           <button
-            v-for="b in g.brands"
-            :key="b.id"
-            :class="['brand', { 'brand--on': isSelected(b.label) }]"
+            v-for="b in g.items"
+            :key="b.key"
+            :class="['brand', { 'brand--on': gen.isSelected(b.key) }]"
             type="button"
-            @click="toggle(b.label)"
+            @click="gen.toggleTarget(b.key)"
           >
             {{ b.label }}
           </button>
         </div>
       </div>
+      <p v-if="!groups.length" class="empty">Ничего не найдено.</p>
     </div>
   </section>
 </template>
@@ -122,6 +122,12 @@ function addAll() {
   padding: 4px 20px;
   max-height: 300px;
   overflow-y: auto;
+}
+.empty {
+  margin: 0;
+  padding: 18px 0;
+  color: var(--color-grey);
+  font-size: 13px;
 }
 .group {
   display: flex;

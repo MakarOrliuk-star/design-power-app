@@ -1,16 +1,22 @@
 <script setup lang="ts">
-// Phase 4 — right column "References & Promt" (spelling matches the Figma).
+// Right column "References & Promt" (spelling matches the Figma).
 // All  -> one shared StyleCard. Each -> a scrollable stack, one card per style.
-// (Mapping confirmed with the user; Figma artboard titles are swapped.)
-// Static mock; store / upload / Generate wired in Phase 7.
+// R1 wires selection / tabs / mode to the generator store; per-card prompt,
+// quantity and reference upload (StyleCard internals) land in R2.
 
-const tabs = ["Person", "Item", "Background"];
-const activeTab = ref("Person");
+const gen = useGeneratorStore();
 
-const refMode = ref<"All" | "Each">("All");
+const tabs = [
+  { label: "Person", value: "PERSON" },
+  { label: "Item", value: "ITEM" },
+  { label: "Background", value: "BACKGROUND" },
+] as const;
 
-// Selected styles drive the Each cards — one card per selected style.
-const { selected } = useSelectedStyles();
+const modes = [
+  { label: "All", value: "ALL" },
+  { label: "Each", value: "EACH" },
+] as const;
+
 const example = "Neon casino banner, purple & gold";
 </script>
 
@@ -20,13 +26,13 @@ const example = "Neon casino banner, purple & gold";
       <h2 class="ref__title">References &amp; Promt</h2>
       <div class="seg seg--mode">
         <button
-          v-for="m in (['All', 'Each'] as const)"
-          :key="m"
-          :class="['seg__btn', { 'seg__btn--on': refMode === m }]"
+          v-for="m in modes"
+          :key="m.value"
+          :class="['seg__btn', { 'seg__btn--on': gen.refMode === m.value }]"
           type="button"
-          @click="refMode = m"
+          @click="gen.refMode = m.value"
         >
-          {{ m }}
+          {{ m.label }}
         </button>
       </div>
     </header>
@@ -35,37 +41,39 @@ const example = "Neon casino banner, purple & gold";
     <div class="tabs">
       <button
         v-for="t in tabs"
-        :key="t"
-        :class="['tab', { 'tab--on': t === activeTab }]"
+        :key="t.value"
+        :class="['tab', { 'tab--on': gen.activeTab === t.value }]"
         type="button"
-        @click="activeTab = t"
+        @click="gen.activeTab = t.value"
       >
-        <span v-if="t === 'Person'" class="tab__ic" aria-hidden="true">
+        <span v-if="t.value === 'PERSON'" class="tab__ic" aria-hidden="true">
           <svg viewBox="0 0 24 24" width="18" height="18" fill="none">
             <circle cx="12" cy="8" r="3.4" stroke="currentColor" stroke-width="1.6" />
             <path d="M5 19c0-3.3 3.1-5 7-5s7 1.7 7 5" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" />
           </svg>
         </span>
-        {{ t }}
+        {{ t.label }}
       </button>
     </div>
 
     <!-- Cards: All = one shared card, Each = one per style (scrollable) -->
     <div class="ref__content">
       <GeneratorStyleCard
-        v-if="refMode === 'All'"
+        v-if="gen.refMode === 'ALL'"
         class="ref__single"
+        :target-key="null"
         title="Style Title"
         :example="example"
       />
       <div v-else class="stack">
         <GeneratorStyleCard
-          v-for="s in selected"
-          :key="s"
-          :title="s"
+          v-for="s in gen.currentTargets"
+          :key="s.key"
+          :target-key="s.key"
+          :title="s.label"
           :example="example"
         />
-        <p v-if="!selected.length" class="stack__empty">
+        <p v-if="!gen.currentTargets.length" class="stack__empty">
           Выберите стили слева — для каждого появится отдельная секция.
         </p>
       </div>
@@ -73,20 +81,24 @@ const example = "Neon casino banner, purple & gold";
 
     <!-- Footer -->
     <div class="ref__foot">
-      <button class="count" type="button">
-        <span>1 image</span>
-        <svg viewBox="0 0 24 24" width="16" height="16" fill="none" aria-hidden="true">
-          <path d="M7 10l5 5 5-5" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" />
-        </svg>
-      </button>
+      <div class="count" aria-live="polite">
+        <span>{{ gen.currentTargets.length }} {{ gen.currentTargets.length === 1 ? "style" : "styles" }}</span>
+      </div>
 
-      <button class="generate" type="button">
+      <button
+        class="generate"
+        type="button"
+        :disabled="!gen.canRun"
+        @click="gen.submit()"
+      >
         <svg viewBox="0 0 24 24" width="18" height="18" fill="none" aria-hidden="true">
           <path d="M8 5l11 7-11 7V5z" fill="currentColor" />
         </svg>
-        Generate
+        {{ gen.submitting ? "Starting…" : "Generate" }}
       </button>
     </div>
+
+    <p v-if="gen.statusError" class="ref__error">{{ gen.statusError }}</p>
   </section>
 </template>
 
@@ -238,5 +250,15 @@ const example = "Neon casino banner, purple & gold";
 }
 .generate:hover {
   filter: brightness(1.03);
+}
+.generate:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+  filter: none;
+}
+.ref__error {
+  margin: 10px 0 0;
+  color: var(--color-stop);
+  font-size: 13px;
 }
 </style>

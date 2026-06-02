@@ -1,12 +1,11 @@
 <script setup lang="ts">
-// Phase 3 — left column "Current styles". Static markup on mock data so it
-// matches home.png 1:1; the generator store is reconnected in Phase 7.
+// Left column "Current styles" (R1: wired to the generator store).
 // Metrics from figma/icons/*.svg: bubbles 36px tall, radius 18 (pill),
 // 1px border; container has a small (~4px) radius.
-
-// Shared selection — removing here updates the Each cards on the right.
-const { selected, remove, clear } = useSelectedStyles();
-const search = "";
+//
+// `currentTargets` = the selected brands/styles (keyed by brandId for Person,
+// style name for Item). Removing here also drops the matching Each card.
+const gen = useGeneratorStore();
 </script>
 
 <template>
@@ -16,9 +15,9 @@ const search = "";
     <div class="cur__row">
       <div class="search">
         <input
+          v-model="gen.search"
           class="search__input"
           type="text"
-          :value="search"
           placeholder="Search"
         />
         <span class="search__icon" aria-hidden="true">
@@ -28,13 +27,13 @@ const search = "";
           </svg>
         </span>
       </div>
-      <button class="cur__clear" type="button" @click="clear">Clear all</button>
+      <button class="cur__clear" type="button" @click="gen.clearAll()">Clear all</button>
     </div>
 
     <div class="cur__box">
-      <span v-for="s in selected" :key="s" class="bubble">
-        {{ s }}
-        <button class="bubble__x" type="button" aria-label="Remove" @click="remove(s)">
+      <span v-for="s in gen.currentTargets" :key="s.key" class="bubble">
+        {{ s.label }}
+        <button class="bubble__x" type="button" aria-label="Remove" @click="gen.removeTarget(s.key)">
           <svg viewBox="0 0 24 24" width="12" height="12" fill="none">
             <path d="M6 6l12 12M18 6L6 18" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" />
           </svg>

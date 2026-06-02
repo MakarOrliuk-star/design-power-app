@@ -17,7 +17,9 @@ interface PersonParams {
   sharedDescription: string;
   perBrandPrompts: Record<string, string>;
   imageCount: number;
-  userRefUrls: string[];
+  userRefUrls: string[]; // global (ALL) user refs
+  perBrandRefUrls?: Record<string, string[]>; // per-brand (EACH) user refs
+  perBrandCounts?: Record<string, number>; // per-brand (EACH) image count
 }
 
 interface ItemParams {
@@ -55,17 +57,21 @@ export async function createPersonBatch(p: PersonParams): Promise<CreateBatchRes
   const specs: Spec[] = [];
 
   for (const brand of brands) {
+    const isEach = p.refMode === "EACH";
     const userText = (
-      p.refMode === "EACH" ? p.perBrandPrompts[brand.id] || p.sharedDescription : p.sharedDescription
+      isEach ? p.perBrandPrompts[brand.id] || p.sharedDescription : p.sharedDescription
     ).trim();
+    // EACH: the brand's own uploaded refs + count; ALL: the shared global ones.
+    const userRefs = isEach ? p.perBrandRefUrls?.[brand.id] ?? [] : p.userRefUrls;
+    const count = isEach ? p.perBrandCounts?.[brand.id] ?? p.imageCount : p.imageCount;
     const refs = brand.nanoRef?.referenceImages ?? [];
 
     const base: string[][] =
       refs.length > 0
-        ? refs.map((r) => (p.userRefUrls.length ? [r, ...p.userRefUrls] : [r]))
-        : [p.userRefUrls.length ? [...p.userRefUrls] : []];
+        ? refs.map((r) => (userRefs.length ? [r, ...userRefs] : [r]))
+        : [userRefs.length ? [...userRefs] : []];
 
-    for (let n = 0; n < p.imageCount; n++) {
+    for (let n = 0; n < count; n++) {
       for (const imageUrls of base) {
         specs.push({ brandName: brand.name, userText, imageUrls });
       }

@@ -19,7 +19,9 @@ const generateSchema = z.object({
   prompt: z.string().default(""),
   perBrandPrompts: z.record(z.string()).default({}), // keyed by brandId (Person) or style (Item)
   imageCount: z.number().int().min(1).max(4).default(1),
-  referenceImages: z.array(z.string()).default([]), // base64 data URLs (Person)
+  referenceImages: z.array(z.string()).default([]), // base64 data URLs (Person ALL global)
+  perBrandRefs: z.record(z.array(z.string())).default({}), // base64 per brandId (Person EACH)
+  perBrandCounts: z.record(z.number().int().min(1).max(4)).default({}), // per brandId (Person EACH)
 });
 
 // ---- Run ----
@@ -58,14 +60,30 @@ generateRouter.post("/generate", async (req: Request, res: Response) => {
 
   try {
     if (d.contentType === "PERSON") {
-      // Upload any user-supplied reference images to Cloudinary first.
+      const day = new Date().toISOString().slice(0, 10);
+
+      // Upload the global (ALL) user reference images to Cloudinary first.
       const userRefUrls: string[] = [];
       for (const [i, dataUrl] of d.referenceImages.entries()) {
         const up = await withRetry(
-          () => uploadBase64(dataUrl, `userref_${Date.now()}_${i}`, `brands/person_userref/${new Date().toISOString().slice(0, 10)}`),
+          () => uploadBase64(dataUrl, `userref_${Date.now()}_${i}`, `brands/person_userref/${day}`),
           `userref#${i}`,
         );
         if (up.success && up.secure_url) userRefUrls.push(up.secure_url);
+      }
+
+      // Upload the per-brand (EACH) user reference images, keyed by brandId.
+      const perBrandRefUrls: Record<string, string[]> = {};
+      for (const [brandId, dataUrls] of Object.entries(d.perBrandRefs)) {
+        const urls: string[] = [];
+        for (const [i, dataUrl] of dataUrls.entries()) {
+          const up = await withRetry(
+            () => uploadBase64(dataUrl, `userref_${brandId}_${Date.now()}_${i}`, `brands/person_userref/${day}`),
+            `userref:${brandId}#${i}`,
+          );
+          if (up.success && up.secure_url) urls.push(up.secure_url);
+        }
+        if (urls.length) perBrandRefUrls[brandId] = urls;
       }
 
       const result = await createPersonBatch({
@@ -77,6 +95,8 @@ generateRouter.post("/generate", async (req: Request, res: Response) => {
         perBrandPrompts: d.perBrandPrompts,
         imageCount: d.imageCount,
         userRefUrls,
+        perBrandRefUrls,
+        perBrandCounts: d.perBrandCounts,
       });
       res.json(result);
       return;

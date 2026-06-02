@@ -12,6 +12,7 @@
         <slot />
       </div>
     </main>
+    <AppToasts />
   </div>
 </template>
 

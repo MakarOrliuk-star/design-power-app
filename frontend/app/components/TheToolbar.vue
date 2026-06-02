@@ -1,27 +1,20 @@
 <script setup lang="ts">
-// Phase 2 — top toolbar (the row of white cards from the Figma Home).
-// Static markup on mock data; real prompt/job/user state is wired in Phase 7.
+// Top toolbar (the row of white cards from the Figma Home). The progress card
+// reflects live generation batches from the store (R3): one bar per launched
+// batch, each with its own cancel/dismiss; the stop action cancels all running.
 // Metrics sampled from figma/icons/*.svg: cards 71px tall, radius 20,
 // 1px #CFCFCF border, ~20px gap; progress bars 190x4, radius 2.
+import type { ActiveBatch } from "~/stores/generator";
 
-interface JobProgress {
-  kind: "person" | "item";
-  done: number;
-  total: number;
-}
+const gen = useGeneratorStore();
 
-// --- mock state (replaced by the generator store in Phase 7) ---
 const promptName = ""; // empty -> shows the "Empty" placeholder
-
-const jobs: JobProgress[] = [
-  { kind: "person", done: 0, total: 3 },
-  { kind: "item", done: 0, total: 3 },
-];
 
 const user = { email: "aperchenko@cortexu.io", initials: "Ag" };
 
-const pct = (j: JobProgress) =>
-  j.total ? Math.round((j.done / j.total) * 100) : 0;
+const pct = (b: ActiveBatch) => b.status?.progress ?? 0;
+const done = (b: ActiveBatch) => b.status?.completed ?? 0;
+const total = (b: ActiveBatch) => b.status?.total ?? 0;
 </script>
 
 <template>
@@ -76,35 +69,39 @@ const pct = (j: JobProgress) =>
 
     <!-- Progress jobs -->
     <div class="card card--progress">
-      <div v-for="(job, i) in jobs" :key="i" class="job">
-        <span class="ic ic--muted" aria-hidden="true">
-          <svg v-if="job.kind === 'person'" viewBox="0 0 24 24" width="20" height="20" fill="none">
-            <path d="M12 3l1.6 3.6L17.5 7l-2.7 2.7.7 3.9L12 11.8 8.5 13.6l.7-3.9L6.5 7l3.9-.4L12 3z" stroke="currentColor" stroke-width="1.5" stroke-linejoin="round" />
-          </svg>
-          <svg v-else viewBox="0 0 24 24" width="20" height="20" fill="none">
-            <path d="M7 4h10M8 4v2.5L6 9v9a2 2 0 002 2h8a2 2 0 002-2V9l-2-2.5V4" stroke="currentColor" stroke-width="1.5" stroke-linejoin="round" />
-            <path d="M6.5 13h11" stroke="currentColor" stroke-width="1.5" />
-          </svg>
-        </span>
+      <template v-if="gen.batches.length">
+        <div v-for="b in gen.batches" :key="b.id" class="job">
+          <span class="ic ic--muted" aria-hidden="true">
+            <svg v-if="b.kind === 'person'" viewBox="0 0 24 24" width="20" height="20" fill="none">
+              <path d="M12 3l1.6 3.6L17.5 7l-2.7 2.7.7 3.9L12 11.8 8.5 13.6l.7-3.9L6.5 7l3.9-.4L12 3z" stroke="currentColor" stroke-width="1.5" stroke-linejoin="round" />
+            </svg>
+            <svg v-else viewBox="0 0 24 24" width="20" height="20" fill="none">
+              <path d="M7 4h10M8 4v2.5L6 9v9a2 2 0 002 2h8a2 2 0 002-2V9l-2-2.5V4" stroke="currentColor" stroke-width="1.5" stroke-linejoin="round" />
+              <path d="M6.5 13h11" stroke="currentColor" stroke-width="1.5" />
+            </svg>
+          </span>
 
-        <div class="job__body">
-          <span class="job__label">{{ job.done }} of {{ job.total }} images completed ({{ pct(job) }}%)</span>
-          <div class="job__track">
-            <div class="job__fill" :style="{ width: pct(job) + '%' }" />
+          <div class="job__body">
+            <span v-if="b.status" class="job__label">{{ done(b) }} of {{ total(b) }} images completed ({{ pct(b) }}%)</span>
+            <span v-else class="job__label">Queued…</span>
+            <div class="job__track">
+              <div class="job__fill" :style="{ width: pct(b) + '%' }" />
+            </div>
           </div>
-        </div>
 
-        <button class="job__close" type="button" aria-label="Cancel job">
-          <svg viewBox="0 0 24 24" width="14" height="14" fill="none">
-            <path d="M6 6l12 12M18 6L6 18" stroke="currentColor" stroke-width="2" stroke-linecap="round" />
-          </svg>
-        </button>
-      </div>
+          <button class="job__close" type="button" aria-label="Cancel job" @click="gen.cancelAndDismiss(b.id)">
+            <svg viewBox="0 0 24 24" width="14" height="14" fill="none">
+              <path d="M6 6l12 12M18 6L6 18" stroke="currentColor" stroke-width="2" stroke-linecap="round" />
+            </svg>
+          </button>
+        </div>
+      </template>
+      <span v-else class="progress__empty">No active generations</span>
     </div>
 
     <!-- Stop / delete -->
     <div class="card card--actions">
-      <button class="act act--stop" type="button" aria-label="Stop">
+      <button class="act act--stop" type="button" aria-label="Stop all running" @click="gen.stopAllRunning()">
         <span class="act__square" />
       </button>
       <button class="act" type="button" aria-label="Delete">
@@ -207,6 +204,10 @@ const pct = (j: JobProgress) =>
   flex: 2.2 1 420px;
   min-width: 400px;
   gap: 16px;
+}
+.progress__empty {
+  font-size: 13px;
+  color: var(--color-grey);
 }
 .job {
   flex: 1;
