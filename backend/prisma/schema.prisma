@@ -35,9 +35,10 @@ model User {
   createdAt   DateTime        @default(now())
   lastLoginAt DateTime?
 
-  generations Generation[]
-  batches     Batch[]
-  favorites   BrandFavorite[]
+  generations   Generation[]
+  batches       Batch[]
+  favorites     BrandFavorite[]
+  itemFavorites ItemStyleFavorite[]
 
   @@index([email])
 }
@@ -92,6 +93,17 @@ model BrandFavorite {
   brand   Brand  @relation(fields: [brandId], references: [id], onDelete: Cascade)
 
   @@id([userId, brandId])
+}
+
+/// Per-user favorite Item styles. Item styles are identified by their string key
+/// (the ITEM PromptTemplate key), not a Brand id — so this is keyed by styleKey
+/// rather than an FK. Mirrors BrandFavorite for the Person side.
+model ItemStyleFavorite {
+  userId   String
+  styleKey String
+  user     User   @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@id([userId, styleKey])
 }
 
 model Theme {

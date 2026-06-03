@@ -49,15 +49,31 @@ const groups = computed(() => {
       <div v-for="g in groups" :key="g.letter" class="group">
         <span class="group__letter">{{ g.letter }}</span>
         <div class="group__brands">
-          <button
+          <div
             v-for="b in g.items"
             :key="b.key"
             :class="['brand', { 'brand--on': gen.isSelected(b.key) }]"
-            type="button"
-            @click="gen.toggleTarget(b.key)"
           >
-            {{ b.label }}
-          </button>
+            <button
+              type="button"
+              :class="['brand__fav', { 'brand__fav--on': gen.isTargetFavorite(b.key) }]"
+              :aria-label="gen.isTargetFavorite(b.key) ? 'Убрать из Favorites' : 'В Favorites'"
+              :aria-pressed="gen.isTargetFavorite(b.key)"
+              @click="gen.toggleTargetFavorite(b.key)"
+            >
+              <svg viewBox="0 0 24 24" width="15" height="15" aria-hidden="true">
+                <path
+                  d="M12 3.6l2.55 5.17 5.7.83-4.13 4.02.98 5.68L12 16.99l-5.1 2.31.98-5.68L3.75 9.6l5.7-.83L12 3.6z"
+                  stroke="currentColor"
+                  stroke-width="1.4"
+                  stroke-linejoin="round"
+                />
+              </svg>
+            </button>
+            <button class="brand__label" type="button" @click="gen.toggleTarget(b.key)">
+              {{ b.label }}
+            </button>
+          </div>
         </div>
       </div>
       <p v-if="!groups.length" class="empty">Ничего не найдено.</p>
@@ -155,14 +171,14 @@ const groups = computed(() => {
 
 /* brand bubbles */
 .brand {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
   height: 40px;
-  padding: 0 20px;
+  padding: 0 16px 0 12px;
   border: 1px solid var(--color-border);
   border-radius: var(--radius-pill);
   background: var(--color-white);
-  font-family: inherit;
-  font-size: 14px;
-  color: var(--color-text);
   white-space: nowrap;
 }
 .brand:hover {
@@ -171,5 +187,43 @@ const groups = computed(() => {
 .brand--on {
   background: var(--color-bubble);
   border-color: var(--color-text);
+}
+
+/* favorite star (always visible; filled when favorited) */
+.brand__fav {
+  display: inline-grid;
+  place-items: center;
+  width: 22px;
+  height: 22px;
+  padding: 0;
+  border: none;
+  border-radius: 50%;
+  background: transparent;
+  color: var(--color-grey);
+  cursor: pointer;
+}
+.brand__fav svg {
+  fill: none;
+}
+.brand__fav:hover {
+  color: var(--color-accent);
+}
+.brand__fav--on {
+  color: var(--color-accent);
+}
+.brand__fav--on svg {
+  fill: currentColor;
+}
+
+/* label toggles selection */
+.brand__label {
+  border: none;
+  background: transparent;
+  padding: 0;
+  font-family: inherit;
+  font-size: 14px;
+  color: var(--color-text);
+  cursor: pointer;
+  white-space: nowrap;
 }
 </style>

@@ -10,7 +10,7 @@ export const catalogRouter: Router = Router();
 catalogRouter.get("/home", async (req: Request, res: Response) => {
   const userId = req.user!.sub;
 
-  const [brands, categories, themes, itemStyles] = await Promise.all([
+  const [brands, categories, themes, itemStyles, itemFavorites] = await Promise.all([
     prisma.brand.findMany({
       where: { isActive: true },
       orderBy: { name: "asc" },
@@ -30,6 +30,8 @@ catalogRouter.get("/home", async (req: Request, res: Response) => {
       orderBy: { key: "asc" },
       select: { key: true },
     }),
+    // This user's favorite Item styles (keyed by style name).
+    prisma.itemStyleFavorite.findMany({ where: { userId }, select: { styleKey: true } }),
   ]);
 
   res.json({
@@ -43,6 +45,7 @@ catalogRouter.get("/home", async (req: Request, res: Response) => {
     categories: categories.map((c) => ({ id: c.id, name: c.name, order: c.order })),
     themes: themes.map((t) => ({ id: t.id, name: t.name })),
     itemStyles: itemStyles.map((p) => p.key),
+    itemStyleFavorites: itemFavorites.map((f) => f.styleKey),
   });
 });
 
@@ -79,5 +82,45 @@ catalogRouter.delete("/favorites/:brandId", async (req: Request, res: Response) 
   }
 
   await prisma.brandFavorite.deleteMany({ where: { userId, brandId } });
+  res.json({ ok: true });
+});
+
+/** Add an Item style to the current user's favorites (idempotent). */
+catalogRouter.post("/item-favorites/:styleKey", async (req: Request, res: Response) => {
+  const userId = req.user!.sub;
+  const styleKey = req.params.styleKey; // URL-decoded by Express
+  if (typeof styleKey !== "string" || !styleKey) {
+    res.status(400).json({ error: "styleKey_required" });
+    return;
+  }
+
+  // Guard against junk keys: the style must exist as an ITEM prompt template.
+  const style = await prisma.promptTemplate.findFirst({
+    where: { type: "ITEM", key: styleKey },
+    select: { id: true },
+  });
+  if (!style) {
+    res.status(404).json({ error: "style_not_found" });
+    return;
+  }
+
+  await prisma.itemStyleFavorite.upsert({
+    where: { userId_styleKey: { userId, styleKey } },
+    create: { userId, styleKey },
+    update: {},
+  });
+  res.json({ ok: true });
+});
+
+/** Remove an Item style from the current user's favorites (idempotent). */
+catalogRouter.delete("/item-favorites/:styleKey", async (req: Request, res: Response) => {
+  const userId = req.user!.sub;
+  const styleKey = req.params.styleKey;
+  if (typeof styleKey !== "string" || !styleKey) {
+    res.status(400).json({ error: "styleKey_required" });
+    return;
+  }
+
+  await prisma.itemStyleFavorite.deleteMany({ where: { userId, styleKey } });
   res.json({ ok: true });
 });

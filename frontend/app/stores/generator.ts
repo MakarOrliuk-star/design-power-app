@@ -75,6 +75,7 @@ export const useGeneratorStore = defineStore("generator", () => {
   const categories = ref<Category[]>([]);
   const themes = ref<ThemeItem[]>([]);
   const itemStyles = ref<string[]>([]);
+  const itemStyleFavorites = ref<string[]>([]); // favorited Item style keys (per user)
   const loaded = ref(false);
   const loading = ref(false);
 
@@ -130,6 +131,10 @@ export const useGeneratorStore = defineStore("generator", () => {
       const q = search.value.trim().toLowerCase();
       return itemStyles.value
         .filter((s) => !q || s.toLowerCase().includes(q))
+        // Item only honours the Favorites tab (brand categories don't apply to it).
+        .filter((s) =>
+          activeCategoryId.value === FAVORITES_CATEGORY ? isStyleFavorite(s) : true,
+        )
         .map((s) => ({ key: s, label: s, brand: null }));
     }
     return visibleBrands.value.map((b) => ({ key: b.id, label: formatBrand(b.name), brand: b }));
@@ -213,11 +218,13 @@ export const useGeneratorStore = defineStore("generator", () => {
         categories: Category[];
         themes: ThemeItem[];
         itemStyles: string[];
+        itemStyleFavorites?: string[];
       }>("/api/catalog/home");
       brands.value = res.brands;
       categories.value = res.categories;
       themes.value = res.themes;
       itemStyles.value = res.itemStyles;
+      itemStyleFavorites.value = res.itemStyleFavorites ?? [];
       if (!themeId.value && res.themes[0]) themeId.value = res.themes[0].id;
       loaded.value = true;
     } catch {
@@ -251,6 +258,42 @@ export const useGeneratorStore = defineStore("generator", () => {
     } catch {
       brand.isFavorite = !next;
     }
+  }
+
+  // ---- Item-style favorites (keyed by style name, separate from brand favorites) ----
+  function isStyleFavorite(key: string): boolean {
+    return itemStyleFavorites.value.includes(key);
+  }
+  async function toggleStyleFavorite(key: string) {
+    const wasFav = isStyleFavorite(key);
+    // Optimistic update; revert on failure.
+    itemStyleFavorites.value = wasFav
+      ? itemStyleFavorites.value.filter((k) => k !== key)
+      : [...itemStyleFavorites.value, key];
+    try {
+      await useApi()(`/api/catalog/item-favorites/${encodeURIComponent(key)}`, {
+        method: wasFav ? "DELETE" : "POST",
+      });
+    } catch {
+      itemStyleFavorites.value = wasFav
+        ? [...itemStyleFavorites.value, key]
+        : itemStyleFavorites.value.filter((k) => k !== key);
+    }
+  }
+
+  // ---- Unified favorite API for the picker (dispatches on the active tab) ----
+  // Person key = brandId, Item key = style name.
+  function isTargetFavorite(key: string): boolean {
+    if (isItem.value) return isStyleFavorite(key);
+    return brandById.value.get(key)?.isFavorite ?? false;
+  }
+  function toggleTargetFavorite(key: string) {
+    if (isItem.value) {
+      void toggleStyleFavorite(key);
+      return;
+    }
+    const brand = brandById.value.get(key);
+    if (brand) void toggleFavorite(brand);
   }
 
   async function submit() {
@@ -388,6 +431,7 @@ export const useGeneratorStore = defineStore("generator", () => {
     categories,
     themes,
     itemStyles,
+    itemStyleFavorites,
     loaded,
     loading,
     activeTab,
@@ -431,6 +475,10 @@ export const useGeneratorStore = defineStore("generator", () => {
     setTargetAspect,
     load,
     toggleFavorite,
+    isStyleFavorite,
+    toggleStyleFavorite,
+    isTargetFavorite,
+    toggleTargetFavorite,
     submit,
     addBatch,
     stop,
