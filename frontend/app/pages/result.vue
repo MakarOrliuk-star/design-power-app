@@ -1,286 +1,41 @@
 <script setup lang="ts">
-// Result page — Phase 2: tabs wired to GET /api/generations. Content type and
-// edited-state come from the backend; images are grouped by type + brand + prompt.
-// Reuses TheToolbar. (Viewer/edit/real-time land in later phases.)
+// Result page. All logic lives in the `useResult` composable so it can be
+// unit-tested without the Nuxt runtime (see app/composables/useResult.ts). This
+// file only binds the composable to the template + reuses TheToolbar.
+import { useResult, type ResultApi } from "~/composables/useResult";
+
 useHead({ title: "Design Power — Result" });
 
-type TabKey = "generated" | "person" | "item" | "background" | "edited";
-type SelectMode = "ALL" | "EACH";
-type ContentType = "Person" | "Item" | "Background";
-
-const TABS: { key: TabKey; label: string; disabled?: boolean }[] = [
-  { key: "generated", label: "Generated" },
-  { key: "person", label: "Person" },
-  { key: "item", label: "Item" },
-  { key: "background", label: "Background", disabled: true }, // no pipeline yet (Phase 0 decision)
-  { key: "edited", label: "Edited" },
-];
-
-interface GalleryImage {
-  id: string;
-  brandName: string;
-  contentType: ContentType;
-  isEdit: boolean;
-  theme: string | null;
-  description: string | null;
-  generatedImageUrl: string;
-  createdAt: string;
-}
-interface Group {
-  id: string;
-  type: ContentType;
-  state: "Generated" | "Edited";
-  brand: string;
-  prompt: string;
-  images: GalleryImage[];
-}
-
-const api = useApi();
 const gen = useGeneratorStore();
-const activeTab = ref<TabKey>("generated");
-const selectMode = ref<SelectMode>("ALL");
-
-const images = ref<GalleryImage[]>([]);
-const total = ref(0);
-const hasMore = ref(false);
-const loading = ref(false);
-const LIMIT = 50;
-
-async function load(reset = true) {
-  loading.value = true;
-  try {
-    const offset = reset ? 0 : images.value.length;
-    const res = await api<{ images: GalleryImage[]; total: number; hasMore: boolean }>(
-      "/api/generations",
-      { query: { tab: activeTab.value, limit: LIMIT, offset } },
-    );
-    images.value = reset ? res.images : [...images.value, ...res.images];
-    total.value = res.total;
-    hasMore.value = res.hasMore;
-  } catch {
-    if (reset) {
-      images.value = [];
-      total.value = 0;
-      hasMore.value = false;
-    }
-  } finally {
-    loading.value = false;
-  }
-}
-
-// Group images by content type + brand (style) + prompt — each group becomes one
-// labelled row in the lane (TASK §3 "style indication").
-const groups = computed<Group[]>(() => {
-  const map = new Map<string, Group>();
-  for (const img of images.value) {
-    const key = `${img.contentType}__${img.brandName}__${img.description ?? ""}`;
-    let g = map.get(key);
-    if (!g) {
-      g = {
-        id: key,
-        type: img.contentType,
-        state: img.isEdit ? "Edited" : "Generated",
-        brand: img.brandName,
-        prompt: img.description ?? "",
-        images: [],
-      };
-      map.set(key, g);
-    }
-    g.images.push(img);
-  }
-  return [...map.values()];
-});
-
-function selectTab(key: TabKey) {
-  if (activeTab.value === key) return;
-  activeTab.value = key;
-  selected.value = new Set();
-  newReadyCount.value = 0;
-  closeViewer();
-  void load();
-}
-
-// Selection.
-const selected = ref<Set<string>>(new Set());
-function toggleSelect(id: string) {
-  const next = new Set(selected.value);
-  if (next.has(id)) next.delete(id);
-  else next.add(id);
-  selected.value = next;
-}
-function isSelected(id: string) {
-  return selected.value.has(id);
-}
-
-const allImageIds = computed(() => images.value.map((i) => i.id));
-const allSelected = computed(
-  () => allImageIds.value.length > 0 && allImageIds.value.every((id) => selected.value.has(id)),
-);
-function toggleSelectAll() {
-  selected.value = allSelected.value ? new Set() : new Set(allImageIds.value);
-}
-
-const selectedImages = computed(() => images.value.filter((i) => selected.value.has(i.id)));
-
-// ---- Edit flow (Phase 4) ----
-const editPrompt = ref(""); // All mode: one shared instruction
-const perEditPrompts = ref<Record<string, string>>({}); // Each mode: per-image
-const editing = ref(false);
-const editError = ref("");
-const editMsg = ref("");
-
-async function runEdit() {
-  if (!selectedImages.value.length) return;
-  editError.value = "";
-  editMsg.value = "";
-  const generationIds = selectedImages.value.map((i) => i.id);
-
-  let body: Record<string, unknown>;
-  if (selectMode.value === "ALL") {
-    if (!editPrompt.value.trim()) {
-      editError.value = "Введите промпт для редактирования.";
-      return;
-    }
-    body = { generationIds, prompt: editPrompt.value.trim() };
-  } else {
-    const perPrompts: Record<string, string> = {};
-    for (const img of selectedImages.value) {
-      const p = (perEditPrompts.value[img.id] ?? "").trim();
-      if (!p) {
-        editError.value = "Заполните промпт для каждой выбранной картинки.";
-        return;
-      }
-      perPrompts[img.id] = p;
-    }
-    body = { generationIds, perPrompts };
-  }
-
-  editing.value = true;
-  try {
-    const res = await api<{ batchId: string; count: number }>("/api/generate/edit", {
-      method: "POST",
-      body,
-    });
-    // Track in the generator store → toolbar progress + completion toast + drives
-    // the Result-page auto-refresh below (TASK §6).
-    gen.addBatch(res.batchId, "item");
-    editMsg.value = "Отправлено! Результат появится во вкладке Edited.";
-    selected.value = new Set();
-    editPrompt.value = "";
-    perEditPrompts.value = {};
-    activeTab.value = "edited";
-    void load();
-  } catch (e: unknown) {
-    const code = (e as { data?: { error?: string } })?.data?.error;
-    editError.value =
-      code === "edit_pipeline_not_configured"
-        ? "Редактирование не настроено (нет ключей fal / Cloudinary)."
-        : "Не удалось запустить редактирование.";
-  } finally {
-    editing.value = false;
-  }
-}
-
-// ---- Image viewer (Phase 3) ----
-// Navigate in display order (grouped), wrapping around with ←/→; Esc closes.
-// Tracked by image id (not index) so the auto-refresh prepending new images
-// (Phase 5) never makes the open image jump. If the viewed image leaves the list
-// (e.g. tab switch), the modal closes itself.
-const flatImages = computed(() => groups.value.flatMap((g) => g.images));
-const viewerId = ref<string | null>(null);
-const viewerIndex = computed(() =>
-  viewerId.value === null ? -1 : flatImages.value.findIndex((i) => i.id === viewerId.value),
-);
-const viewerImage = computed(() => {
-  const i = viewerIndex.value;
-  return i >= 0 ? flatImages.value[i] ?? null : null;
-});
-const viewerOpen = computed(() => viewerImage.value !== null);
-
-function openViewer(img: GalleryImage) {
-  viewerId.value = img.id;
-}
-function closeViewer() {
-  viewerId.value = null;
-}
-function viewerStep(delta: number) {
-  const n = flatImages.value.length;
-  if (n === 0 || viewerIndex.value < 0) return;
-  const next = (viewerIndex.value + delta + n) % n;
-  viewerId.value = flatImages.value[next]?.id ?? null;
-}
-function onKey(e: KeyboardEvent) {
-  if (!viewerOpen.value) return;
-  if (e.key === "Escape") closeViewer();
-  else if (e.key === "ArrowLeft") viewerStep(-1);
-  else if (e.key === "ArrowRight") viewerStep(1);
-}
-
-// Lock background scroll while the fullscreen viewer is open.
-watch(viewerOpen, (open) => {
-  if (import.meta.client) document.body.style.overflow = open ? "hidden" : "";
-});
-
-// ---- Real-time auto-refresh (Phase 5, TASK §6) ----
-// While any batch is in flight (RUN from Home OR an edit from here), poll the
-// current tab and merge freshly-finished images to the front; surface a "Готово"
-// banner with how many newly arrived.
-const newReadyCount = ref(0);
-let pollTimer: ReturnType<typeof setInterval> | null = null;
-
-async function refresh() {
-  try {
-    const res = await api<{ images: GalleryImage[]; total: number; hasMore: boolean }>(
-      "/api/generations",
-      { query: { tab: activeTab.value, limit: LIMIT, offset: 0 } },
-    );
-    total.value = res.total;
-    const existing = new Set(images.value.map((i) => i.id));
-    const added = res.images.filter((i) => !existing.has(i.id));
-    if (added.length) {
-      images.value = [...added, ...images.value];
-      newReadyCount.value += added.length;
-    }
-  } catch {
-    /* transient — try again next tick */
-  }
-}
-
-function startPolling() {
-  if (pollTimer) return;
-  pollTimer = setInterval(() => void refresh(), 3000);
-}
-function stopPolling() {
-  if (pollTimer) {
-    clearInterval(pollTimer);
-    pollTimer = null;
-  }
-}
-function dismissReady() {
-  newReadyCount.value = 0;
-}
-
-watch(
-  () => gen.runningCount,
-  (n) => {
-    if (n > 0) startPolling();
-    else {
-      stopPolling();
-      void refresh(); // final catch-up for the last completions
-    }
-  },
-);
-
-onMounted(() => {
-  void load();
-  window.addEventListener("keydown", onKey);
-  if (gen.runningCount > 0) startPolling();
-});
-onBeforeUnmount(() => {
-  window.removeEventListener("keydown", onKey);
-  stopPolling();
-  if (import.meta.client) document.body.style.overflow = "";
-});
+const {
+  TABS,
+  activeTab,
+  selectMode,
+  selectTab,
+  groups,
+  hasMore,
+  loading,
+  load,
+  toggleSelect,
+  isSelected,
+  toggleSelectAll,
+  selectedImages,
+  editPrompt,
+  perEditPrompts,
+  editing,
+  editError,
+  editMsg,
+  runEdit,
+  flatImages,
+  viewerIndex,
+  viewerImage,
+  viewerOpen,
+  openViewer,
+  closeViewer,
+  viewerStep,
+  newReadyCount,
+  dismissReady,
+} = useResult({ api: useApi() as unknown as ResultApi, gen });
 </script>
 
 <template>
