@@ -30,8 +30,14 @@ const total = (b: ActiveBatch) => b.status?.total ?? 0;
 
 <template>
   <div class="toolbar">
-    <!-- Logo -->
-    <div class="card card--logo">
+    <!-- Logo (click → Home) -->
+    <button
+      class="card card--logo"
+      type="button"
+      aria-label="На главную"
+      title="На главную"
+      @click="navigateTo('/')"
+    >
       <span class="logo">
         <span class="logo__letter">m</span>
         <svg
@@ -59,7 +65,7 @@ const total = (b: ActiveBatch) => b.status?.total ?? 0;
         </svg>
         <span class="logo__letter">k</span>
       </span>
-    </div>
+    </button>
 
     <!-- Empty / prompt name -->
     <div class="card card--empty">
@@ -210,6 +216,11 @@ const total = (b: ActiveBatch) => b.status?.total ?? 0;
 .card--logo {
   flex: 0 0 280px;
   justify-content: center;
+  cursor: pointer;
+  transition: border-color 0.12s ease, background 0.12s ease;
+}
+.card--logo:hover {
+  border-color: var(--color-accent);
 }
 .logo {
   display: inline-flex;

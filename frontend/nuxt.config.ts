@@ -19,6 +19,17 @@ export default defineNuxtConfig({
         { charset: "utf-8" },
         { name: "viewport", content: "width=device-width, initial-scale=1" },
       ],
+      link: [
+        // m∿k logo favicon (SVG, crisp at any tab size); .ico stays as fallback.
+        { rel: "icon", type: "image/svg+xml", href: "/favicon.svg" },
+        { rel: "alternate icon", href: "/favicon.ico" },
+        { rel: "preconnect", href: "https://fonts.googleapis.com" },
+        { rel: "preconnect", href: "https://fonts.gstatic.com", crossorigin: "" },
+        {
+          rel: "stylesheet",
+          href: "https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap",
+        },
+      ],
     },
   },
 
