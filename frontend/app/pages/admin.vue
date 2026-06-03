@@ -86,9 +86,82 @@ interface ItemPrompt {
   key: string;
   content: string;
 }
+interface BrandCategory {
+  id: string;
+  name: string;
+}
 
 const brands = ref<AdminBrand[]>([]);
+const categories = ref<BrandCategory[]>([]);
 const itemPrompts = ref<ItemPrompt[]>([]);
+
+// ---- Create brand (TASK §2) ----
+function emptyNewBrand() {
+  return {
+    name: "",
+    categoryIds: [] as string[],
+    personPrompt: "",
+    stylePrompt: "",
+    referenceImages: ["", "", ""], // 3 ref slots (Cloudinary URLs)
+  };
+}
+const newBrand = ref(emptyNewBrand());
+const creatingBrand = ref(false);
+const createMsg = ref("");
+
+function toggleNewBrandCategory(id: string) {
+  const arr = newBrand.value.categoryIds;
+  const i = arr.indexOf(id);
+  if (i >= 0) arr.splice(i, 1);
+  else arr.push(id);
+}
+
+async function uploadNewBrandRef(slot: number, e: Event) {
+  const input = e.target as HTMLInputElement;
+  const file = input.files?.[0];
+  input.value = "";
+  if (!file) return;
+  createMsg.value = "Загрузка картинки…";
+  try {
+    const dataUrl = await fileToDataUrl(file);
+    const res = await api<{ secure_url: string }>("/api/admin/upload", {
+      method: "POST",
+      body: { dataUrl },
+    });
+    newBrand.value.referenceImages[slot] = res.secure_url;
+    createMsg.value = "Картинка загружена.";
+  } catch {
+    createMsg.value = "Ошибка загрузки картинки.";
+  }
+}
+
+async function createBrand() {
+  const name = newBrand.value.name.trim();
+  if (!name) return;
+  creatingBrand.value = true;
+  createMsg.value = "";
+  try {
+    await api("/api/admin/brands", {
+      method: "POST",
+      body: {
+        name,
+        categoryIds: newBrand.value.categoryIds,
+        personPrompt: newBrand.value.personPrompt,
+        stylePrompt: newBrand.value.stylePrompt,
+        referenceImages: newBrand.value.referenceImages.map((s) => s.trim()).filter(Boolean),
+      },
+    });
+    createMsg.value = "Бренд создан ✓";
+    newBrand.value = emptyNewBrand();
+    await loadCatalog();
+  } catch (e: unknown) {
+    const code = (e as { data?: { error?: string } })?.data?.error;
+    createMsg.value =
+      code === "already_exists" ? "Бренд с таким именем уже существует." : "Не удалось создать бренд.";
+  } finally {
+    creatingBrand.value = false;
+  }
+}
 const brandSearch = ref("");
 const savingId = ref<string | null>(null);
 const rowMsg = ref<Record<string, string>>({});
@@ -120,8 +193,11 @@ function padTo3(arr: string[]): string[] {
 
 async function loadCatalog() {
   try {
-    const res = await api<{ brands: AdminBrand[]; itemPrompts: ItemPrompt[] }>("/api/admin/catalog");
+    const res = await api<{ brands: AdminBrand[]; categories: BrandCategory[]; itemPrompts: ItemPrompt[] }>(
+      "/api/admin/catalog",
+    );
     brands.value = res.brands.map((b) => ({ ...b, referenceImages: padTo3(b.referenceImages) }));
+    categories.value = res.categories;
     itemPrompts.value = res.itemPrompts;
   } catch {
     error.value = "Не удалось загрузить каталог.";
@@ -253,6 +329,85 @@ onMounted(() => {
           </tr>
         </tbody>
       </table>
+    </section>
+
+    <!-- Create brand -->
+    <section class="panel">
+      <h2>Создать бренд</h2>
+      <p class="muted small">
+        Имя бренда, категории, базовый промпт (PERSON) и специфичный стиль.
+        Реф-картинки можно загрузить ниже после создания.
+      </p>
+
+      <form class="create-brand" @submit.prevent="createBrand">
+        <div class="field">
+          <label class="field__label">Название бренда</label>
+          <input v-model="newBrand.name" class="field__input" type="text" placeholder="Напр. Spinogambino(Men)" required />
+        </div>
+
+        <div v-if="categories.length" class="field">
+          <label class="field__label">Категории</label>
+          <div class="cat-list">
+            <label v-for="c in categories" :key="c.id" class="cat-chip">
+              <input
+                type="checkbox"
+                :checked="newBrand.categoryIds.includes(c.id)"
+                @change="toggleNewBrandCategory(c.id)"
+              />
+              {{ c.name }}
+            </label>
+          </div>
+        </div>
+
+        <div class="field">
+          <label class="field__label">Базовый промпт (PERSON)</label>
+          <textarea
+            v-model="newBrand.personPrompt"
+            class="prompt"
+            rows="3"
+            placeholder="Системный «prompt writer» для этого бренда (необязательно)"
+          />
+        </div>
+
+        <div class="field">
+          <label class="field__label">Специфичный стиль</label>
+          <textarea
+            v-model="newBrand.stylePrompt"
+            class="prompt"
+            rows="2"
+            placeholder="Стилевое описание бренда (необязательно)"
+          />
+        </div>
+
+        <div class="field">
+          <label class="field__label">Реф-картинки (до 3)</label>
+          <div class="refs">
+            <div v-for="(url, i) in newBrand.referenceImages" :key="i" class="ref">
+              <div class="ref__preview">
+                <img v-if="url" :src="url" alt="" />
+                <span v-else class="ref__ph">Ref{{ i + 1 }}</span>
+              </div>
+              <input
+                v-model="newBrand.referenceImages[i]"
+                class="ref__url"
+                type="text"
+                :placeholder="`Ref${i + 1} URL`"
+              />
+              <label class="ref__upload">
+                Загрузить
+                <input type="file" accept="image/*" hidden @change="(e) => uploadNewBrandRef(i, e)" />
+              </label>
+            </div>
+          </div>
+        </div>
+
+        <div class="create-brand__foot">
+          <span v-if="createMsg" class="create-brand__msg">{{ createMsg }}</span>
+          <button type="submit" class="btn-primary" :disabled="creatingBrand || !newBrand.name.trim()">
+            {{ creatingBrand ? "Создание…" : "Создать бренд" }}
+          </button>
+        </div>
+      </form>
     </section>
 
     <!-- Brand references + Person prompts -->
@@ -576,5 +731,59 @@ select {
 }
 .item-prompt .prompt {
   margin-top: 4px;
+}
+
+/* ---- create brand ---- */
+.create-brand {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+  max-width: 640px;
+}
+.field {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.field__label {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--color-text);
+}
+.field__input {
+  padding: 8px 12px;
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-sm);
+  background: var(--color-white);
+  font-family: inherit;
+  font-size: 14px;
+  color: var(--color-text);
+}
+.cat-list {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+.cat-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 12px;
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-pill);
+  background: var(--color-white);
+  font-size: 13px;
+  color: var(--color-text);
+  cursor: pointer;
+}
+.create-brand__foot {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 14px;
+}
+.create-brand__msg {
+  font-size: 13px;
+  color: var(--color-accent);
 }
 </style>

@@ -204,3 +204,73 @@ export async function createItemBatch(p: ItemParams): Promise<CreateBatchResult>
 
   return { batchId: batch.id, count: created.length };
 }
+
+type ActionType = "FULL" | "CREATE_ITEM" | "NANO_REF";
+
+interface EditSource {
+  sourceImageUrl: string; // the existing generated image to edit (fal image_urls)
+  brandName: string; // preserved so the result keeps its style/label
+  theme: string | null;
+  actionType: ActionType; // preserved so content type (Person/Item) is kept
+  prompt: string; // user's edit instruction (raw — no template wrapping)
+  aspect: string;
+}
+
+/**
+ * Edit (Result page, TASK §5). Each selected image becomes a NEW `isEdit` row that
+ * runs fal `nano-banana-2/edit` on the source image + the user's instruction. The
+ * job goes through the item queue (synchronous fal, no nano-gpt builder); the item
+ * worker skips the ITEM template for `isEdit` rows. Originals are left untouched.
+ */
+export async function createEditBatch(
+  userId: string,
+  sources: EditSource[],
+): Promise<CreateBatchResult> {
+  if (sources.length === 0) throw new Error("nothing_to_edit");
+
+  const batch = await prisma.batch.create({
+    data: {
+      userId,
+      actionType: sources[0]!.actionType,
+      description: sources[0]!.prompt,
+    },
+  });
+
+  const created: { generationId: string; aspect: string }[] = [];
+  for (const src of sources) {
+    const gen = await prisma.generation.create({
+      data: {
+        batchId: batch.id,
+        userId,
+        brandName: src.brandName,
+        theme: src.theme,
+        description: src.prompt,
+        referenceImages: [src.sourceImageUrl],
+        actionType: src.actionType,
+        isEdit: true,
+        status: "QUEUED",
+        statusMessage: "⏳ Queued",
+        job: {
+          create: {
+            provider: "FAL",
+            type: "ITEM", // routed through the item queue/worker
+            status: "QUEUED",
+            batchId: batch.id,
+            cloudinaryFolder: folderFor(src.brandName),
+          },
+        },
+      },
+      select: { id: true },
+    });
+    created.push({ generationId: gen.id, aspect: src.aspect });
+  }
+
+  await getItemQueue().addBulk(
+    created.map(({ generationId, aspect }) => ({
+      name: "generate" as const,
+      data: { generationId, batchId: batch.id, aspectRatio: aspect },
+    })),
+  );
+
+  return { batchId: batch.id, count: created.length };
+}

@@ -50,8 +50,8 @@ const titleCase = (s: string) =>
  */
 export function formatBrand(raw: string): string {
   const m = raw.match(/^(.*?)\(([^)]+)\)$/);
-  const base = m ? m[1] : raw;
-  const paren = m ? m[2] : "";
+  const base = (m ? m[1] : raw) ?? raw;
+  const paren = (m ? m[2] : "") ?? "";
 
   const tokens = base.split("_").filter(Boolean);
   let label = titleCase(tokens[0] ?? base);

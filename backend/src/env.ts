@@ -81,6 +81,9 @@ export const cloudinaryConfigured = Boolean(
 );
 export const personPipelineReady = falConfigured && nanoGptConfigured && cloudinaryConfigured;
 export const itemPipelineReady = nanoGptConfigured && cloudinaryConfigured;
+// Edit (Result page) runs fal nano-banana-2/edit on an existing image + a user
+// instruction, then stores via Cloudinary — no nano-gpt prompt builder involved.
+export const editPipelineReady = falConfigured && cloudinaryConfigured;
 
 /**
  * API-only production guard. The API needs a real JWT secret + Google OAuth creds;

@@ -17,6 +17,7 @@ export async function processItemJob(generationId: string, aspectRatio = "1:1"):
       brandName: true,
       description: true,
       referenceImages: true,
+      isEdit: true,
       job: { select: { id: true, cloudinaryFolder: true } },
     },
   });
@@ -30,7 +31,11 @@ export async function processItemJob(generationId: string, aspectRatio = "1:1"):
     data: { status: "PROCESSING", statusMessage: "⏳ Generating" },
   });
 
-  const finalPrompt = await buildItemPrompt(gen.brandName, gen.description ?? "");
+  // Edits (Result page) run nano-banana-2/edit on the source image with the user's
+  // raw instruction — no ITEM style template, so the edit isn't re-styled.
+  const finalPrompt = gen.isEdit
+    ? (gen.description ?? "").trim()
+    : await buildItemPrompt(gen.brandName, gen.description ?? "");
 
   const fal = await runPersonFal(finalPrompt, gen.referenceImages, aspectRatio);
   if (!fal.success || !fal.imageUrl) {

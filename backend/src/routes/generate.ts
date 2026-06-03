@@ -2,9 +2,10 @@ import { Router } from "express";
 import type { Request, Response } from "express";
 import { z } from "zod";
 import { prisma } from "../lib/prisma.js";
-import { personPipelineReady, itemPipelineReady } from "../env.js";
+import type { Prisma } from "../../generated/prisma/client.js";
+import { personPipelineReady, itemPipelineReady, editPipelineReady } from "../env.js";
 import { uploadBase64, withRetry } from "../lib/cloudinary.js";
-import { createPersonBatch, createItemBatch } from "../services/generation.service.js";
+import { createPersonBatch, createItemBatch, createEditBatch } from "../services/generation.service.js";
 import { recomputeBatchStatus } from "../services/finalize.js";
 
 // Mounted behind loadUser + requireAuth (see index.ts).
@@ -132,11 +133,104 @@ generateRouter.post("/generate", async (req: Request, res: Response) => {
   }
 });
 
+// ---- Edit selected images (TASK §5: fal nano-banana-2/edit) ----
+const editSchema = z.object({
+  generationIds: z.array(z.string()).min(1), // source images to edit
+  prompt: z.string().default(""), // shared instruction (All mode)
+  perPrompts: z.record(z.string()).default({}), // per-source instruction (Each mode), keyed by generationId
+  aspectRatio: z.string().default("1:1"),
+  perAspect: z.record(z.string()).default({}),
+});
+
+generateRouter.post("/generate/edit", async (req: Request, res: Response) => {
+  const parsed = editSchema.safeParse(req.body);
+  if (!parsed.success) {
+    res.status(400).json({ error: "invalid_body", details: parsed.error.flatten().fieldErrors });
+    return;
+  }
+  if (!editPipelineReady) {
+    res.status(503).json({ error: "edit_pipeline_not_configured" });
+    return;
+  }
+  const d = parsed.data;
+  const userId = req.user!.sub;
+
+  // Resolve the sources: must belong to the user and have a generated image.
+  const rows = await prisma.generation.findMany({
+    where: {
+      id: { in: d.generationIds },
+      userId,
+      status: "DONE",
+      generatedImageUrl: { not: null },
+    },
+    select: { id: true, brandName: true, theme: true, actionType: true, generatedImageUrl: true },
+  });
+  if (rows.length === 0) {
+    res.status(404).json({ error: "no_editable_images" });
+    return;
+  }
+
+  const sources = rows.map((r) => {
+    const text = (d.perPrompts[r.id] || d.prompt).trim();
+    return {
+      sourceImageUrl: r.generatedImageUrl!,
+      brandName: r.brandName,
+      theme: r.theme,
+      actionType: r.actionType,
+      prompt: text,
+      aspect: d.perAspect[r.id] || d.aspectRatio,
+    };
+  });
+
+  if (sources.some((s) => !s.prompt)) {
+    res.status(400).json({ error: "empty_prompt" });
+    return;
+  }
+
+  try {
+    const result = await createEditBatch(userId, sources);
+    res.json(result);
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : "error";
+    res.status(400).json({ error: msg });
+  }
+});
+
 // ---- Gallery (per-user, completed images) ----
+// Result page tabs (TASK §3). Content type is derived from actionType:
+//   FULL / NANO_REF -> Person, CREATE_ITEM -> Item. There is no BACKGROUND
+//   pipeline yet, so that tab returns nothing (Phase 0 decision). Edited images
+//   (isEdit=true) live only in the "edited" tab and are excluded elsewhere.
+type ContentType = "Person" | "Item" | "Background";
+function contentTypeOf(actionType: "FULL" | "CREATE_ITEM" | "NANO_REF"): ContentType {
+  return actionType === "CREATE_ITEM" ? "Item" : "Person";
+}
+
+/** Tab-specific Generation filter, merged into the base gallery where clause. */
+function tabWhere(
+  tab: "generated" | "person" | "item" | "background" | "edited",
+): Prisma.GenerationWhereInput {
+  switch (tab) {
+    case "person":
+      return { isEdit: false, actionType: { in: ["FULL", "NANO_REF"] } };
+    case "item":
+      return { isEdit: false, actionType: "CREATE_ITEM" };
+    case "background":
+      // No BACKGROUND actionType yet — match nothing until a pipeline exists.
+      return { actionType: { in: [] } };
+    case "edited":
+      return { isEdit: true };
+    case "generated":
+    default:
+      return { isEdit: false };
+  }
+}
+
 const gallerySchema = z.object({
   limit: z.coerce.number().int().min(1).max(100).default(50),
   offset: z.coerce.number().int().min(0).default(0),
   brand: z.string().optional(),
+  tab: z.enum(["generated", "person", "item", "background", "edited"]).default("generated"),
 });
 
 generateRouter.get("/generations", async (req: Request, res: Response) => {
@@ -145,7 +239,7 @@ generateRouter.get("/generations", async (req: Request, res: Response) => {
     res.status(400).json({ error: "invalid_query" });
     return;
   }
-  const { limit, offset, brand } = parsed.data;
+  const { limit, offset, brand, tab } = parsed.data;
   const userId = req.user!.sub;
 
   const where = {
@@ -153,6 +247,7 @@ generateRouter.get("/generations", async (req: Request, res: Response) => {
     status: "DONE" as const,
     generatedImageUrl: { not: null },
     ...(brand ? { brandName: brand } : {}),
+    ...tabWhere(tab),
   };
 
   const [total, rows] = await Promise.all([
@@ -169,12 +264,18 @@ generateRouter.get("/generations", async (req: Request, res: Response) => {
         description: true,
         generatedImageUrl: true,
         actionType: true,
+        isEdit: true,
         createdAt: true,
       },
     }),
   ]);
 
-  res.json({ images: rows, total, hasMore: offset + rows.length < total });
+  const images = rows.map((r) => ({
+    ...r,
+    contentType: contentTypeOf(r.actionType),
+  }));
+
+  res.json({ images, total, hasMore: offset + rows.length < total });
 });
 
 // ---- Batch status (polling) ----

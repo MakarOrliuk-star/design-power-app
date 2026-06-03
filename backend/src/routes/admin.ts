@@ -116,13 +116,14 @@ adminRouter.patch("/users/:id", async (req: Request, res: Response) => {
 // Catalog management: BrandNanoRef (Person refs) + PromptTemplate
 // ============================================================
 
-/** Brands with their NanoRef images + PERSON prompt, plus all ITEM prompts. */
+/** Brands with their NanoRef images + PERSON prompt, plus categories + ITEM prompts. */
 adminRouter.get("/catalog", async (_req: Request, res: Response) => {
-  const [brands, personPrompts, itemPrompts] = await Promise.all([
+  const [brands, categories, personPrompts, itemPrompts] = await Promise.all([
     prisma.brand.findMany({
       orderBy: { name: "asc" },
       select: { id: true, name: true, nanoRef: { select: { referenceImages: true } } },
     }),
+    prisma.brandCategory.findMany({ orderBy: [{ order: "asc" }, { name: "asc" }] }),
     prisma.promptTemplate.findMany({ where: { type: "PERSON" }, select: { key: true, content: true } }),
     prisma.promptTemplate.findMany({
       where: { type: "ITEM" },
@@ -142,8 +143,75 @@ adminRouter.get("/catalog", async (_req: Request, res: Response) => {
       referenceImages: b.nanoRef?.referenceImages ?? [],
       personPrompt: personByKey.get(b.name.toLowerCase()) ?? "",
     })),
+    categories: categories.map((c) => ({ id: c.id, name: c.name })),
     itemPrompts: itemPrompts.map((p) => ({ key: p.key, content: p.content })),
   });
+});
+
+/** Create a new brand (TASK §2): name + categories + base PERSON prompt + style. */
+const createBrandSchema = z.object({
+  name: z.string().min(1).max(120).transform((s) => s.trim()),
+  categoryIds: z.array(z.string()).default([]),
+  personPrompt: z.string().default(""), // base prompt → PromptTemplate(PERSON)
+  stylePrompt: z.string().default(""), // brand-specific style → BrandNanoRef.stylePrompt
+  referenceImages: z.array(z.string()).max(10).default([]),
+});
+
+adminRouter.post("/brands", async (req: Request, res: Response) => {
+  const parsed = createBrandSchema.safeParse(req.body);
+  if (!parsed.success) {
+    res.status(400).json({ error: "invalid_body", details: parsed.error.flatten().fieldErrors });
+    return;
+  }
+  const { name, categoryIds, personPrompt, stylePrompt, referenceImages } = parsed.data;
+  if (!name) {
+    res.status(400).json({ error: "name_required" });
+    return;
+  }
+
+  const existing = await prisma.brand.findUnique({ where: { name }, select: { id: true } });
+  if (existing) {
+    res.status(409).json({ error: "already_exists" });
+    return;
+  }
+
+  // Keep only category IDs that actually exist.
+  const validCategoryIds = categoryIds.length
+    ? (
+        await prisma.brandCategory.findMany({
+          where: { id: { in: categoryIds } },
+          select: { id: true },
+        })
+      ).map((c) => c.id)
+    : [];
+
+  const refs = referenceImages.map((s) => s.trim()).filter(Boolean);
+
+  try {
+    const brand = await prisma.brand.create({
+      data: {
+        name,
+        categories: { create: validCategoryIds.map((id) => ({ category: { connect: { id } } })) },
+        ...(stylePrompt.trim() || refs.length
+          ? { nanoRef: { create: { referenceImages: refs, stylePrompt: stylePrompt.trim() } } }
+          : {}),
+      },
+      select: { id: true, name: true },
+    });
+
+    // Base PERSON prompt (looked up by brand name in the generation flow).
+    if (personPrompt.trim()) {
+      await prisma.promptTemplate.upsert({
+        where: { type_key: { type: "PERSON", key: name } },
+        create: { type: "PERSON", key: name, content: personPrompt, brandId: brand.id },
+        update: { content: personPrompt, brandId: brand.id },
+      });
+    }
+
+    res.status(201).json({ brand });
+  } catch {
+    res.status(500).json({ error: "create_failed" });
+  }
 });
 
 /** Set a brand's NanoRef reference images (Cloudinary URLs). */

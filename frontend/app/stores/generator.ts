@@ -311,6 +311,16 @@ export const useGeneratorStore = defineStore("generator", () => {
   function startPolling(id: string) {
     void pollOnce(id);
   }
+
+  /**
+   * Register an externally-created batch (e.g. a Result-page edit run) so it shows
+   * up in the toolbar progress + completion toast and is polled like a RUN batch.
+   */
+  function addBatch(id: string, kind: "person" | "item") {
+    if (batches.value.some((b) => b.id === id)) return;
+    batches.value = [...batches.value, { id, kind, createdAt: Date.now(), status: null }];
+    startPolling(id);
+  }
   async function pollOnce(id: string) {
     if (!batches.value.some((b) => b.id === id)) return; // dismissed
     try {
@@ -422,6 +432,7 @@ export const useGeneratorStore = defineStore("generator", () => {
     load,
     toggleFavorite,
     submit,
+    addBatch,
     stop,
     dismiss,
     cancelAndDismiss,
