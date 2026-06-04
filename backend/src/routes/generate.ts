@@ -8,6 +8,7 @@ import { personPipelineReady, itemPipelineReady, editPipelineReady } from "../en
 import { uploadBase64, withRetry } from "../lib/cloudinary.js";
 import { createPersonBatch, createItemBatch, createEditBatch } from "../services/generation.service.js";
 import { recomputeBatchStatus } from "../services/finalize.js";
+import { probeAspectRatio } from "../lib/imageSize.js";
 
 // Mounted behind loadUser + requireAuth (see index.ts).
 export const generateRouter: Router = Router();
@@ -171,22 +172,35 @@ generateRouter.post("/generate/edit", async (req: Request, res: Response) => {
     return;
   }
 
-  const sources = rows.map((r) => {
-    const text = (d.perPrompts[r.id] || d.prompt).trim();
-    return {
-      sourceImageUrl: r.generatedImageUrl!,
-      brandName: r.brandName,
-      theme: r.theme,
-      actionType: r.actionType,
-      prompt: text,
-      aspect: d.perAspect[r.id] || d.aspectRatio,
-    };
-  });
+  const prepared = rows.map((r) => ({
+    row: r,
+    prompt: (d.perPrompts[r.id] || d.prompt).trim(),
+    // Any explicit aspect from the request wins; "" means "derive from the source".
+    override: d.perAspect[r.id] || (d.aspectRatio !== "1:1" ? d.aspectRatio : ""),
+  }));
 
-  if (sources.some((s) => !s.prompt)) {
+  if (prepared.some((p) => !p.prompt)) {
     res.status(400).json({ error: "empty_prompt" });
     return;
   }
+
+  // Preserve each source image's aspect ratio on the edit (TASK): the original
+  // aspect isn't stored anywhere, so we read it from the source's actual pixels
+  // and pass the nearest fal aspect_ratio. Probe only when there's no override;
+  // on failure we fall back to the request default ("1:1").
+  const sources = await Promise.all(
+    prepared.map(async (p) => {
+      const probed = p.override ? null : await probeAspectRatio(p.row.generatedImageUrl!);
+      return {
+        sourceImageUrl: p.row.generatedImageUrl!,
+        brandName: p.row.brandName,
+        theme: p.row.theme,
+        actionType: p.row.actionType,
+        prompt: p.prompt,
+        aspect: p.override || probed || d.aspectRatio,
+      };
+    }),
+  );
 
   try {
     const result = await createEditBatch(userId, sources);
