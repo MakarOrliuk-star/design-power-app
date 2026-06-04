@@ -1,6 +1,6 @@
 import { prisma } from "../lib/prisma.js";
 import { buildItemPrompt } from "../services/prompts.js";
-import { runPersonFal } from "../lib/fal.js";
+import { runPersonFal, runSeedvrUpscale } from "../lib/fal.js";
 import { uploadFromUrl, withRetry } from "../lib/cloudinary.js";
 import { finalizeSuccess, finalizeFailure } from "../services/finalize.js";
 
@@ -44,8 +44,25 @@ export async function processItemJob(generationId: string, aspectRatio = "1:1"):
     return;
   }
 
+  // Edits go through a SeedVR upscale before being stored, so the edited result is
+  // delivered at higher resolution. On a transient upscale failure we fall back to
+  // the (already edited) image so the edit still completes.
+  let imageUrl = fal.imageUrl;
+  if (gen.isEdit) {
+    await prisma.generation.update({
+      where: { id: generationId },
+      data: { statusMessage: "🔬 Upscaling" },
+    });
+    const upscaled = await runSeedvrUpscale(fal.imageUrl);
+    if (upscaled.success && upscaled.imageUrl) {
+      imageUrl = upscaled.imageUrl;
+    } else {
+      console.warn(`SeedVR upscale failed for ${generationId}: ${upscaled.error ?? "unknown"} — using non-upscaled edit`);
+    }
+  }
+
   const up = await withRetry(
-    () => uploadFromUrl(fal.imageUrl!, `${gen.brandName}_item_${Date.now()}`, folder),
+    () => uploadFromUrl(imageUrl, `${gen.brandName}_item_${Date.now()}`, folder),
     `${gen.brandName}#${generationId}`,
   );
   if (up.success && up.secure_url) {

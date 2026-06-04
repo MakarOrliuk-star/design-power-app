@@ -19,32 +19,11 @@ function authHeaders() {
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
 /**
- * Run ONE fal job synchronously and return the generated image URL.
- * Empty imageUrls → text-to-image (nano-banana-2); non-empty → image-to-image
- * (nano-banana-2/edit). Light retry on 5xx/429/network.
+ * POST one fal SYNCHRONOUS job (`fal.run/<model>`) and return the resulting image
+ * URL. Light retry on 5xx/429/network; non-retryable HTTP errors fail fast.
  */
-export async function runPersonFal(
-  prompt: string,
-  imageUrls: string[],
-  aspectRatio = "1:1",
-): Promise<FalRunResult> {
-  const hasImages = imageUrls.length > 0;
-  const model = hasImages ? "fal-ai/nano-banana-2/edit" : "fal-ai/nano-banana-2";
+async function callFalSync(model: string, body: Record<string, unknown>): Promise<FalRunResult> {
   const endpoint = `https://fal.run/${model}`;
-
-  const body: Record<string, unknown> = {
-    prompt,
-    num_images: 1,
-    aspect_ratio: aspectRatio,
-    output_format: "png",
-    resolution: "1K",
-  };
-  if (hasImages) {
-    body.image_urls = imageUrls;
-    body.safety_tolerance = "5";
-    body.limit_generations = true;
-  }
-
   const payload = JSON.stringify(body);
   let lastError = "unknown";
   for (let attempt = 1; attempt <= 3; attempt++) {
@@ -64,6 +43,53 @@ export async function runPersonFal(
     if (attempt < 3) await sleep(Math.min(8000, 1000 * 2 ** (attempt - 1)));
   }
   return { success: false, error: lastError };
+}
+
+/**
+ * Run ONE fal job synchronously and return the generated image URL.
+ * Empty imageUrls → text-to-image (nano-banana-2); non-empty → image-to-image
+ * (nano-banana-2/edit). Light retry on 5xx/429/network.
+ */
+export async function runPersonFal(
+  prompt: string,
+  imageUrls: string[],
+  aspectRatio = "1:1",
+): Promise<FalRunResult> {
+  const hasImages = imageUrls.length > 0;
+  const model = hasImages ? "fal-ai/nano-banana-2/edit" : "fal-ai/nano-banana-2";
+
+  const body: Record<string, unknown> = {
+    prompt,
+    num_images: 1,
+    aspect_ratio: aspectRatio,
+    output_format: "png",
+    resolution: "1K",
+  };
+  if (hasImages) {
+    body.image_urls = imageUrls;
+    body.safety_tolerance = "5";
+    body.limit_generations = true;
+  }
+
+  return callFalSync(model, body);
+}
+
+/**
+ * Upscale an existing image via `fal-ai/seedvr/upscale/image` (SeedVR2). Used
+ * right after the Edit stage, before the result is stored in Cloudinary, so edited
+ * images are delivered at higher resolution. Returns the upscaled image URL.
+ */
+export async function runSeedvrUpscale(
+  imageUrl: string,
+  upscaleFactor = 2,
+): Promise<FalRunResult> {
+  if (!imageUrl) return { success: false, error: "no image_url" };
+  return callFalSync("fal-ai/seedvr/upscale/image", {
+    image_url: imageUrl,
+    upscale_mode: "factor",
+    upscale_factor: upscaleFactor,
+    output_format: "png",
+  });
 }
 
 /** Extract the generated image URL from a fal response (handles known shapes). */
