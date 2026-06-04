@@ -9,7 +9,45 @@ import type { ActiveBatch } from "~/stores/generator";
 const gen = useGeneratorStore();
 const { theme, toggle: toggleTheme } = useTheme();
 
-const promptName = ""; // empty -> shows the "Empty" placeholder
+// Unified progress: ALWAYS 3 status slots — one per content group
+// (Person / Item / Background) — each reflecting the current (running) or last
+// generation of that group, in any state. Background has no pipeline yet, so it
+// stays idle.
+type ProgressKind = "person" | "item" | "background";
+const PROGRESS_KINDS: ProgressKind[] = ["person", "item", "background"];
+
+function latestBatch(kind: ProgressKind): ActiveBatch | null {
+  if (kind === "background") return null; // no Background pipeline yet
+  const list = gen.batches.filter((b) => b.kind === kind);
+  if (!list.length) return null;
+  return list.reduce((a, b) => (b.createdAt > a.createdAt ? b : a));
+}
+
+const progressGroups = computed(() =>
+  PROGRESS_KINDS.map((kind) => {
+    const b = latestBatch(kind);
+    const status = b?.status ?? null;
+    const total = status?.total ?? 0;
+    const completed = status?.completed ?? 0;
+    const pct = status?.progress ?? 0;
+    const isComplete = status?.isComplete ?? false;
+    const running = b !== null && (status === null || !isComplete);
+    const label = !b
+      ? "No generation"
+      : !status
+        ? "Queued…"
+        : `${completed} of ${total} images completed (${pct}%)`;
+    return {
+      kind,
+      label,
+      pct,
+      running,
+      done: b !== null && isComplete,
+      canCancel: running,
+      batchId: b?.id ?? "",
+    };
+  }),
+);
 
 // Logged-in user (from the session / auth store).
 const auth = useAuthStore();
@@ -23,9 +61,6 @@ const userInitials = computed(() => {
   return (letters || base.slice(0, 2)).toUpperCase();
 });
 
-const pct = (b: ActiveBatch) => b.status?.progress ?? 0;
-const done = (b: ActiveBatch) => b.status?.completed ?? 0;
-const total = (b: ActiveBatch) => b.status?.total ?? 0;
 </script>
 
 <template>
@@ -67,53 +102,52 @@ const total = (b: ActiveBatch) => b.status?.total ?? 0;
       </span>
     </button>
 
-    <!-- Empty / prompt name -->
-    <div class="card card--empty">
-      <span class="ic ic--muted" aria-hidden="true">
-        <svg viewBox="0 0 24 24" width="20" height="20" fill="none">
-          <circle cx="12" cy="8" r="3.4" stroke="currentColor" stroke-width="1.6" />
-          <path d="M5 19c0-3.3 3.1-5 7-5s7 1.7 7 5" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" />
-        </svg>
-      </span>
-      <input
-        class="empty__input"
-        type="text"
-        :value="promptName"
-        placeholder="Empty"
-        readonly
-      />
-    </div>
-
-    <!-- Progress jobs -->
+    <!-- Unified progress: always 3 status slots (Person / Item / Background),
+         each showing the current/last generation of that group. -->
     <div class="card card--progress">
-      <template v-if="gen.batches.length">
-        <div v-for="b in gen.batches" :key="b.id" class="job">
-          <span class="ic ic--muted" aria-hidden="true">
-            <svg v-if="b.kind === 'person'" viewBox="0 0 24 24" width="20" height="20" fill="none">
-              <path d="M12 3l1.6 3.6L17.5 7l-2.7 2.7.7 3.9L12 11.8 8.5 13.6l.7-3.9L6.5 7l3.9-.4L12 3z" stroke="currentColor" stroke-width="1.5" stroke-linejoin="round" />
-            </svg>
-            <svg v-else viewBox="0 0 24 24" width="20" height="20" fill="none">
-              <path d="M7 4h10M8 4v2.5L6 9v9a2 2 0 002 2h8a2 2 0 002-2V9l-2-2.5V4" stroke="currentColor" stroke-width="1.5" stroke-linejoin="round" />
-              <path d="M6.5 13h11" stroke="currentColor" stroke-width="1.5" />
-            </svg>
-          </span>
+      <div
+        v-for="g in progressGroups"
+        :key="g.kind"
+        :class="['job', { 'job--idle': !g.running && !g.done }]"
+      >
+        <span class="ic ic--muted" aria-hidden="true">
+          <svg v-if="g.kind === 'person'" viewBox="0 0 24 24" width="20" height="20" fill="none">
+            <path d="M12 3l1.6 3.6L17.5 7l-2.7 2.7.7 3.9L12 11.8 8.5 13.6l.7-3.9L6.5 7l3.9-.4L12 3z" stroke="currentColor" stroke-width="1.5" stroke-linejoin="round" />
+          </svg>
+          <svg v-else-if="g.kind === 'item'" viewBox="0 0 24 24" width="20" height="20" fill="none">
+            <path d="M7 4h10M8 4v2.5L6 9v9a2 2 0 002 2h8a2 2 0 002-2V9l-2-2.5V4" stroke="currentColor" stroke-width="1.5" stroke-linejoin="round" />
+            <path d="M6.5 13h11" stroke="currentColor" stroke-width="1.5" />
+          </svg>
+          <svg v-else viewBox="0 0 24 24" width="20" height="20" fill="none">
+            <rect x="3.5" y="5" width="17" height="14" rx="2.5" stroke="currentColor" stroke-width="1.5" />
+            <circle cx="8.5" cy="10" r="1.4" stroke="currentColor" stroke-width="1.3" />
+            <path d="M5 16l4-3.5 3 2.5 2.5-2L19 15.5" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" />
+          </svg>
+        </span>
 
-          <div class="job__body">
-            <span v-if="b.status" class="job__label">{{ done(b) }} of {{ total(b) }} images completed ({{ pct(b) }}%)</span>
-            <span v-else class="job__label">Queued…</span>
-            <div class="job__track">
-              <div class="job__fill" :style="{ width: pct(b) + '%' }" />
-            </div>
+        <div class="job__body">
+          <span class="job__label">{{ g.label }}</span>
+          <div class="job__track">
+            <div
+              class="job__fill"
+              :class="{ 'job__fill--done': g.done }"
+              :style="{ width: g.pct + '%' }"
+            />
           </div>
-
-          <button class="job__close" type="button" aria-label="Cancel job" @click="gen.cancelAndDismiss(b.id)">
-            <svg viewBox="0 0 24 24" width="14" height="14" fill="none">
-              <path d="M6 6l12 12M18 6L6 18" stroke="currentColor" stroke-width="2" stroke-linecap="round" />
-            </svg>
-          </button>
         </div>
-      </template>
-      <span v-else class="progress__empty">No active generations</span>
+
+        <button
+          v-if="g.canCancel"
+          class="job__close"
+          type="button"
+          aria-label="Cancel job"
+          @click="gen.cancelAndDismiss(g.batchId)"
+        >
+          <svg viewBox="0 0 24 24" width="14" height="14" fill="none">
+            <path d="M6 6l12 12M18 6L6 18" stroke="currentColor" stroke-width="2" stroke-linecap="round" />
+          </svg>
+        </button>
+      </div>
     </div>
 
     <!-- Stop / delete -->
@@ -235,34 +269,11 @@ const total = (b: ActiveBatch) => b.status?.total ?? 0;
   display: block;
 }
 
-/* --- empty / prompt --- */
-.card--empty {
-  flex: 0.7 1 200px;
-  min-width: 190px;
-  gap: 12px;
-}
-.empty__input {
-  flex: 1;
-  border: none;
-  outline: none;
-  background: transparent;
-  font-family: inherit;
-  font-size: 15px;
-  color: var(--color-text);
-}
-.empty__input::placeholder {
-  color: var(--color-grey);
-}
-
-/* --- progress --- */
+/* --- unified progress (3 group slots) --- */
 .card--progress {
-  flex: 2.2 1 420px;
-  min-width: 400px;
-  gap: 16px;
-}
-.progress__empty {
-  font-size: 13px;
-  color: var(--color-grey);
+  flex: 3 1 580px;
+  min-width: 520px;
+  gap: 18px;
 }
 .job {
   flex: 1;
@@ -270,6 +281,9 @@ const total = (b: ActiveBatch) => b.status?.total ?? 0;
   align-items: center;
   gap: 9px;
   min-width: 0;
+}
+.job--idle {
+  opacity: 0.55;
 }
 .job__body {
   flex: 1;
@@ -295,6 +309,10 @@ const total = (b: ActiveBatch) => b.status?.total ?? 0;
   height: 100%;
   border-radius: 2px;
   background: var(--gradient-active);
+  transition: width 0.3s ease;
+}
+.job__fill--done {
+  background: var(--color-accent);
 }
 .job__close {
   flex: 0 0 auto;
@@ -407,9 +425,9 @@ const total = (b: ActiveBatch) => b.status?.total ?? 0;
   .card--user {
     flex: 1 1 auto;
   }
-  .card--empty,
   .card--progress {
     flex: 1 1 100%;
+    min-width: 0;
   }
 }
 </style>

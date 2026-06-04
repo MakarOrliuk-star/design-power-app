@@ -8,6 +8,13 @@ const gen = useGeneratorStore();
 onMounted(() => {
   if (!gen.loaded) void gen.load();
 });
+
+// Cloudinary media library (asset browser) — opens in a new tab.
+const CLOUDINARY_ASSETS_URL =
+  "https://console.cloudinary.com/app/c-f1e35ef68f5213bd50f69a1362c323/assets/media_library/search?q=&view_mode=mosaic";
+function openAssets() {
+  window.open(CLOUDINARY_ASSETS_URL, "_blank", "noopener");
+}
 </script>
 
 <template>
@@ -21,7 +28,7 @@ onMounted(() => {
       </div>
       <GeneratorBrandPicker />
 
-      <button class="assets" type="button">
+      <button class="assets" type="button" title="Cloudinary media library" @click="openAssets">
         <svg viewBox="0 0 24 24" width="18" height="18" fill="none" aria-hidden="true">
           <path d="M4 12a8 8 0 0113.7-5.7L20 8M20 4v4h-4" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" />
           <path d="M20 12a8 8 0 01-13.7 5.7L4 16M4 20v-4h4" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" />
@@ -63,11 +70,10 @@ onMounted(() => {
   gap: 48px;
 }
 
-/* floating Assets button (bottom-right of the board) */
+/* Assets button — sits at the end of the board content (bottom-right) and
+   scrolls together with the content instead of being pinned to the board. */
 .assets {
-  position: absolute;
-  right: 24px;
-  bottom: 18px;
+  align-self: flex-end;
   display: inline-flex;
   align-items: center;
   gap: 8px;
