@@ -37,11 +37,17 @@ onMounted(() => {
   display: flex;
   flex-direction: column;
   gap: 24px;
+  height: 100%;
+  min-height: 0;
 }
 
-/* unified white content board (home.png) */
+/* unified white content board (home.png) — fills the screen; scrolls locally
+   only if its content is taller than the viewport. */
 .board {
   position: relative;
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
   background: var(--color-white);
   border: 1px solid var(--color-border);
   border-radius: var(--radius-lg);

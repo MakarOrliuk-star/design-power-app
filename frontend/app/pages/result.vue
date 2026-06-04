@@ -315,10 +315,16 @@ const {
   display: flex;
   flex-direction: column;
   gap: 24px;
+  height: 100%;
+  min-height: 0;
 }
 
-/* unified white content board (matches Home .board) */
+/* unified white content board (matches Home .board) — fills the screen; the
+   gallery lane is the local scroll container, the board itself doesn't scroll. */
 .board {
+  flex: 1;
+  min-height: 0;
+  overflow: hidden;
   background: var(--color-white);
   border: 1px solid var(--color-border);
   border-radius: var(--radius-lg);
@@ -466,10 +472,12 @@ const {
 
 /* ---- content: lane + edit panel ---- */
 .content {
+  flex: 1;
+  min-height: 0;
   display: grid;
   grid-template-columns: 1fr 320px;
   gap: 24px;
-  align-items: start;
+  align-items: stretch;
 }
 
 .lane {
@@ -477,7 +485,8 @@ const {
   border-radius: var(--radius-md);
   background: var(--color-white);
   padding: 18px;
-  max-height: 720px;
+  height: 100%;
+  min-height: 0;
   overflow-y: auto;
   display: flex;
   flex-direction: column;
@@ -549,7 +558,7 @@ const {
 /* image grid */
 .grid {
   display: grid;
-  grid-template-columns: repeat(3, 1fr);
+  grid-template-columns: repeat(4, 1fr);
   gap: 14px;
 }
 .card {
@@ -649,6 +658,7 @@ const {
   display: flex;
   flex-direction: column;
   gap: 18px;
+  align-self: start;
 }
 .example {
   border: 1px solid var(--color-border);
@@ -834,6 +844,11 @@ const {
 }
 
 /* ---- responsive ---- */
+@media (max-width: 1400px) {
+  .grid {
+    grid-template-columns: repeat(3, 1fr);
+  }
+}
 @media (max-width: 1000px) {
   .content {
     grid-template-columns: 1fr;

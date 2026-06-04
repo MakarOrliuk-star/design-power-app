@@ -121,12 +121,6 @@ const total = (b: ActiveBatch) => b.status?.total ?? 0;
       <button class="act act--stop" type="button" aria-label="Stop all running" @click="gen.stopAllRunning()">
         <span class="act__square" />
       </button>
-      <button class="act" type="button" aria-label="Delete">
-        <svg viewBox="0 0 24 24" width="20" height="20" fill="none">
-          <path d="M4 7h16M9 7V5h6v2M6 7l1 12a2 2 0 002 2h6a2 2 0 002-2l1-12" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" />
-          <path d="M10 11v6M14 11v6" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" />
-        </svg>
-      </button>
     </div>
 
     <!-- Tool icons -->
@@ -162,7 +156,13 @@ const total = (b: ActiveBatch) => b.status?.total ?? 0;
           <path d="M18 14l.9 2.1L21 17l-2.1.9L18 20l-.9-2.1L15 17l2.1-.9L18 14z" stroke="currentColor" stroke-width="1.4" stroke-linejoin="round" />
         </svg>
       </button>
-      <button class="tool" type="button" aria-label="Images">
+      <button
+        class="tool"
+        type="button"
+        aria-label="Images"
+        title="Архив"
+        @click="navigateTo('/archive')"
+      >
         <svg viewBox="0 0 24 24" width="22" height="22" fill="none">
           <rect x="3.5" y="4.5" width="17" height="15" rx="2.5" stroke="currentColor" stroke-width="1.6" />
           <circle cx="9" cy="10" r="1.6" stroke="currentColor" stroke-width="1.4" />

@@ -26,7 +26,7 @@ vi.mock("../src/queues/index.js", () => ({
   getItemQueue: () => ({ addBulk: vi.fn() }),
 }));
 
-import { generateRouter } from "../src/routes/generate.js";
+import { generateRouter, periodSince, zipEntryName } from "../src/routes/generate.js";
 
 function makeApp() {
   const app = express();
@@ -130,5 +130,85 @@ describe("GET /api/generations — tab filters", () => {
     const res = await request(makeApp()).get("/api/generations?tab=bogus");
     expect(res.status).toBe(400);
     expect(res.body.error).toBe("invalid_query");
+  });
+});
+
+/**
+ * BE Test 3 — Archive filters (TASK §2): period window + partial brand search.
+ */
+describe("GET /api/generations — Archive filters", () => {
+  beforeEach(() => {
+    db.count.mockResolvedValue(0);
+    db.findMany.mockResolvedValue([]);
+  });
+  function lastWhere() {
+    return db.findMany.mock.calls.at(-1)![0].where;
+  }
+
+  it("defaults to a 3-month window (createdAt lower bound is set)", async () => {
+    await request(makeApp()).get("/api/generations");
+    expect(lastWhere().createdAt?.gte).toBeInstanceOf(Date);
+  });
+
+  it("search → case-insensitive partial brand match", async () => {
+    await request(makeApp()).get("/api/generations?search=slot");
+    expect(lastWhere().brandName).toEqual({ contains: "slot", mode: "insensitive" });
+  });
+
+  it("rejects an unknown period with 400", async () => {
+    const res = await request(makeApp()).get("/api/generations?period=year");
+    expect(res.status).toBe(400);
+  });
+});
+
+/**
+ * BE Test 4 — periodSince lower-bound math (pure).
+ */
+describe("periodSince", () => {
+  const now = new Date("2026-06-04T15:30:00Z");
+  it("today → start of the current day", () => {
+    const d = periodSince("today", now);
+    expect(d.getHours()).toBe(0);
+    expect(d.getMinutes()).toBe(0);
+    expect(d.getDate()).toBe(now.getDate());
+  });
+  it("week → 7 days earlier", () => {
+    expect(periodSince("week", now).getTime()).toBe(now.getTime() - 7 * 24 * 3600 * 1000);
+  });
+  it("3months → 3 calendar months earlier", () => {
+    expect(periodSince("3months", now).getMonth()).toBe(2); // June(5) - 3 = March(2)
+  });
+});
+
+/**
+ * BE Test 5 — ZIP export (TASK §2): explicit selection wins over filters, and an
+ * empty result is a clean 404. Entry naming is collision-free + extension-aware.
+ */
+describe("GET /api/generations/export.zip", () => {
+  beforeEach(() => {
+    db.findMany.mockReset();
+    db.findMany.mockResolvedValue([]); // no rows → 404 (skips fetch/archiver)
+  });
+  function lastWhere() {
+    return db.findMany.mock.calls.at(-1)![0].where;
+  }
+
+  it("ids → scopes to id:{in} (selection wins over filters)", async () => {
+    const res = await request(makeApp()).get("/api/generations/export.zip?ids=g1,g2&tab=person");
+    expect(res.status).toBe(404); // empty mock
+    expect(lastWhere().id).toEqual({ in: ["g1", "g2"] });
+    expect(lastWhere().status).toBe("DONE");
+  });
+
+  it("no ids → falls back to the filtered gallery where-clause", async () => {
+    await request(makeApp()).get("/api/generations/export.zip?search=slot");
+    expect(lastWhere().brandName).toEqual({ contains: "slot", mode: "insensitive" });
+    expect(lastWhere().createdAt?.gte).toBeInstanceOf(Date);
+  });
+
+  it("zipEntryName → zero-padded index, sanitized brand, url extension", () => {
+    expect(zipEntryName(0, "Teddy Slot!", "https://cdn/x/a.jpg?v=2")).toBe("0001_Teddy_Slot_.jpg");
+    expect(zipEntryName(11, "Nike", "https://cdn/y.png")).toBe("0012_Nike.png");
+    expect(zipEntryName(0, "", "https://cdn/noext")).toBe("0001_image.png");
   });
 });

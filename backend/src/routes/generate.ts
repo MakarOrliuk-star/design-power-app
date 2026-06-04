@@ -1,5 +1,6 @@
 import { Router } from "express";
 import type { Request, Response } from "express";
+import archiver from "archiver";
 import { z } from "zod";
 import { prisma } from "../lib/prisma.js";
 import type { Prisma } from "../../generated/prisma/client.js";
@@ -226,12 +227,61 @@ function tabWhere(
   }
 }
 
+// Archive time windows (TASK §2). The DB keeps at most ~3 months of results, so
+// "3months" is the widest window and the default (shows everything available).
+export type GalleryPeriod = "today" | "week" | "month" | "3months";
+
+/** Lower bound (createdAt >=) for a gallery period. `now` is injectable for tests. */
+export function periodSince(period: GalleryPeriod, now: Date = new Date()): Date {
+  const d = new Date(now);
+  switch (period) {
+    case "today":
+      d.setHours(0, 0, 0, 0);
+      return d;
+    case "week":
+      d.setDate(d.getDate() - 7);
+      return d;
+    case "month":
+      d.setMonth(d.getMonth() - 1);
+      return d;
+    case "3months":
+    default:
+      d.setMonth(d.getMonth() - 3);
+      return d;
+  }
+}
+
 const gallerySchema = z.object({
   limit: z.coerce.number().int().min(1).max(100).default(50),
   offset: z.coerce.number().int().min(0).default(0),
-  brand: z.string().optional(),
+  brand: z.string().optional(), // exact brand match (Result page)
+  search: z.string().trim().min(1).optional(), // partial brand match (Archive search)
+  period: z.enum(["today", "week", "month", "3months"]).default("3months"),
   tab: z.enum(["generated", "person", "item", "background", "edited"]).default("generated"),
 });
+
+type GalleryTab = "generated" | "person" | "item" | "background" | "edited";
+
+/** Shared gallery where-clause builder, reused by the list + ZIP export routes. */
+function galleryWhere(
+  userId: string,
+  q: {
+    brand?: string | undefined;
+    search?: string | undefined;
+    period: GalleryPeriod;
+    tab: GalleryTab;
+  },
+): Prisma.GenerationWhereInput {
+  return {
+    userId,
+    status: "DONE",
+    generatedImageUrl: { not: null },
+    createdAt: { gte: periodSince(q.period) },
+    ...(q.brand ? { brandName: q.brand } : {}),
+    ...(q.search ? { brandName: { contains: q.search, mode: "insensitive" } } : {}),
+    ...tabWhere(q.tab),
+  };
+}
 
 generateRouter.get("/generations", async (req: Request, res: Response) => {
   const parsed = gallerySchema.safeParse(req.query);
@@ -239,16 +289,10 @@ generateRouter.get("/generations", async (req: Request, res: Response) => {
     res.status(400).json({ error: "invalid_query" });
     return;
   }
-  const { limit, offset, brand, tab } = parsed.data;
+  const { limit, offset, brand, search, period, tab } = parsed.data;
   const userId = req.user!.sub;
 
-  const where = {
-    userId,
-    status: "DONE" as const,
-    generatedImageUrl: { not: null },
-    ...(brand ? { brandName: brand } : {}),
-    ...tabWhere(tab),
-  };
+  const where = galleryWhere(userId, { brand, search, period, tab });
 
   const [total, rows] = await Promise.all([
     prisma.generation.count({ where }),
@@ -276,6 +320,89 @@ generateRouter.get("/generations", async (req: Request, res: Response) => {
   }));
 
   res.json({ images, total, hasMore: offset + rows.length < total });
+});
+
+// ---- ZIP export (TASK §2) ----
+// Streams the selected (or, if none selected, the whole filtered) set of images
+// into a single .zip. Mounted as a GET so the browser can download it via a
+// same-origin navigation (the session cookie rides along through the proxy).
+const MAX_EXPORT = 300; // safety cap on a single archive
+
+const exportSchema = gallerySchema
+  .pick({ brand: true, search: true, period: true, tab: true })
+  .extend({
+    // Optional explicit selection — comma-separated Generation ids. When present
+    // it wins over the filters (export exactly what the user ticked).
+    ids: z
+      .string()
+      .optional()
+      .transform((s) => (s ? s.split(",").map((x) => x.trim()).filter(Boolean) : [])),
+  });
+
+/** Safe, collision-free archive entry name: "0001_Brand.png". */
+export function zipEntryName(index: number, brandName: string, url: string): string {
+  const safeBrand = (brandName || "image").replace(/[^a-zA-Z0-9._-]+/g, "_").slice(0, 40);
+  const m = /\.([a-zA-Z0-9]{2,4})(?:\?|$)/.exec(url);
+  const ext = m?.[1] ? m[1].toLowerCase() : "png";
+  return `${String(index + 1).padStart(4, "0")}_${safeBrand}.${ext}`;
+}
+
+generateRouter.get("/generations/export.zip", async (req: Request, res: Response) => {
+  const parsed = exportSchema.safeParse(req.query);
+  if (!parsed.success) {
+    res.status(400).json({ error: "invalid_query" });
+    return;
+  }
+  const { brand, search, period, tab, ids } = parsed.data;
+  const userId = req.user!.sub;
+
+  const where: Prisma.GenerationWhereInput = ids.length
+    ? {
+        userId,
+        status: "DONE",
+        generatedImageUrl: { not: null },
+        id: { in: ids },
+      }
+    : galleryWhere(userId, { brand, search, period, tab });
+
+  const rows = await prisma.generation.findMany({
+    where,
+    orderBy: { createdAt: "desc" },
+    take: MAX_EXPORT,
+    select: { id: true, brandName: true, generatedImageUrl: true },
+  });
+
+  if (rows.length === 0) {
+    res.status(404).json({ error: "no_images" });
+    return;
+  }
+
+  const stamp = new Date().toISOString().slice(0, 10);
+  res.setHeader("Content-Type", "application/zip");
+  res.setHeader("Content-Disposition", `attachment; filename="archive-${stamp}.zip"`);
+
+  const archive = archiver("zip", { zlib: { level: 9 } });
+  archive.on("error", (err) => {
+    console.error("ZIP export error:", err);
+    res.destroy(err);
+  });
+  archive.pipe(res);
+
+  let index = 0;
+  for (const r of rows) {
+    if (!r.generatedImageUrl) continue;
+    try {
+      const resp = await fetch(r.generatedImageUrl);
+      if (!resp.ok) continue;
+      const buf = Buffer.from(await resp.arrayBuffer());
+      archive.append(buf, { name: zipEntryName(index, r.brandName, r.generatedImageUrl) });
+      index += 1;
+    } catch (err) {
+      console.warn(`ZIP export: skipped ${r.id}`, err);
+    }
+  }
+
+  await archive.finalize();
 });
 
 // ---- Batch status (polling) ----

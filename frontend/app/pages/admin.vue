@@ -494,6 +494,9 @@ onMounted(() => {
   display: flex;
   flex-direction: column;
   gap: 24px;
+  height: 100%;
+  min-height: 0;
+  overflow-y: auto;
 }
 h1 {
   margin: 0;

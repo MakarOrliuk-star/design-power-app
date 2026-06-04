@@ -17,19 +17,28 @@
 </template>
 
 <style scoped>
+/* SPA shell — locked to exactly one screen. No document-level scroll; pages
+   put their own local scroll on the inner container that needs it. */
 .shell {
-  min-height: 100vh;
+  height: 100dvh;
+  overflow: hidden;
   background: var(--color-bg);
 }
 
 .main {
-  width: 100%;
+  height: 100%;
+  display: flex;
+  justify-content: center;
 }
 
 .container {
+  width: 100%;
   max-width: var(--container-width);
-  margin: 0 auto;
+  height: 100%;
   padding: var(--container-pad);
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
 }
 
 @media (max-width: 700px) {
