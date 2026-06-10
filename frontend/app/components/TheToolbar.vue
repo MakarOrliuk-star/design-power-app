@@ -51,6 +51,10 @@ const progressGroups = computed(() =>
 
 // Logged-in user (from the session / auth store).
 const auth = useAuthStore();
+async function logout() {
+  await auth.logout();
+  await navigateTo("/login");
+}
 const userEmail = computed(() => auth.user?.email ?? "");
 const userInitials = computed(() => {
   const u = auth.user;
@@ -223,6 +227,12 @@ const userInitials = computed(() => {
     <div class="card card--user">
       <span class="user__email">{{ userEmail }}</span>
       <span class="user__avatar">{{ userInitials }}</span>
+      <button class="user__logout" type="button" aria-label="Выйти" title="Выйти" @click="logout">
+        <svg viewBox="0 0 24 24" width="18" height="18" fill="none">
+          <path d="M15 4H7a2 2 0 00-2 2v12a2 2 0 002 2h8" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" />
+          <path d="M11 12h9m0 0l-3.5-3.5M20 12l-3.5 3.5" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" />
+        </svg>
+      </button>
     </div>
   </div>
 </template>
@@ -404,6 +414,21 @@ const userInitials = computed(() => {
   color: var(--color-white);
   font-size: 13px;
   font-weight: 700;
+}
+.user__logout {
+  flex: 0 0 auto;
+  display: grid;
+  place-items: center;
+  width: 34px;
+  height: 34px;
+  border: none;
+  border-radius: 50%;
+  background: none;
+  color: var(--color-grey);
+}
+.user__logout:hover {
+  background: var(--color-bubble);
+  color: var(--color-stop-hover);
 }
 
 /* --- shared icon wrapper --- */

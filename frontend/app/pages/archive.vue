@@ -4,6 +4,7 @@
 // TheToolbar. Content-type tabs + time-period filter + brand search + 5-up grid
 // + ZIP export.
 import { useArchive } from "~/composables/useArchive";
+import type { GalleryImage } from "~/composables/useResult";
 
 useHead({ title: "Design Power — Archive" });
 
@@ -51,6 +52,18 @@ const {
   download,
   gen,
 });
+
+// "Copied!" feedback: the copy icons flip to a checkmark for a moment.
+const { copiedKey, markCopied } = useCopied();
+function onCopyUrl(img: GalleryImage) {
+  copyUrl(img);
+  markCopied(img.id);
+}
+function onCopySelected() {
+  if (!selectedImages.value.length) return;
+  copySelected();
+  markCopied("selected");
+}
 </script>
 
 <template>
@@ -96,14 +109,17 @@ const {
             </svg>
           </button>
           <button
-            class="iconbtn"
+            :class="['iconbtn', { 'iconbtn--copied': copiedKey === 'selected' }]"
             type="button"
             aria-label="Copy selected"
-            title="Скопировать ссылки выбранных"
+            :title="copiedKey === 'selected' ? 'Скопировано ✓' : 'Скопировать ссылки выбранных'"
             :disabled="!selectedImages.length"
-            @click="copySelected"
+            @click="onCopySelected"
           >
-            <svg viewBox="0 0 24 24" width="18" height="18" fill="none">
+            <svg v-if="copiedKey === 'selected'" viewBox="0 0 24 24" width="18" height="18" fill="none">
+              <path d="M5 12.5l4 4 10-10" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" />
+            </svg>
+            <svg v-else viewBox="0 0 24 24" width="18" height="18" fill="none">
               <rect x="9" y="9" width="11" height="11" rx="2" stroke="currentColor" stroke-width="1.6" />
               <path d="M5 15V6a2 2 0 012-2h9" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" />
             </svg>
@@ -209,8 +225,17 @@ const {
                   <path d="M5 12.5l4 4 10-10" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" />
                 </svg>
               </button>
-              <button type="button" class="card__tool" aria-label="Copy" @click="copyUrl(img)">
-                <svg viewBox="0 0 24 24" width="15" height="15" fill="none">
+              <button
+                type="button"
+                :class="['card__tool', { 'card__tool--copied': copiedKey === img.id }]"
+                aria-label="Copy"
+                :title="copiedKey === img.id ? 'Скопировано ✓' : 'Скопировать ссылку'"
+                @click="onCopyUrl(img)"
+              >
+                <svg v-if="copiedKey === img.id" viewBox="0 0 24 24" width="15" height="15" fill="none">
+                  <path d="M5 12.5l4 4 10-10" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" />
+                </svg>
+                <svg v-else viewBox="0 0 24 24" width="15" height="15" fill="none">
                   <rect x="9" y="9" width="11" height="11" rx="2" stroke="currentColor" stroke-width="1.6" />
                   <path d="M5 15V6a2 2 0 012-2h9" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" />
                 </svg>
@@ -407,6 +432,12 @@ const {
 .iconbtn:disabled {
   opacity: 0.45;
   cursor: not-allowed;
+}
+.iconbtn--copied,
+.iconbtn--copied:hover:not(:disabled) {
+  border-color: var(--color-accent);
+  background: var(--color-accent);
+  color: #ffffff;
 }
 
 /* ---- time period row ---- */
@@ -641,6 +672,12 @@ const {
   background: var(--gradient-active);
   border-color: transparent;
   color: var(--color-white);
+}
+.card__tool--copied,
+.card__tool--copied:hover {
+  background: var(--color-accent);
+  border-color: transparent;
+  color: #ffffff;
 }
 
 /* ---- responsive ---- */
