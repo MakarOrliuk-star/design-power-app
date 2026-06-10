@@ -61,6 +61,10 @@ model Brand {
   name         String              @unique // e.g. "Spinogambino(Men)"
   smarticoName String? // canonical Smartico name (unused in v1)
   isActive     Boolean             @default(true)
+  // Forced output format (TASK §7): "9:16" → every generation of this brand is
+  // 9:16 regardless of the user's 1:1/9:16 pick; null → honour the pick.
+  // Edits follow automatically — the edit flow probes the source image pixels.
+  forcedAspectRatio String?
   createdAt    DateTime            @default(now())
 
   categories   BrandCategoryLink[]

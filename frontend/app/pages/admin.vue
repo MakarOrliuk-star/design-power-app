@@ -79,6 +79,7 @@ async function patchUser(u: AdminUser, patch: Partial<Pick<AdminUser, "role" | "
 interface AdminBrand {
   id: string;
   name: string;
+  forcedAspectRatio: string | null; // "9:16" = форс формата (TASK §7), null = по выбору юзера
   referenceImages: string[];
   personPrompt: string;
 }
@@ -103,6 +104,7 @@ function emptyNewBrand() {
     personPrompt: "",
     stylePrompt: "",
     referenceImages: ["", "", ""], // 3 ref slots (Cloudinary URLs)
+    force916: false, // TASK §7: новый бренд по умолчанию следует выбору юзера
   };
 }
 const newBrand = ref(emptyNewBrand());
@@ -149,6 +151,7 @@ async function createBrand() {
         personPrompt: newBrand.value.personPrompt,
         stylePrompt: newBrand.value.stylePrompt,
         referenceImages: newBrand.value.referenceImages.map((s) => s.trim()).filter(Boolean),
+        forcedAspectRatio: newBrand.value.force916 ? "9:16" : null,
       },
     });
     createMsg.value = "Бренд создан ✓";
@@ -229,6 +232,10 @@ async function uploadRef(b: AdminBrand, slot: number, e: Event) {
   }
 }
 
+function toggleForce916(b: AdminBrand) {
+  b.forcedAspectRatio = b.forcedAspectRatio === "9:16" ? null : "9:16";
+}
+
 async function saveBrand(b: AdminBrand) {
   savingId.value = b.id;
   rowMsg.value[b.id] = "";
@@ -238,6 +245,10 @@ async function saveBrand(b: AdminBrand) {
     await api("/api/admin/prompt", {
       method: "PUT",
       body: { type: "PERSON", key: b.name, content: b.personPrompt, brandId: b.id },
+    });
+    await api(`/api/admin/brands/${b.id}`, {
+      method: "PATCH",
+      body: { forcedAspectRatio: b.forcedAspectRatio },
     });
     rowMsg.value[b.id] = "Сохранено ✓";
   } catch {
@@ -380,6 +391,14 @@ onMounted(() => {
         </div>
 
         <div class="field">
+          <label class="field__label">Формат генерации</label>
+          <label class="checkbox">
+            <input v-model="newBrand.force916" type="checkbox" />
+            Всегда 9:16 — генерировать в 9:16, даже если на Home выбран 1:1
+          </label>
+        </div>
+
+        <div class="field">
           <label class="field__label">Реф-картинки (до 3)</label>
           <div class="refs">
             <div v-for="(url, i) in newBrand.referenceImages" :key="i" class="ref">
@@ -436,6 +455,7 @@ onMounted(() => {
               <span :class="['badge', b.personPrompt.trim() ? 'badge--ok' : 'badge--off']">
                 {{ b.personPrompt.trim() ? "промпт ✓" : "промпт —" }}
               </span>
+              <span v-if="b.forcedAspectRatio === '9:16'" class="badge badge--warn">всегда 9:16</span>
             </span>
             <span v-if="rowMsg[b.id]" class="brand-card__msg">{{ rowMsg[b.id] }}</span>
           </div>
@@ -462,6 +482,14 @@ onMounted(() => {
           />
 
           <div class="brand-card__foot">
+            <label class="checkbox" title="Генерировать в 9:16, даже если на Home выбран 1:1">
+              <input
+                type="checkbox"
+                :checked="b.forcedAspectRatio === '9:16'"
+                @change="toggleForce916(b)"
+              />
+              Всегда 9:16
+            </label>
             <button class="btn-primary" :disabled="savingId === b.id" @click="saveBrand(b)">
               {{ savingId === b.id ? "Сохранение…" : "Сохранить" }}
             </button>
@@ -726,7 +754,9 @@ select {
 }
 .brand-card__foot {
   display: flex;
+  align-items: center;
   justify-content: flex-end;
+  gap: 18px;
   margin-top: 12px;
 }
 .item-prompt {

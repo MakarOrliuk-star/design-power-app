@@ -9,9 +9,8 @@ export default defineNuxtRouteMiddleware(async (to) => {
   if (!auth.isAuthenticated && !isPublic) {
     return navigateTo("/login");
   }
-  if (auth.isAuthenticated && to.path === "/login") {
-    return navigateTo("/");
-  }
+  // /login doubles as the Design/CRM portal — authenticated users may visit it
+  // to switch zones, so there is no redirect away from it.
   if (to.path.startsWith("/admin") && !auth.isAdmin) {
     return navigateTo("/");
   }

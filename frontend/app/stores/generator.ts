@@ -88,7 +88,9 @@ export const useGeneratorStore = defineStore("generator", () => {
   const prompt = ref("");
   const imageCount = ref(1);
   const refImages = ref<string[]>([]); // base64 data URLs (Person)
-  const aspectRatio = ref("1:1"); // fal aspect_ratio, global (ALL)
+  // fal aspect_ratio, global (ALL). 9:16 is the product default (TASK Phase 1);
+  // the backend keeps "1:1" as its sentinel for the edit flow — do not sync them.
+  const aspectRatio = ref("9:16");
 
   // Selections (separate per target kind)
   const selectedBrandIds = ref<string[]>([]); // Person
@@ -203,7 +205,7 @@ export const useGeneratorStore = defineStore("generator", () => {
     perTargetRefs.value[key] = value;
   }
   function targetAspect(key: string): string {
-    return perTargetAspect.value[key] ?? "1:1";
+    return perTargetAspect.value[key] ?? "9:16";
   }
   function setTargetAspect(key: string, value: string) {
     perTargetAspect.value[key] = value;

@@ -121,7 +121,12 @@ adminRouter.get("/catalog", async (_req: Request, res: Response) => {
   const [brands, categories, personPrompts, itemPrompts] = await Promise.all([
     prisma.brand.findMany({
       orderBy: { name: "asc" },
-      select: { id: true, name: true, nanoRef: { select: { referenceImages: true } } },
+      select: {
+        id: true,
+        name: true,
+        forcedAspectRatio: true,
+        nanoRef: { select: { referenceImages: true } },
+      },
     }),
     prisma.brandCategory.findMany({ orderBy: [{ order: "asc" }, { name: "asc" }] }),
     prisma.promptTemplate.findMany({ where: { type: "PERSON" }, select: { key: true, content: true } }),
@@ -140,6 +145,7 @@ adminRouter.get("/catalog", async (_req: Request, res: Response) => {
     brands: brands.map((b) => ({
       id: b.id,
       name: b.name,
+      forcedAspectRatio: b.forcedAspectRatio,
       referenceImages: b.nanoRef?.referenceImages ?? [],
       personPrompt: personByKey.get(b.name.toLowerCase()) ?? "",
     })),
@@ -155,6 +161,9 @@ const createBrandSchema = z.object({
   personPrompt: z.string().default(""), // base prompt → PromptTemplate(PERSON)
   stylePrompt: z.string().default(""), // brand-specific style → BrandNanoRef.stylePrompt
   referenceImages: z.array(z.string()).max(10).default([]),
+  // TASK §7: "9:16" forces every generation of the brand to 9:16; null (the
+  // default for new brands) honours the user's 1:1/9:16 pick.
+  forcedAspectRatio: z.enum(["9:16"]).nullable().default(null),
 });
 
 adminRouter.post("/brands", async (req: Request, res: Response) => {
@@ -163,7 +172,8 @@ adminRouter.post("/brands", async (req: Request, res: Response) => {
     res.status(400).json({ error: "invalid_body", details: parsed.error.flatten().fieldErrors });
     return;
   }
-  const { name, categoryIds, personPrompt, stylePrompt, referenceImages } = parsed.data;
+  const { name, categoryIds, personPrompt, stylePrompt, referenceImages, forcedAspectRatio } =
+    parsed.data;
   if (!name) {
     res.status(400).json({ error: "name_required" });
     return;
@@ -191,6 +201,7 @@ adminRouter.post("/brands", async (req: Request, res: Response) => {
     const brand = await prisma.brand.create({
       data: {
         name,
+        forcedAspectRatio,
         categories: { create: validCategoryIds.map((id) => ({ category: { connect: { id } } })) },
         ...(stylePrompt.trim() || refs.length
           ? { nanoRef: { create: { referenceImages: refs, stylePrompt: stylePrompt.trim() } } }
@@ -211,6 +222,29 @@ adminRouter.post("/brands", async (req: Request, res: Response) => {
     res.status(201).json({ brand });
   } catch {
     res.status(500).json({ error: "create_failed" });
+  }
+});
+
+/** Update an existing brand's settings (TASK §7: the forced-format toggle). */
+const patchBrandSchema = z.object({
+  forcedAspectRatio: z.enum(["9:16"]).nullable(),
+});
+adminRouter.patch("/brands/:id", async (req: Request, res: Response) => {
+  const parsed = patchBrandSchema.safeParse(req.body);
+  if (!parsed.success) {
+    res.status(400).json({ error: "invalid_body", details: parsed.error.flatten().fieldErrors });
+    return;
+  }
+  const id = String(req.params.id ?? "");
+  try {
+    const brand = await prisma.brand.update({
+      where: { id },
+      data: { forcedAspectRatio: parsed.data.forcedAspectRatio },
+      select: { id: true, name: true, forcedAspectRatio: true },
+    });
+    res.json({ brand });
+  } catch {
+    res.status(404).json({ error: "brand_not_found" });
   }
 });
 

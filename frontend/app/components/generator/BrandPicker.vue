@@ -85,7 +85,8 @@ const groups = computed(() => {
 .picker {
   display: flex;
   flex-direction: column;
-  gap: 22px;
+  gap: 14px;
+  min-height: 0;
 }
 
 /* category bar */
@@ -94,14 +95,15 @@ const groups = computed(() => {
   align-items: center;
   gap: 20px;
 }
+/* grey segmented track (home 2.0 new.png) — hugs its tabs, Add all far right */
 .cats {
   display: flex;
-  flex: 1;
+  flex: 0 1 auto;
   gap: 4px;
-  background: var(--color-window);
-  border: 1px solid var(--color-border);
+  background: var(--color-segment);
   border-radius: var(--radius-pill);
   padding: 5px;
+  overflow-x: auto;
 }
 .cat {
   border: none;
@@ -120,6 +122,7 @@ const groups = computed(() => {
 }
 .addall {
   flex: 0 0 auto;
+  margin-left: auto;
   border: none;
   background: none;
   padding: 0;
@@ -131,12 +134,13 @@ const groups = computed(() => {
   color: var(--color-accent);
 }
 
-/* alphabetical list */
+/* alphabetical list — borderless per home 2.0 new.png; takes the remaining
+   board height and is the only scroll area of the picker. Extra bottom
+   padding lets the last row scroll out from under the floating Assets button. */
 .list {
-  border: 1px solid var(--color-border);
-  border-radius: var(--radius-md);
-  padding: 4px 20px;
-  max-height: 300px;
+  flex: 1;
+  min-height: 60px;
+  padding: 4px 12px 56px 4px;
   overflow-y: auto;
 }
 .empty {

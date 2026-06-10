@@ -1,62 +1,31 @@
 <script setup lang="ts">
-// Right column "References & Promt" (spelling matches the Figma).
-// All  -> one shared StyleCard. Each -> a scrollable stack, one card per style.
-// R1 wires selection / tabs / mode to the generator store; per-card prompt,
-// quantity and reference upload (StyleCard internals) land in R2.
-
+// Right "Style" panel (home 2.0 new / Each mockups). The content tabs and the
+// All/Each toggle moved up into the board's control row (index.vue):
+//   All  -> one flat StyleCard (upload slot + prompt).
+//   Each -> a scrollable 2-column grid of bordered cards (prompt + refs each).
+// Either way the bottom controls row (1:1 / 9:16, quantity, Generate) is
+// shared and bound to the global store state — in Each mode the backend
+// falls back per-target → global for aspect and count.
 const gen = useGeneratorStore();
 
-const tabs = [
-  { label: "Person", value: "PERSON" },
-  { label: "Item", value: "ITEM" },
-  { label: "Background", value: "BACKGROUND" },
+const MIN_QTY = 1;
+const MAX_QTY = 4;
+
+const ASPECTS = [
+  { value: "1:1", icon: "square" },
+  { value: "9:16", icon: "portrait" },
 ] as const;
 
-const modes = [
-  { label: "All", value: "ALL" },
-  { label: "Each", value: "EACH" },
-] as const;
+function setQty(n: number) {
+  gen.imageCount = Math.min(MAX_QTY, Math.max(MIN_QTY, n));
+}
 
 const example = "Neon casino banner, purple & gold";
 </script>
 
 <template>
   <section class="ref">
-    <header class="ref__head">
-      <h2 class="ref__title">References &amp; Promt</h2>
-      <div class="seg seg--mode">
-        <button
-          v-for="m in modes"
-          :key="m.value"
-          :class="['seg__btn', { 'seg__btn--on': gen.refMode === m.value }]"
-          type="button"
-          @click="gen.refMode = m.value"
-        >
-          {{ m.label }}
-        </button>
-      </div>
-    </header>
-
-    <!-- Person / Item / Background -->
-    <div class="tabs">
-      <button
-        v-for="t in tabs"
-        :key="t.value"
-        :class="['tab', { 'tab--on': gen.activeTab === t.value }]"
-        type="button"
-        @click="gen.activeTab = t.value"
-      >
-        <span v-if="t.value === 'PERSON'" class="tab__ic" aria-hidden="true">
-          <svg viewBox="0 0 24 24" width="18" height="18" fill="none">
-            <circle cx="12" cy="8" r="3.4" stroke="currentColor" stroke-width="1.6" />
-            <path d="M5 19c0-3.3 3.1-5 7-5s7 1.7 7 5" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" />
-          </svg>
-        </span>
-        {{ t.label }}
-      </button>
-    </div>
-
-    <!-- Cards: All = one shared card, Each = one per style (scrollable) -->
+    <!-- Cards: All = one flat card, Each = one bordered card per style -->
     <div class="ref__content">
       <GeneratorStyleCard
         v-if="gen.refMode === 'ALL'"
@@ -64,6 +33,7 @@ const example = "Neon casino banner, purple & gold";
         :target-key="null"
         title="Style Title"
         :example="example"
+        flat
       />
       <div v-else class="stack">
         <GeneratorStyleCard
@@ -79,10 +49,43 @@ const example = "Neon casino banner, purple & gold";
       </div>
     </div>
 
-    <!-- Footer -->
-    <div class="ref__foot">
-      <div class="count" aria-live="polite">
-        <span>{{ gen.currentTargets.length }} {{ gen.currentTargets.length === 1 ? "style" : "styles" }}</span>
+    <!-- shared controls: formats, quantity, Generate (both modes) -->
+    <div class="controls">
+      <button
+        v-for="a in ASPECTS"
+        :key="a.value"
+        type="button"
+        :class="['fmt', { 'fmt--on': gen.aspectRatio === a.value }]"
+        :aria-pressed="gen.aspectRatio === a.value"
+        @click="gen.aspectRatio = a.value"
+      >
+        <span class="fmt__ic" aria-hidden="true">
+          <svg v-if="a.icon === 'square'" viewBox="0 0 24 24" width="13" height="13" fill="none">
+            <rect x="5" y="5" width="14" height="14" rx="2" stroke="currentColor" stroke-width="1.6" />
+          </svg>
+          <svg v-else viewBox="0 0 24 24" width="13" height="13" fill="none">
+            <rect x="7" y="4" width="10" height="16" rx="2" stroke="currentColor" stroke-width="1.6" />
+          </svg>
+        </span>
+        {{ a.value }}
+      </button>
+
+      <div class="qty" role="group" aria-label="Quantity of images to generate">
+        <button
+          class="qty__btn"
+          type="button"
+          aria-label="Decrease"
+          :disabled="gen.imageCount <= MIN_QTY"
+          @click="setQty(gen.imageCount - 1)"
+        >−</button>
+        <span class="qty__val">{{ gen.imageCount }}</span>
+        <button
+          class="qty__btn"
+          type="button"
+          aria-label="Increase"
+          :disabled="gen.imageCount >= MAX_QTY"
+          @click="setQty(gen.imageCount + 1)"
+        >+</button>
       </div>
 
       <button
@@ -107,76 +110,7 @@ const example = "Neon casino banner, purple & gold";
   display: flex;
   flex-direction: column;
   min-width: 0;
-}
-
-/* header */
-.ref__head {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  margin-bottom: 18px;
-}
-.ref__title {
-  margin: 0;
-  font-size: 24px;
-  font-weight: 700;
-  color: var(--color-text);
-}
-
-/* segmented control */
-.seg {
-  display: inline-flex;
-  background: var(--color-segment);
-  border-radius: var(--radius-pill);
-  padding: 3px;
-}
-.seg__btn {
-  border: none;
-  background: none;
-  padding: 5px 14px;
-  border-radius: var(--radius-pill);
-  font-family: inherit;
-  font-size: 13px;
-  color: var(--color-grey);
-}
-.seg__btn--on {
-  background: var(--color-white);
-  color: var(--color-text);
-  box-shadow: var(--shadow-card);
-}
-
-/* Person / Item / Background tabs */
-.tabs {
-  display: flex;
-  gap: 6px;
-  background: var(--color-segment);
-  border-radius: var(--radius-pill);
-  padding: 5px;
-  margin-bottom: 18px;
-}
-.tab {
-  flex: 1;
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  gap: 8px;
-  border: none;
-  background: none;
-  padding: 10px;
-  border-radius: var(--radius-pill);
-  font-family: inherit;
-  font-size: 14px;
-  font-weight: 500;
-  color: var(--color-grey);
-}
-.tab--on {
-  background: var(--color-white);
-  color: var(--color-text);
-  box-shadow: var(--shadow-card);
-}
-.tab__ic {
-  display: inline-grid;
-  place-items: center;
+  min-height: 0;
 }
 
 /* content area */
@@ -190,62 +124,113 @@ const example = "Neon casino banner, purple & gold";
 /* All: single card fills the column height */
 .ref__single {
   flex: 1;
+  min-height: 0;
 }
-/* Each: scrollable stack — absolutely fills the content area so it scrolls
-   within the column height (driven by the left column) instead of growing
-   the board, keeping All/Each the same overall height. */
+/* Each: scrollable 2-column grid of cards (home 2.0 Each new.png) —
+   absolutely fills the content area so it scrolls within the fixed column
+   height instead of growing the board. */
 .stack {
   position: absolute;
   inset: 0;
   overflow-y: auto;
-  display: flex;
-  flex-direction: column;
-  gap: 20px;
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  align-content: start;
+  gap: 16px;
   padding-right: 6px;
 }
 .stack__empty {
+  grid-column: 1 / -1;
   margin: 0;
   color: var(--color-grey);
   font-size: 13px;
 }
 
-/* footer */
-.ref__foot {
+/* shared controls row */
+.controls {
   display: flex;
-  gap: 14px;
   align-items: center;
-  margin-top: 18px;
+  gap: 12px;
+  margin-top: 16px;
 }
-.count {
+.fmt {
   display: inline-flex;
   align-items: center;
-  gap: 10px;
-  height: 52px;
-  padding: 0 18px;
-  border: 1px solid var(--color-border);
-  border-radius: var(--radius-md);
+  gap: 8px;
+  height: 44px;
+  padding: 0 16px;
+  border-radius: var(--radius-pill);
   background: var(--color-white);
+  border: 1px solid var(--color-border);
   font-family: inherit;
+  font-size: 13px;
+  color: var(--color-grey);
+  cursor: pointer;
+}
+.fmt:hover {
+  border-color: var(--color-accent);
+}
+.fmt--on {
+  border-color: var(--color-text);
+  color: var(--color-text);
+}
+.fmt__ic {
+  display: inline-grid;
+  place-items: center;
+}
+
+.qty {
+  display: inline-flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  height: 44px;
+  flex: 0 1 220px;
+  padding: 0 6px;
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-pill);
+  background: var(--color-white);
+}
+.qty__btn {
+  display: grid;
+  place-items: center;
+  width: 30px;
+  height: 30px;
+  border: none;
+  border-radius: 50%;
+  background: var(--color-bubble);
+  color: var(--color-text);
+  font-size: 16px;
+  line-height: 1;
+  cursor: pointer;
+}
+.qty__btn:disabled {
+  opacity: 0.4;
+  cursor: default;
+}
+.qty__btn:not(:disabled):hover {
+  background: var(--color-window);
+}
+.qty__val {
+  min-width: 18px;
+  text-align: center;
   font-size: 14px;
   color: var(--color-text);
-  white-space: nowrap;
 }
-.count svg {
-  color: var(--color-grey);
-}
+
 .generate {
   flex: 1;
   display: inline-flex;
   align-items: center;
   justify-content: center;
   gap: 10px;
-  height: 52px;
+  height: 44px;
   border: none;
   border-radius: var(--radius-md);
   background: var(--gradient-active);
-  color: var(--color-white);
+  color: #ffffff;
   font-family: inherit;
-  font-size: 16px;
+  font-size: 15px;
   font-weight: 600;
 }
 .generate:hover {

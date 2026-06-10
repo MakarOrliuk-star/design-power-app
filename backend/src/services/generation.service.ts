@@ -52,7 +52,12 @@ export interface CreateBatchResult {
 export async function createPersonBatch(p: PersonParams): Promise<CreateBatchResult> {
   const brands = await prisma.brand.findMany({
     where: { id: { in: p.brandIds }, isActive: true },
-    select: { id: true, name: true, nanoRef: { select: { referenceImages: true } } },
+    select: {
+      id: true,
+      name: true,
+      forcedAspectRatio: true,
+      nanoRef: { select: { referenceImages: true } },
+    },
   });
   if (brands.length === 0) throw new Error("no_brands");
 
@@ -72,7 +77,11 @@ export async function createPersonBatch(p: PersonParams): Promise<CreateBatchRes
     // EACH: the brand's own uploaded refs / count / aspect; ALL: the shared globals.
     const userRefs = isEach ? p.perBrandRefUrls?.[brand.id] ?? [] : p.userRefUrls;
     const count = isEach ? p.perBrandCounts?.[brand.id] ?? p.imageCount : p.imageCount;
-    const aspect = (isEach ? p.perBrandAspect?.[brand.id] : undefined) || p.aspectRatio;
+    // Brand-level force (TASK §7) wins over the user's pick in either mode.
+    const aspect =
+      brand.forcedAspectRatio ||
+      (isEach ? p.perBrandAspect?.[brand.id] : undefined) ||
+      p.aspectRatio;
     const refs = brand.nanoRef?.referenceImages ?? [];
 
     // ADDENDUM §6: ONE fal job per output image. Iteration i pairs the i-th brand

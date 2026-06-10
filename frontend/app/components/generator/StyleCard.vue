@@ -1,29 +1,23 @@
 <script setup lang="ts">
-// One "Style Title" reference card — interactive (R2). Used once in All mode
-// (targetKey = null → global prompt / quantity / refs) and repeated per selected
-// style in Each mode (targetKey = brandId / style name → per-target state).
-// Uploaded references are read to base64 data URLs and previewed in the slots.
+// One "Style Title" reference card (home 2.0 new / Each mockups): label +
+// reference upload slots + prompt. Used once in All mode (targetKey = null →
+// global prompt/refs, rendered flat) and per selected style in Each mode
+// (targetKey = brandId / style name → per-target state, bordered grid cell).
+// Format and quantity moved to the shared controls row in ReferencePanel —
+// the backend falls back per-target → global, so Each cards inherit them.
 const props = withDefaults(
-  defineProps<{ targetKey: string | null; title: string; example?: string }>(),
-  { example: "" },
+  defineProps<{ targetKey: string | null; title: string; example?: string; flat?: boolean }>(),
+  { example: "", flat: false },
 );
 
 const gen = useGeneratorStore();
 
 const MAX_REFS = 3;
-const MIN_QTY = 1;
-const MAX_QTY = 4;
 
 const prompt = computed<string>({
   get: () => (props.targetKey === null ? gen.prompt : gen.targetPrompts[props.targetKey] ?? ""),
   set: (v) =>
     props.targetKey === null ? (gen.prompt = v) : gen.setTargetPrompt(props.targetKey, v),
-});
-
-const quantity = computed<number>({
-  get: () => (props.targetKey === null ? gen.imageCount : gen.targetCount(props.targetKey)),
-  set: (v) =>
-    props.targetKey === null ? (gen.imageCount = v) : gen.setTargetCount(props.targetKey, v),
 });
 
 const refs = computed<string[]>({
@@ -50,25 +44,10 @@ function onFiles(e: Event) {
 function removeRef(i: number) {
   refs.value = refs.value.filter((_, idx) => idx !== i);
 }
-function setQty(n: number) {
-  quantity.value = Math.min(MAX_QTY, Math.max(MIN_QTY, n));
-}
-
-// Aspect ratio (R5) — bound to the store like prompt/quantity/refs.
-const aspect = computed<string>({
-  get: () => (props.targetKey === null ? gen.aspectRatio : gen.targetAspect(props.targetKey)),
-  set: (v) =>
-    props.targetKey === null ? (gen.aspectRatio = v) : gen.setTargetAspect(props.targetKey, v),
-});
-
-const ASPECTS = [
-  { value: "1:1", icon: "square" },
-  { value: "9:16", icon: "portrait" },
-] as const;
 </script>
 
 <template>
-  <div class="style">
+  <div :class="['style', { 'style--flat': flat }]">
     <span class="style__label">{{ title }}</span>
 
     <!-- reference images: previews + upload control -->
@@ -90,7 +69,7 @@ const ASPECTS = [
       <label v-if="refs.length < MAX_REFS" class="slot slot--add">
         <input class="slot__file" type="file" accept="image/*" multiple @change="onFiles" />
         <span class="slot__plus" aria-hidden="true">
-          <svg viewBox="0 0 24 24" width="22" height="22" fill="none">
+          <svg viewBox="0 0 24 24" width="20" height="20" fill="none">
             <path d="M12 5v14M5 12h14" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" />
           </svg>
         </span>
@@ -101,49 +80,9 @@ const ASPECTS = [
     <textarea
       v-model="prompt"
       class="style__prompt"
-      :placeholder="example ? `Example: ${example}` : 'Describe the action / scene…'"
+      :placeholder="example ? `Example:\n${example}` : 'Describe the action / scene…'"
       rows="3"
     />
-
-    <!-- quantity + format hints -->
-    <div class="style__formats">
-      <div class="qty" role="group" aria-label="Quantity of images to generate">
-        <button
-          class="qty__btn"
-          type="button"
-          aria-label="Decrease"
-          :disabled="quantity <= MIN_QTY"
-          @click="setQty(quantity - 1)"
-        >−</button>
-        <span class="qty__val">{{ quantity }}</span>
-        <button
-          class="qty__btn"
-          type="button"
-          aria-label="Increase"
-          :disabled="quantity >= MAX_QTY"
-          @click="setQty(quantity + 1)"
-        >+</button>
-      </div>
-
-      <button
-        v-for="a in ASPECTS"
-        :key="a.value"
-        type="button"
-        :class="['fmt', { 'fmt--on': aspect === a.value }]"
-        :aria-pressed="aspect === a.value"
-        @click="aspect = a.value"
-      >
-        <span class="fmt__ic" aria-hidden="true">
-          <svg v-if="a.icon === 'square'" viewBox="0 0 24 24" width="13" height="13" fill="none">
-            <rect x="5" y="5" width="14" height="14" rx="2" stroke="currentColor" stroke-width="1.6" />
-          </svg>
-          <svg v-else viewBox="0 0 24 24" width="13" height="13" fill="none">
-            <rect x="7" y="4" width="10" height="16" rx="2" stroke="currentColor" stroke-width="1.6" />
-          </svg>
-        </span>
-        {{ a.value }}
-      </button>
-    </div>
   </div>
 </template>
 
@@ -153,24 +92,32 @@ const ASPECTS = [
   flex-direction: column;
   border: 1px solid var(--color-border);
   border-radius: var(--radius-md);
-  padding: 18px;
+  padding: 16px;
   background: var(--color-white);
+}
+/* All mode: the single card sits directly on the board, no own frame */
+.style--flat {
+  border: none;
+  border-radius: 0;
+  padding: 0;
+  background: none;
+  min-height: 0;
 }
 .style__label {
   font-size: 13px;
   color: var(--color-grey);
-  margin-bottom: 14px;
+  margin-bottom: 12px;
 }
 
 /* reference slots */
 .style__slots {
   display: flex;
-  gap: 14px;
+  gap: 12px;
 }
 .slot {
   position: relative;
-  width: 110px;
-  height: 110px;
+  width: 88px;
+  height: 88px;
   border-radius: var(--radius-sm);
   background: var(--color-bubble);
   overflow: hidden;
@@ -192,7 +139,7 @@ const ASPECTS = [
   border: none;
   border-radius: var(--radius-xs);
   background: rgba(31, 31, 31, 0.6);
-  color: var(--color-white);
+  color: #ffffff;
   cursor: pointer;
 }
 .slot__remove:hover {
@@ -202,7 +149,7 @@ const ASPECTS = [
   display: grid;
   place-items: center;
   cursor: pointer;
-  border: 1px dashed var(--color-border);
+  border: 1px solid var(--color-border);
   background: var(--color-white);
   color: var(--color-grey);
 }
@@ -222,9 +169,9 @@ const ASPECTS = [
 
 /* prompt */
 .style__prompt {
-  margin-top: 16px;
+  margin-top: 14px;
   width: 100%;
-  min-height: 64px;
+  min-height: 56px;
   resize: vertical;
   padding: 12px 14px;
   border: 1px solid var(--color-border);
@@ -236,83 +183,17 @@ const ASPECTS = [
   color: var(--color-text);
   outline: none;
 }
+/* All mode: the prompt grows to fill the panel height (per mockup) */
+.style--flat .style__prompt {
+  flex: 1;
+  min-height: 96px;
+  resize: none;
+}
 .style__prompt::placeholder {
   color: var(--color-grey);
+  white-space: pre-line;
 }
 .style__prompt:focus {
   border-color: var(--color-accent);
-}
-
-/* quantity + format chips row */
-.style__formats {
-  /* margin-top:auto pushes this row to the bottom when the card grows (All mode);
-     in the compact Each cards it just sits after the prompt. */
-  margin-top: auto;
-  display: flex;
-  align-items: center;
-  flex-wrap: wrap;
-  gap: 10px;
-  padding-top: 16px;
-}
-.qty {
-  display: inline-flex;
-  align-items: center;
-  gap: 4px;
-  margin-right: auto;
-  padding: 4px;
-  border: 1px solid var(--color-border);
-  border-radius: var(--radius-pill);
-  background: var(--color-white);
-}
-.qty__btn {
-  display: grid;
-  place-items: center;
-  width: 26px;
-  height: 26px;
-  border: none;
-  border-radius: 50%;
-  background: var(--color-bubble);
-  color: var(--color-text);
-  font-size: 16px;
-  line-height: 1;
-  cursor: pointer;
-}
-.qty__btn:disabled {
-  opacity: 0.4;
-  cursor: default;
-}
-.qty__btn:not(:disabled):hover {
-  background: var(--color-window);
-}
-.qty__val {
-  min-width: 18px;
-  text-align: center;
-  font-size: 13px;
-  color: var(--color-text);
-}
-.fmt {
-  display: inline-flex;
-  align-items: center;
-  gap: 6px;
-  padding: 5px 12px;
-  border-radius: var(--radius-pill);
-  background: var(--color-window);
-  border: 1px solid var(--color-border);
-  font-family: inherit;
-  font-size: 12px;
-  color: var(--color-grey);
-  cursor: pointer;
-}
-.fmt:hover {
-  border-color: var(--color-accent);
-}
-.fmt--on {
-  background: var(--color-white);
-  border-color: var(--color-accent);
-  color: var(--color-text);
-}
-.fmt__ic {
-  display: inline-grid;
-  place-items: center;
 }
 </style>
