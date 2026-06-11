@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { ref } from "vue";
-import { useAuthStore } from "@/app/stores/auth";
-import CrmCalculator from "@/app/components/CrmCalculator.vue";
+
+// CrmCalculator и useAuthStore подтягиваются автоматически магией Nuxt!
 
 useHead({ title: "Design Power — CRM Dashboard" });
 
