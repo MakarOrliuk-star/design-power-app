@@ -34,8 +34,8 @@ app.use("/api/catalog", loadUser, requireAuth, catalogRouter);
 app.use("/api", loadUser, requireAuth, generateRouter);
 app.use("/api/calculator", loadUser, requireAuth, calculatorRouter);
 
-const server = app.listen(env.PORT, () => {
-  console.log(`🚀 Backend listening on http://localhost:${env.PORT} (${env.NODE_ENV})`);
+const server = app.listen(env.PORT, "0.0.0.0", () => {
+  console.log(`🚀 Backend listening on http://0.0.0.0:${env.PORT} (${env.NODE_ENV})`);
 });
 
 // Graceful shutdown so `tsx watch` restarts don't leak the port.
