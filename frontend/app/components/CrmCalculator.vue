@@ -95,7 +95,7 @@ async function doConvert() {
   isError.value = false;
 
   try {
-    data.value = await api('/calculator/convert', {
+    data.value = await api('/api/calculator/convert', {
       method: 'POST',
       body: { amount: amount.value }
     });
