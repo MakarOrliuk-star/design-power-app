@@ -1,5 +1,5 @@
-import './migrate-data.js';
 import express from "express";
+import { initCronJobs } from "./services/cron.js"
 import cors from "cors";
 import cookieParser from "cookie-parser";
 import { env, assertApiProductionConfig } from "./env.js";
@@ -37,6 +37,7 @@ app.use("/api/calculator", loadUser, requireAuth, calculatorRouter);
 
 const server = app.listen(env.PORT, "0.0.0.0", () => {
   console.log(`🚀 Backend listening on http://0.0.0.0:${env.PORT} (${env.NODE_ENV})`);
+  initCronJobs();
 });
 
 // Graceful shutdown so `tsx watch` restarts don't leak the port.
