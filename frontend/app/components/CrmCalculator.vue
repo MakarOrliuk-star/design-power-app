@@ -151,7 +151,8 @@ onMounted(() => { doConvert(); });
   flex-wrap: wrap;
   align-items: center;
   gap: 10px;
-  background: #f8fafc;
+  background: transparent;
+  border: none;
   padding: 12px;
   border-radius: var(--radius-lg, 12px);
   border: 1px solid var(--color-border);
@@ -200,13 +201,13 @@ onMounted(() => { doConvert(); });
 
 .currency-grid {
   display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(160px, 1fr));
-  gap: 12px;
+  grid-template-columns: repeat(auto-fill, minmax(130px, 1fr));
+  gap: 8px;
 }
 .currency-card {
   border: 1px solid var(--color-border);
   border-radius: var(--radius-lg, 12px);
-  padding: 14px;
+  padding: 10px;
   text-align: center;
   display: flex;
   flex-direction: column;
@@ -214,14 +215,14 @@ onMounted(() => { doConvert(); });
   box-shadow: var(--shadow-card);
 }
 .currency-card__name { font-size: 12px; font-weight: bold; color: var(--color-grey); text-transform: uppercase; }
-.currency-card__value { font-family: monospace; font-weight: bold; font-size: 16px; margin: 8px 0; color: #1e293b; }
+.currency-card__value { font-family: monospace; font-weight: bold; font-size: 14px; margin: 8px 0; color: #1e293b; }
 .currency-card__actions { display: flex; justify-content: center; gap: 4px; }
 
 .action-btn {
   background: var(--color-white);
   border: 1px solid var(--color-border);
-  padding: 4px 10px;
-  font-size: 12px;
+  padding: 3px 8px;
+  font-size: 11px;
   font-weight: bold;
   border-radius: 6px;
   cursor: pointer;
