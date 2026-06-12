@@ -3,7 +3,7 @@ import pg from 'pg';
 async function migrateUsers() {
   
   if (!process.env.PROD_DATABASE_URL || !process.env.DATABASE_URL) {
-    console.log("Скрипт миграции: Пропущено (не заданы переменные URL).");
+    console.log("Migration Script onmited (no url parameters).");
     return;
   }
 
@@ -17,11 +17,11 @@ async function migrateUsers() {
     const { rows: prodUsers, fields } = await prodPool.query('SELECT * FROM "User"');
 
     if (prodUsers.length === 0) {
-      console.log("На продакшене не найдено пользователей для переноса.");
+      console.log("Prod env has no accounts to migrate");
       return;
     }
 
-    console.log(`Найдено ${prodUsers.length} пользователей. Переносим в Test...`);
+    console.log(`Found ${prodUsers.length} users. Migrating to test env...`);
 
     
     const columns = fields.map(f => `"${f.name}"`).join(', ');
@@ -38,15 +38,15 @@ async function migrateUsers() {
       `, values);
     }
     
-    console.log("🚀 Миграция данных успешно завершена!");
+    console.log("Migration complete successfully");
   } catch (err) {
-    console.error("❌ Ошибка при прямой SQL-миграции:", err);
+    console.error("Direct SQL-migration error:", err);
   } finally {
-    // Обязательно закрываем соединения, иначе процесс зависнет
+
     await prodPool.end();
     await testPool.end();
   }
 }
 
-// Запускаем процесс
+// Starting
 migrateUsers();
