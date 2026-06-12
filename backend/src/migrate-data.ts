@@ -1,33 +1,52 @@
-import { PrismaClient } from '@prisma/client';
+import pg from 'pg';
 
 async function migrateUsers() {
-  const testDb = new PrismaClient(); 
   
-  const prodDb = new PrismaClient({
-    datasources: { db: { url: process.env.PROD_DATABASE_URL } },
-  });
+  if (!process.env.PROD_DATABASE_URL || !process.env.DATABASE_URL) {
+    console.log("Скрипт миграции: Пропущено (не заданы переменные URL).");
+    return;
+  }
+
+  
+  const prodPool = new pg.Pool({ connectionString: process.env.PROD_DATABASE_URL });
+  const testPool = new pg.Pool({ connectionString: process.env.DATABASE_URL });
 
   try {
-    console.log("Получаем пользователей из Production...");
-    const prodUsers = await prodDb.user.findMany();
-
-    console.log(`found ${prodUsers.length} users. migrating to test env...`);
+    console.log("Получаем пользователей из Production базы...");
     
-    for (const user of prodUsers) {
-      await testDb.user.upsert({
-        where: { email: user.email },
-        update: {}, 
-        create: user, 
-      });
+    const { rows: prodUsers, fields } = await prodPool.query('SELECT * FROM "User"');
+
+    if (prodUsers.length === 0) {
+      console.log("На продакшене не найдено пользователей для переноса.");
+      return;
     }
-    console.log("Done!");
+
+    console.log(`Найдено ${prodUsers.length} пользователей. Переносим в Test...`);
+
+    
+    const columns = fields.map(f => `"${f.name}"`).join(', ');
+
+    for (const user of prodUsers) {
+      const values = fields.map(f => user[f.name]);
+      const placeholders = fields.map((_, i) => `$${i + 1}`).join(', ');
+
+     
+      await testPool.query(`
+        INSERT INTO "User" (${columns})
+        VALUES (${placeholders})
+        ON CONFLICT (email) DO NOTHING
+      `, values);
+    }
+    
+    console.log("🚀 Миграция данных успешно завершена!");
   } catch (err) {
-    console.error("Error:", err);
+    console.error("❌ Ошибка при прямой SQL-миграции:", err);
   } finally {
-    await prodDb.$disconnect();
-    await testDb.$disconnect();
+    // Обязательно закрываем соединения, иначе процесс зависнет
+    await prodPool.end();
+    await testPool.end();
   }
 }
 
-
+// Запускаем процесс
 migrateUsers();
