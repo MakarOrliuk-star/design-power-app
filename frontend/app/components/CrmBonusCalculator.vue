@@ -244,6 +244,7 @@ const hyResult = computed(() => {
   font-weight: 500;
 }
 
+/* Enhanced input and dropdown inputs for maximum contrast and legibility */
 .input-group input, 
 .input-group select {
   width: 120px;
@@ -253,7 +254,8 @@ const hyResult = computed(() => {
   font-family: monospace;
   font-size: 13px;
   outline: none;
-  background: #f8fafc;
+  background: #ffffff; 
+  color: #0f172a;      /* Enforced dark text to prevent blending with light background */
 }
 
 .input-group input:focus, 
@@ -261,11 +263,18 @@ const hyResult = computed(() => {
   border-color: var(--color-grey);
 }
 
+/* Enforced explicit dark options inside dropdown context */
+.input-group select option {
+  background: #ffffff;
+  color: #0f172a;
+}
+
+/* Transformed results wrapper into a sleek native dark-mode panel */
 .results {
   margin-top: 12px;
   padding: 12px;
-  background: #f1fdf5; /* Same subtle green background from your HTML */
-  border: 1px solid #bbf7d0;
+  background: #1e293b; 
+  border: 1px solid #334155;
   border-radius: 8px;
   display: flex;
   flex-direction: column;
@@ -276,8 +285,9 @@ const hyResult = computed(() => {
 .res-row {
   display: flex;
   justify-content: space-between;
+  align-items: center;
   padding-bottom: 6px;
-  border-bottom: 1px solid #e5e7eb;
+  border-bottom: 1px solid #334155;
 }
 .res-row:last-child {
   border-bottom: none;
@@ -285,23 +295,39 @@ const hyResult = computed(() => {
 }
 
 .res-row span {
-  color: #374151;
+  color: #94a3b8; /* Muted text label for dark mode */
 }
 
 .res-row b {
   font-family: monospace;
+  color: #f8fafc; /* Crisp white for values */
 }
 
+/* Smooth pastel-red glow highlight for spent rows */
 .highlight-spent {
-  background-color: #ffebee;
-  padding: 4px;
-  border-radius: 4px;
+  background-color: rgba(239, 68, 68, 0.15); 
+  border: 1px solid rgba(239, 68, 68, 0.3);
+  padding: 4px 8px;
+  border-radius: 6px;
+}
+.highlight-spent span {
+  color: #fca5a5;
+}
+.highlight-spent b {
+  color: #ef4444;
 }
 
+/* Smooth pastel-green glow highlight for total rows */
 .highlight-total {
-  background-color: #dcfce7;
-  padding: 4px;
-  border-radius: 4px;
-  font-weight: bold;
+  background-color: rgba(16, 185, 129, 0.15);
+  border: 1px solid rgba(16, 185, 129, 0.3);
+  padding: 4px 8px;
+  border-radius: 6px;
+}
+.highlight-total span {
+  color: #a7f3d0;
+}
+.highlight-total b {
+  color: #10b981;
 }
 </style>
