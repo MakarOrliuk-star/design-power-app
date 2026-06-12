@@ -4,6 +4,7 @@ dist/
 .output/
 .nuxt/
 backend/generated/
+figma/
 
 # Secrets — NEVER commit
 .env
