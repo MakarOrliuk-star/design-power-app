@@ -158,6 +158,8 @@ async function logout() {
 .workspace {
   flex: 1;
   min-height: 0;
+  overflow-y: auto; /* Allows the entire CRM workspace to scroll if needed */
+  padding-bottom: 24px; /* Gives some breathing room at the bottom */
 }
 
 /* Сетка для плиток-карточек */

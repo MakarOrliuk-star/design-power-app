@@ -128,7 +128,15 @@ function dispatchCopy(text) {
 
 function handleMassCopy(list) {
   if (!list || list.length === 0) return;
-  dispatchCopy(JSON.stringify(list));
+
+  // Clean the payload: keep only the required fields
+  const cleanPayload = list.map(item => ({
+    value: item.value,
+    currency_enum_id: item.currency_enum_id,
+    currency_name: item.currency_name
+  }));
+
+  dispatchCopy(JSON.stringify(cleanPayload));
 }
 
 onMounted(() => { doConvert(); });
@@ -203,7 +211,20 @@ onMounted(() => { doConvert(); });
   display: grid;
   grid-template-columns: repeat(auto-fill, minmax(130px, 1fr));
   gap: 8px;
+  /* --- NEW: Enable vertical scrolling for the grid --- */
+  overflow-y: auto;
+  max-height: calc(100vh - 280px); /* Keeps the grid inside the viewport */
+  padding-right: 6px; /* Adds space for the scrollbar */
 }
+
+currency-grid::-webkit-scrollbar {
+  width: 6px;
+}
+.currency-grid::-webkit-scrollbar-thumb {
+  background: var(--color-border);
+  border-radius: 4px;
+}
+
 .currency-card {
   border: 1px solid var(--color-border);
   border-radius: var(--radius-lg, 12px);
