@@ -1,15 +1,13 @@
 <script setup lang="ts">
 import { ref } from "vue";
 
-// CrmCalculator и useAuthStore подтягиваются автоматически магией Nuxt!
-
 useHead({ title: "Design Power — CRM Dashboard" });
 
 const auth = useAuthStore();
 
-// Состояние текущего экрана: null — главное меню, 'calculator' или 'auditor' — запущенный сервис
-const activeService = ref<null | 'calculator' | 'auditor'>(null);
 
+const activeService = ref<null | 'calculator' | 'auditor' | 'bonuscalc'>(null);
+  
 async function logout() {
   await auth.logout();
   await navigateTo("/login");
@@ -25,7 +23,11 @@ async function logout() {
       <h1 class="bar__title" @click="activeService = null" style="cursor: pointer;">
         CRM 
         <span v-if="activeService" class="bar__breadcrumbs"> 
-          / {{ activeService === 'calculator' ? 'Валютный калькулятор' : 'Массовый аудит' }}
+          / {{ 
+            activeService === 'calculator' ? 'Валютный калькулятор' : 
+            activeService === 'bonuscalc' ? 'Калькулятор Бонусов' : 
+            'Массовый аудит' 
+          }}
         </span>
       </h1>
       <div class="bar__user">
@@ -45,6 +47,17 @@ async function logout() {
           <h2 class="tile-card__title">Валютный калькулятор</h2>
           <p class="tile-card__desc">
             Автоматический расчет и конвертация EUR во все фиатные валюты и крипту с кэшированием через Redis.
+          </p>
+          <div class="tile-card__footer">Запустить сервис →</div>
+        </div>
+
+        <div class="tile-card" @click="activeService = 'bonuscalc'">
+          <div class="tile-card__icon-wrapper" style="background-color: #fef3c7;">
+            <span class="tile-card__icon">🎯</span>
+          </div>
+          <h2 class="tile-card__title">Калькулятор Бонусов</h2>
+          <p class="tile-card__desc">
+            Расчет костов, вейджеров и комиссий для Free Spins, Deposit Bonus и Hybrid.
           </p>
           <div class="tile-card__footer">Запустить сервис →</div>
         </div>
@@ -72,6 +85,8 @@ async function logout() {
         <div class="service-body">
           <CrmCalculator v-if="activeService === 'calculator'" />
 
+          <CrmBonusCalculator v-else-if="activeService === 'bonuscalc'" />
+
           <div v-else-if="activeService === 'auditor'" class="stub">
             <p class="stub__title">Аудит Smartico скоро здесь</p>
             <p class="stub__hint">Логика фонового Playwright-воркера будет добавлена в следующей фазе.</p>
@@ -84,7 +99,6 @@ async function logout() {
 </template>
 
 <style scoped>
-/* Базовые стили проекта */
 .crm {
   display: flex;
   flex-direction: column;
@@ -154,22 +168,19 @@ async function logout() {
   color: var(--color-stop-hover);
 }
 
-/* Контейнер рабочей области */
 .workspace {
   flex: 1;
   min-height: 0;
-  overflow-y: auto; /* Allows the entire CRM workspace to scroll if needed */
-  padding-bottom: 24px; /* Gives some breathing room at the bottom */
+  overflow-y: auto;
+  padding-bottom: 24px;
 }
 
-/* Сетка для плиток-карточек */
 .tiles-grid {
   display: grid;
   grid-template-columns: repeat(auto-fill, minmax(320px, 1fr));
   gap: 20px;
 }
 
-/* Стилизация интерактивной плитки */
 .tile-card {
   background: var(--color-white);
   border: 1px solid var(--color-border);
@@ -219,7 +230,6 @@ async function logout() {
   margin-top: 8px;
 }
 
-/* Лэйаут запущенного сервиса */
 .service-layout {
   display: flex;
   flex-direction: column;
@@ -252,7 +262,6 @@ async function logout() {
   border-color: var(--color-grey);
 }
 
-/* Стилизация старой заглушки для совместимости */
 .stub {
   flex: 1;
   display: grid;
@@ -272,7 +281,6 @@ async function logout() {
   color: var(--color-grey);
 }
 
-/* Плавная анимация переключения экранов */
 .animate-fade {
   animation: fadeIn 0.22s cubic-bezier(0.4, 0, 0.2, 1);
 }
