@@ -36,6 +36,7 @@ const HOP_BY_HOP = new Set([
 export async function proxyToBackend(event: H3Event): Promise<unknown> {
   const origin = process.env.NUXT_BACKEND_ORIGIN || "http://localhost:3001";
   const target = new URL(event.path, origin); // event.path includes the query string
+  console.log("TARGET URL:", target.href); // test ping
   const client = target.protocol === "https:" ? https : http;
 
   const headers: Record<string, string | string[] | undefined> = { ...getRequestHeaders(event) };
@@ -51,6 +52,8 @@ export async function proxyToBackend(event: H3Event): Promise<unknown> {
     req.end();
   });
 
+  console.log("BACKEND STATUS:", upstream.statusCode);
+  
   setResponseStatus(event, upstream.statusCode ?? 502);
   for (const [key, value] of Object.entries(upstream.headers)) {
     if (value == null || HOP_BY_HOP.has(key)) continue;
