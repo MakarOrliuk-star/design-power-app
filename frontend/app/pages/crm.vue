@@ -172,6 +172,7 @@ async function logout() {
   flex: 1;
   min-height: 0;
   overflow-y: auto;
+  padding-top: 12px;
   padding-bottom: 24px;
 }
 
@@ -192,11 +193,13 @@ async function logout() {
   flex-direction: column;
   align-items: flex-start;
   gap: 12px;
+  position: relative;   /* NEW: Prepares the card for proper layer stacking */
   transition: transform 0.2s cubic-bezier(0.4, 0, 0.2, 1), border-color 0.2s ease;
 }
 .tile-card:hover {
   transform: translateY(-3px);
   border-color: var(--color-grey);
+  z-index: 5;
 }
 
 .tile-card__icon-wrapper {
