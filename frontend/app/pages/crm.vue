@@ -1,12 +1,13 @@
 <script setup lang="ts">
-// CRM zone — empty scaffold (TASK Phase 1). The real CRM logic arrives in a
-// later phase; for now the page only proves the routing/auth path works and
-// gives the user a way back (portal) and out (logout). It deliberately does
-// not use TheToolbar — that one is wired to the Design generator store.
-useHead({ title: "Design Power — CRM" });
+import { ref } from "vue";
+
+useHead({ title: "Design Power — CRM Dashboard" });
 
 const auth = useAuthStore();
 
+
+const activeService = ref<null | 'calculator' | 'auditor' | 'bonuscalc'>(null);
+  
 async function logout() {
   await auth.logout();
   await navigateTo("/login");
@@ -19,16 +20,77 @@ async function logout() {
       <button class="bar__logo" type="button" title="К выбору зоны" @click="navigateTo('/login')">
         m<span class="bar__wave">∿∿</span>k
       </button>
-      <h1 class="bar__title">CRM</h1>
+      <h1 class="bar__title" @click="activeService = null" style="cursor: pointer;">
+        CRM 
+        <span v-if="activeService" class="bar__breadcrumbs"> 
+          / {{ 
+            activeService === 'calculator' ? 'Валютный калькулятор' : 
+            activeService === 'bonuscalc' ? 'Калькулятор Бонусов' : 
+            'Массовый аудит' 
+          }}
+        </span>
+      </h1>
       <div class="bar__user">
         <span class="bar__email">{{ auth.user?.email }}</span>
         <button class="bar__logout" type="button" @click="logout">Выйти</button>
       </div>
     </header>
 
-    <div class="stub">
-      <p class="stub__title">CRM скоро здесь</p>
-      <p class="stub__hint">Раздел в разработке. Логика CRM появится в следующих фазах.</p>
+    <div class="workspace">
+      
+      <div v-if="activeService === null" class="tiles-grid animate-fade">
+        
+        <div class="tile-card" @click="activeService = 'calculator'">
+          <div class="tile-card__icon-wrapper tile-card__icon-wrapper--euro">
+            <span class="tile-card__icon">💶</span>
+          </div>
+          <h2 class="tile-card__title">Валютный калькулятор</h2>
+          <p class="tile-card__desc">
+            Автоматический расчет и конвертация EUR во все фиатные валюты и крипту с кэшированием через Redis.
+          </p>
+          <div class="tile-card__footer">Запустить сервис →</div>
+        </div>
+
+        <div class="tile-card" @click="activeService = 'bonuscalc'">
+          <div class="tile-card__icon-wrapper" style="background-color: #fef3c7;">
+            <span class="tile-card__icon">🎯</span>
+          </div>
+          <h2 class="tile-card__title">Калькулятор Бонусов</h2>
+          <p class="tile-card__desc">
+            Расчет костов, вейджеров и комиссий для Free Spins, Deposit Bonus и Hybrid.
+          </p>
+          <div class="tile-card__footer">Запустить сервис →</div>
+        </div>
+
+        <div class="tile-card" @click="activeService = 'auditor'">
+          <div class="tile-card__icon-wrapper tile-card__icon-wrapper--search">
+            <span class="tile-card__icon">🔎</span>
+          </div>
+          <h2 class="tile-card__title">Массовый аудит</h2>
+          <p class="tile-card__desc">
+            Сканирование маркетинговых кампаний Smartico, генерация Flow Map и выгрузка интерактивных HTML-отчетов.
+          </p>
+          <div class="tile-card__footer">В разработке...</div>
+        </div>
+
+      </div>
+
+      <div v-else class="service-layout animate-fade">
+        <div class="service-header">
+          <button class="btn-back" type="button" @click="activeService = null">
+            ← Назад в меню CRM
+          </button>
+        </div>
+        
+        <div class="service-body">
+          <CrmCalculator v-if="activeService === 'calculator'" />
+
+          <CrmBonusCalculator v-else-if="activeService === 'bonuscalc'" />
+
+          <CrmAuditor v-else-if="activeService === 'auditor'" />
+        </div>
+      </div>
+
     </div>
   </div>
 </template>
@@ -60,6 +122,7 @@ async function logout() {
   font-size: 26px;
   font-weight: 600;
   color: var(--color-text);
+  cursor: pointer;
 }
 .bar__wave {
   background: var(--gradient-active);
@@ -72,6 +135,12 @@ async function logout() {
   margin: 0;
   font-size: 18px;
   font-weight: 600;
+  color: var(--color-text);
+}
+.bar__breadcrumbs {
+  font-size: 14px;
+  color: var(--color-grey);
+  font-weight: normal;
 }
 .bar__user {
   display: flex;
@@ -89,31 +158,134 @@ async function logout() {
   padding: 8px 18px;
   font-size: 14px;
   color: var(--color-text);
+  cursor: pointer;
 }
 .bar__logout:hover {
   border-color: var(--color-stop);
   color: var(--color-stop-hover);
 }
 
-.stub {
+.workspace {
   flex: 1;
   min-height: 0;
+  overflow-y: auto;
+  padding-top: 12px;
+  padding-bottom: 24px;
+}
+
+.tiles-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(320px, 1fr));
+  gap: 20px;
+}
+
+.tile-card {
+  background: var(--color-white);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-lg);
+  padding: 28px;
+  cursor: pointer;
+  box-shadow: var(--shadow-card);
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 12px;
+  position: relative;   /* NEW: Prepares the card for proper layer stacking */
+  transition: transform 0.2s cubic-bezier(0.4, 0, 0.2, 1), border-color 0.2s ease;
+}
+.tile-card:hover {
+  transform: translateY(-3px);
+  border-color: var(--color-grey);
+  z-index: 5;
+}
+
+.tile-card__icon-wrapper {
+  padding: 12px;
+  border-radius: var(--radius-lg);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 24px;
+}
+.tile-card__icon-wrapper--euro { background-color: #ecfdf5; }
+.tile-card__icon-wrapper--search { background-color: #eff6ff; }
+
+.tile-card__title {
+  margin: 0;
+  font-size: 20px;
+  font-weight: 600;
+  color: var(--color-text);
+}
+.tile-card__desc {
+  margin: 0;
+  font-size: 14px;
+  color: var(--color-grey);
+  line-height: 1.5;
+  flex-grow: 1;
+}
+.tile-card__footer {
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--color-text);
+  margin-top: 8px;
+}
+
+.service-layout {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+  background: var(--color-white);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-lg);
+  padding: 28px;
+  box-shadow: var(--shadow-card);
+  min-height: 500px;
+}
+.service-header {
+  border-bottom: 1px solid var(--color-border);
+  padding-bottom: 14px;
+  margin-bottom: 8px;
+}
+.btn-back {
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-pill);
+  background: var(--color-white);
+  padding: 6px 14px;
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--color-grey);
+  cursor: pointer;
+  transition: all 0.15s ease;
+}
+.btn-back:hover {
+  color: var(--color-text);
+  border-color: var(--color-grey);
+}
+
+.stub {
+  flex: 1;
   display: grid;
   place-content: center;
   text-align: center;
   gap: 8px;
-  background: var(--color-white);
-  border: 1px solid var(--color-border);
-  border-radius: var(--radius-lg);
+  padding: 60px 0;
 }
 .stub__title {
   margin: 0;
-  font-size: 24px;
+  font-size: 22px;
   font-weight: 600;
 }
 .stub__hint {
   margin: 0;
   font-size: 14px;
   color: var(--color-grey);
+}
+
+.animate-fade {
+  animation: fadeIn 0.22s cubic-bezier(0.4, 0, 0.2, 1);
+}
+@keyframes fadeIn {
+  from { opacity: 0; transform: translateY(6px); }
+  to { opacity: 1; transform: translateY(0); }
 }
 </style>
