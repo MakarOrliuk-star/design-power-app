@@ -87,10 +87,7 @@ async function logout() {
 
           <CrmBonusCalculator v-else-if="activeService === 'bonuscalc'" />
 
-          <div v-else-if="activeService === 'auditor'" class="stub">
-            <p class="stub__title">Аудит Smartico скоро здесь</p>
-            <p class="stub__hint">Логика фонового Playwright-воркера будет добавлена в следующей фазе.</p>
-          </div>
+          <CrmAuditor v-else-if="activeService === 'auditor'" />
         </div>
       </div>
 
