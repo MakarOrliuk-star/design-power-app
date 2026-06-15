@@ -4,7 +4,7 @@ import { FIAT_CURRENCIES } from "../config/calculator.config.js";
 
 export const calculatorCache = {
   async getRate(currency: string): Promise<number | null> {
-    await ensureRedis(); // Гарантируем, что подключение активно
+    await ensureRedis(); 
     const lookupCode = currency === 'BNBSC' ? 'BNB' : currency;
     const raw = await redis.get(`rate:${lookupCode}`);
     if (!raw) return null;

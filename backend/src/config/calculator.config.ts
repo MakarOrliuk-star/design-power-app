@@ -36,7 +36,7 @@ export const CURRENCY_DATA: Record<string, { rate: number; currency_enum_id: num
   PLN: { rate: 5, currency_enum_id: 29173854 },
   RSD: { rate: 100, currency_enum_id: 32619603 },
   RON: { rate: 5, currency_enum_id: 13074221 },
-  SEK: { rate: 10, currency_enum_id: 13078143 }, // В коде GAS опечатка "currency_enum_id", переносим как в оригинале
+  SEK: { rate: 10, currency_enum_id: 13078143 }, 
   TRX: { rate: 3.74, currency_enum_id: 29132788 },
   TRY: { rate: 30, currency_enum_id: 26444896 },
   UAH: { rate: 40, currency_enum_id: 29641725 },

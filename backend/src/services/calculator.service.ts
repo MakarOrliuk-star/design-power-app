@@ -5,7 +5,7 @@ import {
 } from "../config/calculator.config.js";
 
 export const calculatorService = {
-  // Читаем токены напрямую из process.env, чтобы не ломать твой src/env.ts
+  
   async sendSlackNotification(message: string, title = "🚨 Alert"): Promise<void> {
     const token = process.env.SLACK_BOT_TOKEN || 'xoxb-9663459413845-9843441708145-Vyx2wRxtQa0RyuWR6OoUaQKN';
     const channel = process.env.SLACK_CHANNEL_ID || 'C09QHDWQ3C4';
