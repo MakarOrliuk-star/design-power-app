@@ -1,17 +1,11 @@
-FROM python:3.11-slim
+# Use the official Microsoft Playwright image with Python pre-installed
+FROM mcr.microsoft.com/playwright/python:v1.40.0-jammy
 
 WORKDIR /app
-
-# Install system dependencies required for Playwright
-RUN apt-get update && apt-get install -y wget gnupg && rm -rf /var/lib/apt/lists/*
 
 # Install Python dependencies
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
-
-# Install Playwright browsers and OS dependencies
-RUN playwright install chromium
-RUN playwright install-deps chromium
 
 # Copy all project files
 COPY . .

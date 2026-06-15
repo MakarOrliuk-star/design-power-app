@@ -10,6 +10,7 @@ import { catalogRouter } from "./routes/catalog.js";
 import { generateRouter } from "./routes/generate.js";
 import { loadUser, requireAdmin, requireAuth } from "./middleware/auth.js";
 import { calculatorRouter } from "./routes/calculator.js";
+import { auditorRouter } from "./routes/auditor.js";
 
 assertApiProductionConfig();
 
@@ -34,6 +35,7 @@ app.use("/api/admin", loadUser, requireAdmin, adminRouter);
 app.use("/api/catalog", loadUser, requireAuth, catalogRouter);
 app.use("/api", loadUser, requireAuth, generateRouter);
 app.use("/api/calculator", loadUser, requireAuth, calculatorRouter);
+app.use("/api/auditor", loadUser, requireAuth, auditorRouter); 
 
 const server = app.listen(env.PORT, "0.0.0.0", () => {
   console.log(`🚀 Backend listening on http://0.0.0.0:${env.PORT} (${env.NODE_ENV})`);
