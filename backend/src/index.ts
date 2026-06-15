@@ -38,7 +38,7 @@ app.use("/api/calculator", loadUser, requireAuth, calculatorRouter);
 app.use("/api/auditor", loadUser, requireAuth, auditorRouter); 
 
 const server = app.listen(env.PORT, "0.0.0.0", () => {
-  console.log(`🚀 Backend listening on http://0.0.0.0:${env.PORT} (${env.NODE_ENV})`);
+  console.log(`Backend listening on http://0.0.0.0:${env.PORT} (${env.NODE_ENV})`);
   initCronJobs();
 });
 
