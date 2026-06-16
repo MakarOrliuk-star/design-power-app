@@ -119,34 +119,7 @@ onMounted(() => {
         </button>
       </div>
 
-      <!-- Centered title -->
-      <div class="card card--title">
-        <h1 class="bar__title">
-          CRM <span class="bar__power">Power</span> <span class="bar__brand">Makaronka AI</span>
-          <span v-if="activeService" class="bar__breadcrumbs"> / {{ SERVICE_TITLES[activeService] }}</span>
-        </h1>
-      </div>
-
-      <!-- Tools (night theme) -->
-      <div class="card card--tools">
-        <button
-          class="tool"
-          type="button"
-          :aria-label="theme === 'dark' ? 'Светлая тема' : 'Ночная тема'"
-          :title="theme === 'dark' ? 'Светлая тема' : 'Ночная тема'"
-          @click="toggleTheme"
-        >
-          <svg v-if="theme === 'dark'" viewBox="0 0 24 24" width="22" height="22" fill="none">
-            <circle cx="12" cy="12" r="4.5" stroke="currentColor" stroke-width="1.6" />
-            <path d="M12 2v2M12 20v2M2 12h2M20 12h2M5 5l1.4 1.4M17.6 17.6L19 19M19 5l-1.4 1.4M6.4 17.6L5 19" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" />
-          </svg>
-          <svg v-else viewBox="0 0 24 24" width="22" height="22" fill="none">
-            <path d="M20 14.5A8 8 0 119.5 4 6.5 6.5 0 0020 14.5z" stroke="currentColor" stroke-width="1.6" stroke-linejoin="round" />
-          </svg>
-        </button>
-      </div>
-
-      <!-- Brand icon (right) → back to the CRM dashboard home -->
+      <!-- Brand icon (left) → back to the CRM dashboard home -->
       <button
         class="card card--logo"
         type="button"
@@ -169,6 +142,33 @@ onMounted(() => {
           <span class="logo__letter">k</span>
         </span>
       </button>
+
+      <!-- Tools (night theme) -->
+      <div class="card card--tools">
+        <button
+          class="tool"
+          type="button"
+          :aria-label="theme === 'dark' ? 'Светлая тема' : 'Ночная тема'"
+          :title="theme === 'dark' ? 'Светлая тема' : 'Ночная тема'"
+          @click="toggleTheme"
+        >
+          <svg v-if="theme === 'dark'" viewBox="0 0 24 24" width="22" height="22" fill="none">
+            <circle cx="12" cy="12" r="4.5" stroke="currentColor" stroke-width="1.6" />
+            <path d="M12 2v2M12 20v2M2 12h2M20 12h2M5 5l1.4 1.4M17.6 17.6L19 19M19 5l-1.4 1.4M6.4 17.6L5 19" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" />
+          </svg>
+          <svg v-else viewBox="0 0 24 24" width="22" height="22" fill="none">
+            <path d="M20 14.5A8 8 0 119.5 4 6.5 6.5 0 0020 14.5z" stroke="currentColor" stroke-width="1.6" stroke-linejoin="round" />
+          </svg>
+        </button>
+      </div>
+
+      <!-- Title (right) -->
+      <div class="card card--title">
+        <h1 class="bar__title">
+          CRM <span class="bar__power">Power</span> <span class="bar__brand">Makaronka AI</span>
+          <span v-if="activeService" class="bar__breadcrumbs"> / {{ SERVICE_TITLES[activeService] }}</span>
+        </h1>
+      </div>
     </header>
 
     <div class="workspace">
@@ -305,10 +305,10 @@ onMounted(() => {
   color: var(--color-stop-hover);
 }
 
-/* centered title */
+/* title (right) */
 .card--title {
   flex: 1;
-  justify-content: center;
+  justify-content: flex-end;
   min-width: 0;
 }
 .bar__title {
@@ -316,7 +316,7 @@ onMounted(() => {
   font-size: 18px;
   font-weight: 600;
   color: var(--color-text);
-  text-align: center;
+  text-align: right;
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
