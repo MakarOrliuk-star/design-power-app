@@ -274,7 +274,7 @@ onMounted(() => {
   padding: 0 22px;
 }
 
-/* greeting + logout (left) */
+/* greeting + logout (right) */
 .card--user {
   flex: 0 0 auto;
   gap: 14px;
@@ -357,7 +357,7 @@ onMounted(() => {
   background: rgba(138, 56, 245, 0.08);
 }
 
-/* brand icon (right) → CRM home */
+/* brand icon (left) → CRM home */
 .card--logo {
   flex: 0 0 auto;
   justify-content: center;
