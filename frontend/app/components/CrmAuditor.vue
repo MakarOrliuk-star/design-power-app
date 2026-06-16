@@ -288,6 +288,7 @@ watch(logs, async () => {
 }, { deep: true });
 
 // Core stream-oriented executor engine pointing directly to local Node.js proxy routers
+// Core stream-oriented executor engine pointing directly to local Node.js proxy routers
 async function executeAuditPipeline(urlList) {
   isLoading.value = true;
   progress.value = 0;
@@ -321,13 +322,20 @@ async function executeAuditPipeline(urlList) {
 
     const reader = response.body.getReader();
     const decoder = new TextDecoder('utf-8');
+    
+    let streamBuffer = '';
+    let reportIdToDownload = null;
 
+    // Step 1: Read the execution progress stream until completion token is acquired
     while (true) {
       const { done, value } = await reader.read();
       if (done) break;
 
-      const chunk = decoder.decode(value, { stream: true });
-      const lines = chunk.split('\n');
+      streamBuffer += decoder.decode(value, { stream: true });
+      const lines = streamBuffer.split('\n');
+      
+      // Keep the last incomplete line fragment inside the buffer pool
+      streamBuffer = lines.pop() || '';
 
       for (const line of lines) {
         if (line.startsWith('data: ')) {
@@ -340,25 +348,37 @@ async function executeAuditPipeline(urlList) {
               logs.value.push(`<span class="log-time">>></span> ${parsed.msg}`);
               progress.value = parsed.percent;
             } else if (parsed.type === 'done') {
-              // Execute transactional step 2 download to pull the massive file over clean HTTP
-              try {
-                logs.value.push(`<span class="log-time">>></span> Downloading full analysis matrix document safely...`);
-                const fileResponse = await fetch(`/api/auditor/download/${parsed.report_id}`);
-                if (!fileResponse.ok) throw new Error("File transmission interface fault");
-                
-                finalHtml.value = await fileResponse.text();
-                progress.value = 100;
-                logs.value.push(`<span class="log-success">>> ✅ Document composition finalized successfully. Output operational.</span>`);
-              } catch (downloadErr) {
-                logs.value.push(`<span class="log-err">>> ❌ Failed to compile download response payload: ${downloadErr.message}</span>`);
-              } finally {
-                isLoading.value = false;
-              }
+              reportIdToDownload = parsed.report_id;
+              break; // Break the lines parsing loop
+            } else if (parsed.type === 'error') {
+              logs.value.push(`<span class="log-err">>> ❌ Remote execution exception: ${parsed.msg}</span>`);
+              isLoading.value = false;
+              return;
             }
           } catch (e) {
             console.error("Payload chunk serialization error parsing strategy handler:", e);
           }
         }
+      }
+      
+      // Break the connection reader loop before firing a secondary nested HTTP transaction
+      if (reportIdToDownload) break;
+    }
+
+    // Step 2: Execute transactional download safely OUTSIDE of the streaming lifecycle context
+    if (reportIdToDownload) {
+      try {
+        logs.value.push(`<span class="log-time">>></span> Downloading full analysis matrix document safely...`);
+        const fileResponse = await fetch(`/api/auditor/download/${reportIdToDownload}`);
+        if (!fileResponse.ok) throw new Error("File transmission interface fault");
+        
+        finalHtml.value = await fileResponse.text();
+        progress.value = 100;
+        logs.value.push(`<span class="log-success">>> ✅ Document composition finalized successfully. Output operational.</span>`);
+      } catch (downloadErr) {
+        logs.value.push(`<span class="log-err">>> ❌ Failed to compile download response payload: ${downloadErr.message}</span>`);
+      } finally {
+        isLoading.value = false;
       }
     }
   } catch (err) {
