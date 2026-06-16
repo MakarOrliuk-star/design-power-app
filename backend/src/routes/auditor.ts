@@ -93,3 +93,18 @@ auditorRouter.post("/resolve-links", async (req, res) => {
     res.status(500).json({ status: "error", message: error.message || "Failed to reach auditor worker" });
   }
 });
+
+// 5. Proxies heavy HTML report retrieval safely avoiding chunk transmission overflows
+auditorRouter.get("/download/:report_id", async (req, res) => {
+  try {
+    const response = await fetch(`${workerBaseUrl}/audit/download/${req.params.report_id}`);
+    if (!response.ok) return res.status(response.status).send("Report payload download failed");
+    
+    const htmlContent = await response.text();
+    res.setHeader("Content-Type", "text/html");
+    res.send(htmlContent);
+  } catch (error: any) {
+    console.error("Proxy Download Integrity Failure:", error);
+    res.status(500).send(error.message || "Failed to download compiled target document");
+  }
+});

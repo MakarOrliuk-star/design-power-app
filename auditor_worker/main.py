@@ -13,7 +13,6 @@ from uuid import uuid4
 
 app = FastAPI(title="Smartico Auditor Worker API")
 
-# Global in-memory storage cache for pre-compiled heavy HTML reports
 REPORTS_CACHE = {}
 
 class AuditRequest(BaseModel):
@@ -61,8 +60,9 @@ def search_keyword_in_dict(obj, keyword, path=""):
             matches.append({"path": path, "value": val_str})
     return matches
 
+# 🚨 CHANGED: Removed 'async' keyword to execute sync Playwright code in a separate background threadpool
 @app.post("/audit/stream")
-async def audit_stream(request: AuditRequest):
+def audit_stream(request: AuditRequest):
     """
     Processes campaign URLs and streams live progress logs.
     Saves the final heavy HTML report to cache and yields a secure token ID.
@@ -85,7 +85,7 @@ async def audit_stream(request: AuditRequest):
                     args=["--no-sandbox", "--disable-dev-shm-usage", "--disable-gpu"]
                 )
                 context = browser.new_context(
-                    user_agent="Mozilla/5.0 (iPhone; CPU iPhone OS 16_6 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/16.6 Mobile/15E148 Safari/604.1",
+                    user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36",
                     viewport={"width": 414, "height": 896},
                     bypass_csp=True
                 )
@@ -112,6 +112,9 @@ async def audit_stream(request: AuditRequest):
                     drive_host = env_match.group(0) if env_match else "drive.smartico.ai"
                     
                     core = SmarticoCore(context, request.token, brand_id, boapi_host, drive_host)
+                    
+                    # 🚨 ANTI-BOT SHIELD: Inject real browser user-agent into headers to bypass Cloudflare drops
+                    core.headers["user-agent"] = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36"
                     
                     print(" [WORKER] Fetching campaign metadata...", flush=True)
                     gen_data, seg_data = core.get_campaign_metadata(camp_id, current_url)
@@ -303,7 +306,7 @@ async def audit_stream(request: AuditRequest):
     return StreamingResponse(event_generator(), media_type="text/event-stream")
 
 @app.get("/audit/download/{report_id}")
-async def audit_download(report_id: str):
+def audit_download(report_id: str):
     """
     Serves compiled large HTML report payloads securely over standard HTTP protocol.
     """
@@ -313,7 +316,7 @@ async def audit_download(report_id: str):
     return HTMLResponse(content=html_content)
 
 @app.post("/brands/search-campaigns")
-async def brands_search_campaigns(request: BrandSearchRequest):
+def brands_search_campaigns(request: BrandSearchRequest):
     results = []
     with sync_playwright() as p:
         browser = p.chromium.launch(headless=True)
@@ -351,7 +354,7 @@ async def brands_search_campaigns(request: BrandSearchRequest):
     return {"status": "success", "results": results}
 
 @app.post("/brands/bulk-labels")
-async def brands_bulk_labels(request: BulkLabelsRequest):
+def brands_bulk_labels(request: BulkLabelsRequest):
     results = {}
     target_condition = request.keyword.lower()
     
@@ -389,7 +392,7 @@ async def brands_bulk_labels(request: BulkLabelsRequest):
     return {"status": "success", "results": results}
 
 @app.post("/brands/resolve-links")
-async def brands_resolve_links(request: ResolveLinksRequest):
+def brands_resolve_links(request: ResolveLinksRequest):
     resolved = {}
     headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"}
     
