@@ -5,7 +5,7 @@ export interface AuthUser {
   email: string;
   name?: string | null;
   avatarUrl?: string | null;
-  role: "ADMIN" | "DESIGNER";
+  role: "ADMIN" | "DESIGNER" | "CRM";
 }
 
 /**
@@ -18,6 +18,11 @@ export const useAuthStore = defineStore("auth", () => {
 
   const isAuthenticated = computed(() => user.value !== null);
   const isAdmin = computed(() => user.value?.role === "ADMIN");
+  const isCrm = computed(() => user.value?.role === "CRM");
+  const isDesigner = computed(() => user.value?.role === "DESIGNER");
+  // Zone access — ADMIN reaches both zones; the others are walled off.
+  const canDesign = computed(() => user.value?.role === "ADMIN" || user.value?.role === "DESIGNER");
+  const canCrm = computed(() => user.value?.role === "ADMIN" || user.value?.role === "CRM");
 
   async function fetchMe() {
     try {
@@ -38,5 +43,5 @@ export const useAuthStore = defineStore("auth", () => {
     }
   }
 
-  return { user, ready, isAuthenticated, isAdmin, fetchMe, logout };
+  return { user, ready, isAuthenticated, isAdmin, isCrm, isDesigner, canDesign, canCrm, fetchMe, logout };
 });

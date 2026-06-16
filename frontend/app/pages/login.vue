@@ -30,6 +30,16 @@ const ZONES = [
   { id: "crm", title: "CRM", next: "/crm", video: "/login/crm.mp4" },
 ] as const;
 
+// Anonymous visitors see both zones (role is unknown until they log in).
+// Authenticated users only see the zone(s) their role can reach — ADMIN both,
+// DESIGNER only Design, CRM only CRM.
+const visibleZones = computed(() => {
+  if (!auth.isAuthenticated) return ZONES;
+  return ZONES.filter((z) =>
+    z.id === "crm" ? auth.canCrm : auth.canDesign,
+  );
+});
+
 function enter(next: string) {
   if (auth.isAuthenticated) {
     void navigateTo(next);
@@ -88,9 +98,9 @@ function enter(next: string) {
 
     <p v-if="errorMessage" class="error">{{ errorMessage }}</p>
 
-    <div class="zones">
+    <div class="zones" :class="{ 'zones--single': visibleZones.length === 1 }">
       <button
-        v-for="z in ZONES"
+        v-for="z in visibleZones"
         :key="z.id"
         class="zone"
         type="button"
@@ -201,6 +211,12 @@ function enter(next: string) {
   display: grid;
   grid-template-columns: 1fr 1fr;
   gap: 20px;
+}
+/* Single accessible zone (e.g. a CRM-only or Designer-only user) — don't
+   stretch the lone tile across the full width. */
+.zones--single {
+  grid-template-columns: minmax(0, 720px);
+  justify-content: center;
 }
 .zone {
   position: relative;

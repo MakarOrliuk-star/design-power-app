@@ -22,6 +22,7 @@ datasource db {
 enum Role {
   ADMIN
   DESIGNER
+  CRM
 }
 
 model User {
@@ -39,6 +40,7 @@ model User {
   batches       Batch[]
   favorites     BrandFavorite[]
   itemFavorites ItemStyleFavorite[]
+  crmFavorites  CrmServiceFavorite[]
 
   @@index([email])
 }
@@ -108,6 +110,17 @@ model ItemStyleFavorite {
   user     User   @relation(fields: [userId], references: [id], onDelete: Cascade)
 
   @@id([userId, styleKey])
+}
+
+/// Per-user favorite CRM services. Services are a static front-end list (not DB
+/// rows), so this is keyed by a string serviceKey rather than an FK — mirrors
+/// ItemStyleFavorite. Valid keys are enforced in the route, not the schema.
+model CrmServiceFavorite {
+  userId     String
+  serviceKey String
+  user       User   @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@id([userId, serviceKey])
 }
 
 model Theme {

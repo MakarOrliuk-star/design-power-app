@@ -71,7 +71,7 @@ adminRouter.get("/users", async (_req: Request, res: Response) => {
 });
 
 const patchUserSchema = z.object({
-  role: z.enum(["ADMIN", "DESIGNER"]).optional(),
+  role: z.enum(["ADMIN", "DESIGNER", "CRM"]).optional(),
   isActive: z.boolean().optional(),
 });
 
@@ -89,14 +89,14 @@ adminRouter.patch("/users/:id", async (req: Request, res: Response) => {
 
   // Guard against self-lockout: an admin can't demote or deactivate themselves.
   if (id === req.user!.sub) {
-    if (parsed.data.role === "DESIGNER" || parsed.data.isActive === false) {
+    if ((parsed.data.role !== undefined && parsed.data.role !== "ADMIN") || parsed.data.isActive === false) {
       res.status(400).json({ error: "cannot_modify_self" });
       return;
     }
   }
 
   // Build the update payload without explicit `undefined` (exactOptionalPropertyTypes).
-  const data: { role?: "ADMIN" | "DESIGNER"; isActive?: boolean } = {};
+  const data: { role?: "ADMIN" | "DESIGNER" | "CRM"; isActive?: boolean } = {};
   if (parsed.data.role !== undefined) data.role = parsed.data.role;
   if (parsed.data.isActive !== undefined) data.isActive = parsed.data.isActive;
 
