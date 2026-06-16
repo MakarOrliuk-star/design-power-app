@@ -7,8 +7,13 @@ import {
 export const calculatorService = {
   
   async sendSlackNotification(message: string, title = "🚨 Alert"): Promise<void> {
-    const token = process.env.SLACK_BOT_TOKEN || 'xoxb-9663459413845-9843441708145-Vyx2wRxtQa0RyuWR6OoUaQKN';
-    const channel = process.env.SLACK_CHANNEL_ID || 'C09QHDWQ3C4';
+    const token = process.env.SLACK_BOT_TOKEN;
+    const channel = process.env.SLACK_CHANNEL_ID;
+
+    if (!token || !channel) {
+      console.error("❌ Slack configuration missing in environment variables");
+      return;
+    }
 
     try {
       await globalThis.fetch('https://slack.com/api/chat.postMessage', {
@@ -51,7 +56,12 @@ export const calculatorService = {
   },
 
   async fetchCryptoRates(codes: string[]): Promise<void> {
-    const apiKey = process.env.CRYPTO_COMPARE_API_KEY || '87fb8cde09a1d645db2fa6035bb0da9724100e9e1349edd155ceeeb27ddb3a0c';
+    const apiKey = process.env.CRYPTO_COMPARE_API_KEY;
+
+    if (!apiKey) {
+      console.error("❌ CryptoCompare API key missing in environment variables");
+      return;
+    }
     
     for (const code of codes) {
       if (code === 'BNBSC') continue;
@@ -103,13 +113,10 @@ export const calculatorService = {
     const allCurrencies: any[] = [];
     const currencyJsonData: Record<string, string> = {};
 
-    // 🌟 Фикс TS: явно приводим ключи к типу keyof typeof CURRENCY_DATA
     (Object.keys(CURRENCY_DATA) as Array<keyof typeof CURRENCY_DATA>).sort().forEach(c => {
       const d = CURRENCY_DATA[c];
-
       if (!d) return;
 
-      
       const isCrypto = CRYPTO_CODES.includes(c);
       const forceBlue = ALWAYS_FORCE_BLUE.includes(c);
       
