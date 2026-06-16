@@ -83,6 +83,12 @@ const favoriteServices = computed(() =>
   SERVICES.filter((s) => !s.soon && crm.isFavorite(s.key)),
 );
 
+// "Все сервисы" excludes whatever is already pinned to Избранное, so a
+// favorited service isn't shown twice on the page.
+const otherServices = computed(() =>
+  SERVICES.filter((s) => !(!s.soon && crm.isFavorite(s.key))),
+);
+
 function openService(s: Service) {
   if (s.soon) return; // soon tiles are not clickable
   activeService.value = s.key as ServiceKey;
@@ -199,11 +205,11 @@ onMounted(() => {
           </div>
         </section>
 
-        <section class="services-section">
+        <section v-if="otherServices.length" class="services-section">
           <h2 class="services-section__title">Все сервисы</h2>
           <div class="tiles-grid">
             <article
-              v-for="s in SERVICES"
+              v-for="s in otherServices"
               :key="s.key"
               class="tile-card"
               :class="{ 'tile-card--soon': s.soon }"
