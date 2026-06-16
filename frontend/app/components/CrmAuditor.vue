@@ -340,13 +340,20 @@ async function executeAuditPipeline(urlList) {
               logs.value.push(`<span class="log-time">>></span> ${parsed.msg}`);
               progress.value = parsed.percent;
             } else if (parsed.type === 'done') {
-              finalHtml.value = parsed.html;
-              progress.value = 100;
-              logs.value.push(`<span class="log-success">>> ✅ Document composition finalized successfully. Output operational.</span>`);
-              isLoading.value = false;
-            } else if (parsed.type === 'error') {
-              logs.value.push(`<span class="log-err">>> ❌ Remote execution exception: ${parsed.msg}</span>`);
-              isLoading.value = false;
+              // Execute transactional step 2 download to pull the massive file over clean HTTP
+              try {
+                logs.value.push(`<span class="log-time">>></span> Downloading full analysis matrix document safely...`);
+                const fileResponse = await fetch(`/api/auditor/download/${parsed.report_id}`);
+                if (!fileResponse.ok) throw new Error("File transmission interface fault");
+                
+                finalHtml.value = await fileResponse.text();
+                progress.value = 100;
+                logs.value.push(`<span class="log-success">>> ✅ Document composition finalized successfully. Output operational.</span>`);
+              } catch (downloadErr) {
+                logs.value.push(`<span class="log-err">>> ❌ Failed to compile download response payload: ${downloadErr.message}</span>`);
+              } finally {
+                isLoading.value = false;
+              }
             }
           } catch (e) {
             console.error("Payload chunk serialization error parsing strategy handler:", e);

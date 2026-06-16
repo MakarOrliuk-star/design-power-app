@@ -4,13 +4,17 @@ import re
 import requests
 import sys
 from fastapi import FastAPI, HTTPException
-from fastapi.responses import StreamingResponse
+from fastapi.responses import StreamingResponse, HTMLResponse
 from pydantic import BaseModel
 from typing import List, Optional
 from playwright.sync_api import sync_playwright
 from smartico_core_prod import SmarticoCore
+from uuid import uuid4
 
 app = FastAPI(title="Smartico Auditor Worker API")
+
+# Global in-memory storage cache for pre-compiled heavy HTML reports
+REPORTS_CACHE = {}
 
 class AuditRequest(BaseModel):
     urls: List[str]
@@ -60,8 +64,8 @@ def search_keyword_in_dict(obj, keyword, path=""):
 @app.post("/audit/stream")
 async def audit_stream(request: AuditRequest):
     """
-    Processes single or multiple campaign URLs and streams live execution progress logs.
-    Yields final unified interactive HTML report on completion.
+    Processes campaign URLs and streams live progress logs.
+    Saves the final heavy HTML report to cache and yields a secure token ID.
     """
     def event_generator():
         try:
@@ -180,7 +184,7 @@ async def audit_stream(request: AuditRequest):
                         elif n_type == "Condition Check":
                             c_dict = det.get("conditions_n_readable") or det.get("rule") or {}
                             cond_str = c_dict.get("conditions_readable") or c_dict.get("readable") or ""
-                            if not cond_str and c_dict.get("conditions"):
+                            if not font_str and c_dict.get("conditions"):
                                 translated = core.resolve_conditions_async(c_dict.get("conditions"))
                                 if translated: cond_str = translated
                             if cond_str and "()" in cond_str:
@@ -284,14 +288,28 @@ async def audit_stream(request: AuditRequest):
                     
                 combined_html += '</div>'
                 browser.close()
-                print(" [WORKER] Pipeline execution completed successfully.", flush=True)
                 
-            yield f"data: {json.dumps({'type': 'done', 'html': combined_html})}\n\n"
+                # Securely offload and map compiled heavy report directly inside memory storage 
+                report_id = f"rep_{uuid4().hex[:12]}"
+                REPORTS_CACHE[report_id] = combined_html
+                print(f" [WORKER] Saved heavy report to cache slot ID: {report_id}", flush=True)
+                
+            yield f"data: {json.dumps({'type': 'done', 'report_id': report_id})}\n\n"
         except Exception as e:
             print(f" [CRITICAL WORKER ERROR] {str(e)}", flush=True)
             yield f"data: {json.dumps({'type': 'error', 'msg': str(e)})}\n\n"
 
     return StreamingResponse(event_generator(), media_type="text/event-stream")
+
+@app.get("/audit/download/{report_id}")
+async def audit_download(report_id: str):
+    """
+    Serves compiled large HTML matrix payloads securely over transactional HTTP channel protocols.
+    """
+    html_content = REPORTS_CACHE.get(report_id)
+    if not html_content:
+        raise HTTPException(status_code=404, detail="Requested report token expired or missing from cache storage")
+    return HTMLResponse(content=html_content)
 
 @app.post("/brands/search-campaigns")
 async def brands_search_campaigns(request: BrandSearchRequest):
