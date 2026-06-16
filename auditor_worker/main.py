@@ -184,7 +184,7 @@ async def audit_stream(request: AuditRequest):
                         elif n_type == "Condition Check":
                             c_dict = det.get("conditions_n_readable") or det.get("rule") or {}
                             cond_str = c_dict.get("conditions_readable") or c_dict.get("readable") or ""
-                            if not font_str and c_dict.get("conditions"):
+                            if not cond_str and c_dict.get("conditions"):
                                 translated = core.resolve_conditions_async(c_dict.get("conditions"))
                                 if translated: cond_str = translated
                             if cond_str and "()" in cond_str:
@@ -289,10 +289,11 @@ async def audit_stream(request: AuditRequest):
                 combined_html += '</div>'
                 browser.close()
                 
-                # Securely offload and map compiled heavy report directly inside memory storage 
+                # Offload compiled HTML report into RAM storage and return short key token
                 report_id = f"rep_{uuid4().hex[:12]}"
                 REPORTS_CACHE[report_id] = combined_html
                 print(f" [WORKER] Saved heavy report to cache slot ID: {report_id}", flush=True)
+                print(" [WORKER] Pipeline execution completed successfully.", flush=True)
                 
             yield f"data: {json.dumps({'type': 'done', 'report_id': report_id})}\n\n"
         except Exception as e:
@@ -304,7 +305,7 @@ async def audit_stream(request: AuditRequest):
 @app.get("/audit/download/{report_id}")
 async def audit_download(report_id: str):
     """
-    Serves compiled large HTML matrix payloads securely over transactional HTTP channel protocols.
+    Serves compiled large HTML report payloads securely over standard HTTP protocol.
     """
     html_content = REPORTS_CACHE.get(report_id)
     if not html_content:

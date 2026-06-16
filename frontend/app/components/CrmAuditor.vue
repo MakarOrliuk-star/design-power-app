@@ -288,7 +288,6 @@ watch(logs, async () => {
 }, { deep: true });
 
 // Core stream-oriented executor engine pointing directly to local Node.js proxy routers
-// Core stream-oriented executor engine pointing directly to local Node.js proxy routers
 async function executeAuditPipeline(urlList) {
   isLoading.value = true;
   progress.value = 0;
@@ -296,7 +295,6 @@ async function executeAuditPipeline(urlList) {
   finalHtml.value = '';
   tableResults.value = null;
 
-  // Resolve matching environment credentials key based on the primary targeted link
   const targetEnv = extractEnvFromUrl(urlList[0]);
   const activeToken = savedTokens.value[targetEnv];
 
@@ -326,15 +324,13 @@ async function executeAuditPipeline(urlList) {
     let streamBuffer = '';
     let reportIdToDownload = null;
 
-    // Step 1: Read the execution progress stream until completion token is acquired
+    // Step 1: Read the progress stream logs until complete token is acquired
     while (true) {
       const { done, value } = await reader.read();
       if (done) break;
 
       streamBuffer += decoder.decode(value, { stream: true });
       const lines = streamBuffer.split('\n');
-      
-      // Keep the last incomplete line fragment inside the buffer pool
       streamBuffer = lines.pop() || '';
 
       for (const line of lines) {
@@ -349,23 +345,21 @@ async function executeAuditPipeline(urlList) {
               progress.value = parsed.percent;
             } else if (parsed.type === 'done') {
               reportIdToDownload = parsed.report_id;
-              break; // Break the lines parsing loop
+              break;
             } else if (parsed.type === 'error') {
               logs.value.push(`<span class="log-err">>> ❌ Remote execution exception: ${parsed.msg}</span>`);
               isLoading.value = false;
               return;
             }
           } catch (e) {
-            console.error("Payload chunk serialization error parsing strategy handler:", e);
+            console.error("Payload chunk serialization error parsing handler:", e);
           }
         }
       }
-      
-      // Break the connection reader loop before firing a secondary nested HTTP transaction
       if (reportIdToDownload) break;
     }
 
-    // Step 2: Execute transactional download safely OUTSIDE of the streaming lifecycle context
+    // Step 2: Request compiled heavy HTML output outside of stream context
     if (reportIdToDownload) {
       try {
         logs.value.push(`<span class="log-time">>></span> Downloading full analysis matrix document safely...`);
