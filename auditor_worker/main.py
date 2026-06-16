@@ -66,13 +66,12 @@ def search_keyword_in_dict(obj, keyword, path=""):
 async def audit_stream(request: AuditRequest):
     """
     Processes campaign URLs securely in an isolated OS thread to prevent Playwright deadlocks.
-    Streams live progress logs via asyncio.Queue and saves the final HTML to RAM cache.
+    Streams live progress logs via asyncio.Queue with SSE Heartbeats to prevent cloud timeouts.
     """
     queue = asyncio.Queue()
     loop = asyncio.get_running_loop()
 
     def sync_playwright_worker():
-        # Helper to push log events safely across threads
         def send_event(evt_dict):
             asyncio.run_coroutine_threadsafe(queue.put(f"data: {json.dumps(evt_dict)}\n\n"), loop)
         
@@ -82,12 +81,11 @@ async def audit_stream(request: AuditRequest):
                 send_event({'type': 'error', 'msg': 'No valid URLs provided'})
                 return
 
-            print(" [WORKER] Initializing headless Chromium context in isolated thread...", flush=True)
+            print(" [WORKER] Initializing headless Chromium context...", flush=True)
             send_event({'type': 'progress', 'percent': 5, 'msg': 'Initializing secure headless browser environment...'})
             
             combined_html = '<div style="background: #f8fafc; padding: 20px; font-family: sans-serif;"><h1 style="text-align:center; color:#1e293b; margin-bottom: 30px;">Unified Smartico Campaign Audit Report</h1>'
             
-            # This entire block now strictly lives inside one unbreakable OS thread
             with sync_playwright() as p:
                 browser = p.chromium.launch(
                     headless=True,
@@ -121,8 +119,6 @@ async def audit_stream(request: AuditRequest):
                     drive_host = env_match.group(0) if env_match else "drive.smartico.ai"
                     
                     core = SmarticoCore(context, request.token, brand_id, boapi_host, drive_host)
-                    
-                    # 🚨 ANTI-BOT SHIELD
                     core.headers["user-agent"] = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36"
                     
                     print(" [WORKER] Fetching campaign metadata...", flush=True)
@@ -149,9 +145,7 @@ async def audit_stream(request: AuditRequest):
                     transitions_data = core.get_campaign_transitions(camp_id)
                     
                     report_data = {
-                        "brand_id": brand_id,
-                        "audit_period": audit_period,
-                        "expected_data": None,
+                        "brand_id": brand_id, "audit_period": audit_period, "expected_data": None,
                         "general_main": gen_data if "head" not in current_url else {},
                         "general_pop": gen_data if "head" in current_url else {},
                         "segment_main": seg_data if "head" not in current_url else {},
@@ -159,23 +153,21 @@ async def audit_stream(request: AuditRequest):
                         "context_status_main": context_status if "head" not in current_url else None,
                         "context_status_pop": context_status if "head" in current_url else None,
                         "interactive_flow": core.build_flow_html(f_nodes, f_trans),
-                        "flow_links": [],
-                        "mc_registry": [],
-                        "condition_registry": [],
-                        "settings_registry": [],
-                        "deep_analysis": [],
-                        "labels_data": {}
+                        "flow_links": [], "mc_registry": [], "condition_registry": [],
+                        "settings_registry": [], "deep_analysis": [], "labels_data": {}
                     }
                     
                     nodes_by_id = {str(n["id"]): n for n in nodes}
                     TARGET_NODES = {50: "Email", 40: "Push", 60: "SMS", 30: "Pop-up", 203: "Multi-Check", 200: "WebHook", 201: "Condition Check"}
                     all_other_labels = set()
                     
+                    # 🚨 ANTI-API SPAM CACHE: Store rendered emails here so we don't fetch/render them twice
+                    rendered_emails_cache = {}
+                    
                     print(f" [WORKER] Parsing {len(nodes)} logic blocks...", flush=True)
                     for node in nodes:
                         type_id = node.get("type_id")
-                        if type_id not in TARGET_NODES:
-                            continue
+                        if type_id not in TARGET_NODES: continue
                         n_type = TARGET_NODES[type_id]
                         n_name = node.get("name", "Unknown")
                         det = node.get("details", {})
@@ -210,8 +202,7 @@ async def audit_stream(request: AuditRequest):
                             timeout_str = "N/A"
                             if n_type == "Pop-up":
                                 timeout_ms = det.get("delivery_timeout_ms", 0)
-                                if timeout_ms > 0:
-                                    timeout_str = f"{timeout_ms // 60000} minutes"
+                                if timeout_ms > 0: timeout_str = f"{timeout_ms // 60000} minutes"
 
                             report_data["settings_registry"].append({
                                 "name": n_name, "type": n_type, "caps": caps, "optout": optout,
@@ -236,15 +227,23 @@ async def audit_stream(request: AuditRequest):
                                 
                                 email_previews = []
                                 if n_type == "Email" and r_id:
-                                    mail_details = core.get_email_details(r_id)
-                                    full_raw_html = mail_details.get("body", "")
-                                    if full_raw_html:
-                                        qa_personas = core.get_qa_personas()
-                                        for desc, uid in qa_personas.items():
-                                            pers_html = core.get_personalized_email_preview(full_raw_html, uid)
-                                            b64_img = core.render_email_to_base64(pers_html) if pers_html else None
-                                            if b64_img:
-                                                email_previews.append({"desc": desc, "uid": uid, "b64": b64_img})
+                                    if r_id in rendered_emails_cache:
+                                        print(f" [WORKER] Using cached email previews for node #{r_id}", flush=True)
+                                        send_event({'type': 'progress', 'percent': 60, 'msg': f'♻️ Loading cached high-res renders for Email #{r_id}...'})
+                                        email_previews = rendered_emails_cache[r_id]
+                                    else:
+                                        mail_details = core.get_email_details(r_id)
+                                        full_raw_html = mail_details.get("body", "")
+                                        if full_raw_html:
+                                            qa_personas = core.get_qa_personas()
+                                            for desc, uid in qa_personas.items():
+                                                print(f" [WORKER] Rendering email for {desc} ({uid})...", flush=True)
+                                                send_event({'type': 'progress', 'percent': 60, 'msg': f'📸 Rendering layout screenshot for persona: {desc}...'})
+                                                pers_html = core.get_personalized_email_preview(full_raw_html, uid)
+                                                b64_img = core.render_email_to_base64(pers_html) if pers_html else None
+                                                if b64_img:
+                                                    email_previews.append({"desc": desc, "uid": uid, "b64": b64_img})
+                                            rendered_emails_cache[r_id] = email_previews
                                 
                                 elif n_type == "Push" and r_id:
                                     ext_details = core.get_push_details(r_id)
@@ -274,6 +273,8 @@ async def audit_stream(request: AuditRequest):
                                 })
                                 
                     print(f" [WORKER] Deep searching and resolved for {len(all_other_labels)} smartico macros...", flush=True)
+                    send_event({'type': 'progress', 'percent': 85, 'msg': f'🔍 Deep searching {len(all_other_labels)} found macros across database...'})
+                    
                     labels_store = {}
                     for lbl in all_other_labels:
                         if not core.is_ignored_label(lbl):
@@ -284,6 +285,7 @@ async def audit_stream(request: AuditRequest):
                     report_data["labels_data"] = labels_store
                     
                     print(" [WORKER] Generating HTML payload...", flush=True)
+                    send_event({'type': 'progress', 'percent': 95, 'msg': f'✨ Compiling interactive HTML matrix report...'})
                     single_campaign_report = core.generate_html_report(report_data)
                     
                     combined_html += f'''
@@ -311,25 +313,27 @@ async def audit_stream(request: AuditRequest):
             print(f" [CRITICAL WORKER ERROR] {str(e)}", flush=True)
             send_event({'type': 'error', 'msg': str(e)})
         finally:
-            # Send a termination signal to close the HTTP stream generator
             asyncio.run_coroutine_threadsafe(queue.put(None), loop)
 
-    # Launch the heavy blocking Playwright job in a dedicated isolated daemon thread
     threading.Thread(target=sync_playwright_worker, daemon=True).start()
 
     async def async_event_generator():
         while True:
-            data = await queue.get()
-            if data is None:
-                break
-            yield data
+            try:
+                # 🚨 NETWORK FIX: Emit empty comment pings every 15 seconds so cloud proxies don't drop the connection
+                data = await asyncio.wait_for(queue.get(), timeout=15.0)
+                if data is None:
+                    break
+                yield data
+            except asyncio.TimeoutError:
+                yield ": keepalive\n\n"
 
     return StreamingResponse(async_event_generator(), media_type="text/event-stream")
 
 @app.get("/audit/download/{report_id}")
 def audit_download(report_id: str):
     """
-    Serves compiled large HTML report payloads securely over standard HTTP protocol.
+    Serves compiled HTML report payloads securely over standard HTTP protocol.
     """
     html_content = REPORTS_CACHE.get(report_id)
     if not html_content:
