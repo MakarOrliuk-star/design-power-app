@@ -101,24 +101,6 @@ onMounted(() => {
 <template>
   <div class="crm">
     <header class="bar">
-      <!-- Greeting (left) -->
-      <div class="card card--user">
-        <span class="bar__greeting">Добро пожаловать, <b>{{ displayName }}</b></span>
-        <button
-          v-if="!auth.isCrm"
-          class="user__logout"
-          type="button"
-          aria-label="Выйти"
-          title="Выйти"
-          @click="logout"
-        >
-          <svg viewBox="0 0 24 24" width="18" height="18" fill="none">
-            <path d="M15 4H7a2 2 0 00-2 2v12a2 2 0 002 2h8" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" />
-            <path d="M11 12h9m0 0l-3.5-3.5M20 12l-3.5 3.5" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" />
-          </svg>
-        </button>
-      </div>
-
       <!-- Brand icon (left) → back to the CRM dashboard home -->
       <button
         class="card card--logo"
@@ -162,12 +144,30 @@ onMounted(() => {
         </button>
       </div>
 
-      <!-- Title (right) -->
+      <!-- Centered title -->
       <div class="card card--title">
         <h1 class="bar__title">
           CRM <span class="bar__power">Power</span> <span class="bar__brand">Makaronka AI</span>
           <span v-if="activeService" class="bar__breadcrumbs"> / {{ SERVICE_TITLES[activeService] }}</span>
         </h1>
+      </div>
+
+      <!-- Greeting + logout (right) -->
+      <div class="card card--user">
+        <span class="bar__greeting">Добро пожаловать, <b>{{ displayName }}</b></span>
+        <button
+          v-if="!auth.isCrm"
+          class="user__logout"
+          type="button"
+          aria-label="Выйти"
+          title="Выйти"
+          @click="logout"
+        >
+          <svg viewBox="0 0 24 24" width="18" height="18" fill="none">
+            <path d="M15 4H7a2 2 0 00-2 2v12a2 2 0 002 2h8" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" />
+            <path d="M11 12h9m0 0l-3.5-3.5M20 12l-3.5 3.5" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" />
+          </svg>
+        </button>
       </div>
     </header>
 
@@ -305,10 +305,10 @@ onMounted(() => {
   color: var(--color-stop-hover);
 }
 
-/* title (right) */
+/* centered title */
 .card--title {
   flex: 1;
-  justify-content: flex-end;
+  justify-content: center;
   min-width: 0;
 }
 .bar__title {
@@ -316,7 +316,7 @@ onMounted(() => {
   font-size: 18px;
   font-weight: 600;
   color: var(--color-text);
-  text-align: right;
+  text-align: center;
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
