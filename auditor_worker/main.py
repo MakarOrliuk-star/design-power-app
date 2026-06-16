@@ -3,6 +3,7 @@ import json
 import re
 import requests
 import sys
+import threading
 from fastapi import FastAPI, HTTPException
 from fastapi.responses import StreamingResponse, HTMLResponse
 from pydantic import BaseModel
@@ -13,6 +14,7 @@ from uuid import uuid4
 
 app = FastAPI(title="Smartico Auditor Worker API")
 
+# Global in-memory storage cache for pre-compiled heavy HTML reports
 REPORTS_CACHE = {}
 
 class AuditRequest(BaseModel):
@@ -60,25 +62,32 @@ def search_keyword_in_dict(obj, keyword, path=""):
             matches.append({"path": path, "value": val_str})
     return matches
 
-# 🚨 CHANGED: Removed 'async' keyword to execute sync Playwright code in a separate background threadpool
 @app.post("/audit/stream")
-def audit_stream(request: AuditRequest):
+async def audit_stream(request: AuditRequest):
     """
-    Processes campaign URLs and streams live progress logs.
-    Saves the final heavy HTML report to cache and yields a secure token ID.
+    Processes campaign URLs securely in an isolated OS thread to prevent Playwright deadlocks.
+    Streams live progress logs via asyncio.Queue and saves the final HTML to RAM cache.
     """
-    def event_generator():
+    queue = asyncio.Queue()
+    loop = asyncio.get_running_loop()
+
+    def sync_playwright_worker():
+        # Helper to push log events safely across threads
+        def send_event(evt_dict):
+            asyncio.run_coroutine_threadsafe(queue.put(f"data: {json.dumps(evt_dict)}\n\n"), loop)
+        
         try:
             urls = [u.strip() for u in request.urls if u.strip()]
             if not urls:
-                yield f"data: {json.dumps({'type': 'error', 'msg': 'No valid URLs provided'})}\n\n"
+                send_event({'type': 'error', 'msg': 'No valid URLs provided'})
                 return
 
-            print(" [WORKER] Initializing headless Chromium context...", flush=True)
-            yield f"data: {json.dumps({'type': 'progress', 'percent': 5, 'msg': 'Initializing secure headless browser environment...'})}\n\n"
+            print(" [WORKER] Initializing headless Chromium context in isolated thread...", flush=True)
+            send_event({'type': 'progress', 'percent': 5, 'msg': 'Initializing secure headless browser environment...'})
             
             combined_html = '<div style="background: #f8fafc; padding: 20px; font-family: sans-serif;"><h1 style="text-align:center; color:#1e293b; margin-bottom: 30px;">Unified Smartico Campaign Audit Report</h1>'
             
+            # This entire block now strictly lives inside one unbreakable OS thread
             with sync_playwright() as p:
                 browser = p.chromium.launch(
                     headless=True,
@@ -93,14 +102,14 @@ def audit_stream(request: AuditRequest):
                 total_urls = len(urls)
                 for index, current_url in enumerate(urls):
                     print(f" [WORKER] Processing campaign {index + 1}/{total_urls}: {current_url}", flush=True)
-                    yield f"data: {json.dumps({'type': 'progress', 'percent': int(10 + (index / total_urls) * 80), 'msg': f'Processing campaign {index + 1}/{total_urls}: {current_url}'})}\n\n"
+                    send_event({'type': 'progress', 'percent': int(10 + (index / total_urls) * 80), 'msg': f'Processing campaign {index + 1}/{total_urls}: {current_url}'})
                     
                     brand_match = re.search(r"smartico\.ai/(\d+)", current_url)
                     camp_match = re.search(r"(?:scheduled|head)/(\d+)", current_url)
                     
                     if not brand_match or not camp_match:
                         print(f" [WORKER] Skip invalid URL: {current_url}", flush=True)
-                        yield f"data: {json.dumps({'type': 'progress', 'percent': int(10 + (index / total_urls) * 80), 'msg': f'⚠️ Invalid Smartico URL skipped: {current_url}'})}\n\n"
+                        send_event({'type': 'progress', 'percent': int(10 + (index / total_urls) * 80), 'msg': f'⚠️ Invalid Smartico URL skipped: {current_url}'})
                         continue
 
                     brand_id = brand_match.group(1)
@@ -113,14 +122,14 @@ def audit_stream(request: AuditRequest):
                     
                     core = SmarticoCore(context, request.token, brand_id, boapi_host, drive_host)
                     
-                    # 🚨 ANTI-BOT SHIELD: Inject real browser user-agent into headers to bypass Cloudflare drops
+                    # 🚨 ANTI-BOT SHIELD
                     core.headers["user-agent"] = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36"
                     
                     print(" [WORKER] Fetching campaign metadata...", flush=True)
                     gen_data, seg_data = core.get_campaign_metadata(camp_id, current_url)
                     if not gen_data:
                         print(f" [WORKER] Access denied or HTTP error for campaign {camp_id}", flush=True)
-                        yield f"data: {json.dumps({'type': 'error', 'msg': f'Unauthorized or inaccessible Campaign ID {camp_id}'})}\n\n"
+                        send_event({'type': 'error', 'msg': f'Unauthorized or inaccessible Campaign ID {camp_id}'})
                         browser.close()
                         return
                         
@@ -292,18 +301,30 @@ def audit_stream(request: AuditRequest):
                 combined_html += '</div>'
                 browser.close()
                 
-                # Offload compiled HTML report into RAM storage and return short key token
                 report_id = f"rep_{uuid4().hex[:12]}"
                 REPORTS_CACHE[report_id] = combined_html
                 print(f" [WORKER] Saved heavy report to cache slot ID: {report_id}", flush=True)
+                send_event({'type': 'done', 'report_id': report_id})
                 print(" [WORKER] Pipeline execution completed successfully.", flush=True)
-                
-            yield f"data: {json.dumps({'type': 'done', 'report_id': report_id})}\n\n"
+
         except Exception as e:
             print(f" [CRITICAL WORKER ERROR] {str(e)}", flush=True)
-            yield f"data: {json.dumps({'type': 'error', 'msg': str(e)})}\n\n"
+            send_event({'type': 'error', 'msg': str(e)})
+        finally:
+            # Send a termination signal to close the HTTP stream generator
+            asyncio.run_coroutine_threadsafe(queue.put(None), loop)
 
-    return StreamingResponse(event_generator(), media_type="text/event-stream")
+    # Launch the heavy blocking Playwright job in a dedicated isolated daemon thread
+    threading.Thread(target=sync_playwright_worker, daemon=True).start()
+
+    async def async_event_generator():
+        while True:
+            data = await queue.get()
+            if data is None:
+                break
+            yield data
+
+    return StreamingResponse(async_event_generator(), media_type="text/event-stream")
 
 @app.get("/audit/download/{report_id}")
 def audit_download(report_id: str):
