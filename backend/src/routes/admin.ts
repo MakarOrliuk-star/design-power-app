@@ -320,3 +320,86 @@ adminRouter.post("/upload", async (req: Request, res: Response) => {
     res.status(502).json({ error: up.error ?? "upload_failed" });
   }
 });
+
+// ============================================================
+// Smartico brands (Unique-Image-Smartico maintenance)
+// Canonical brand_id list used to normalize ZIP folder names. CRUD for the CRM
+// service; seeded from the legacy SMARTICO_BRANDS list.
+// ============================================================
+
+adminRouter.get("/smartico-brands", async (_req: Request, res: Response) => {
+  const smarticoBrands = await prisma.smarticoBrand.findMany({ orderBy: { name: "asc" } });
+  res.json({ smarticoBrands });
+});
+
+const smarticoBrandSchema = z.object({
+  name: z.string().min(1).max(120).transform((s) => s.trim()),
+});
+
+adminRouter.post("/smartico-brands", async (req: Request, res: Response) => {
+  const parsed = smarticoBrandSchema.safeParse(req.body);
+  if (!parsed.success) {
+    res.status(400).json({ error: "invalid_body", details: parsed.error.flatten().fieldErrors });
+    return;
+  }
+  const { name } = parsed.data;
+  if (!name) {
+    res.status(400).json({ error: "name_required" });
+    return;
+  }
+
+  const existing = await prisma.smarticoBrand.findUnique({ where: { name }, select: { id: true } });
+  if (existing) {
+    res.status(409).json({ error: "already_exists" });
+    return;
+  }
+
+  const created = await prisma.smarticoBrand.create({ data: { name } });
+  res.status(201).json({ smarticoBrand: created });
+});
+
+adminRouter.patch("/smartico-brands/:id", async (req: Request, res: Response) => {
+  const id = req.params.id;
+  if (typeof id !== "string" || !id) {
+    res.status(400).json({ error: "id_required" });
+    return;
+  }
+  const parsed = smarticoBrandSchema.safeParse(req.body);
+  if (!parsed.success) {
+    res.status(400).json({ error: "invalid_body", details: parsed.error.flatten().fieldErrors });
+    return;
+  }
+  const { name } = parsed.data;
+  if (!name) {
+    res.status(400).json({ error: "name_required" });
+    return;
+  }
+
+  // Reject a rename that would collide with a different existing brand.
+  const clash = await prisma.smarticoBrand.findUnique({ where: { name }, select: { id: true } });
+  if (clash && clash.id !== id) {
+    res.status(409).json({ error: "already_exists" });
+    return;
+  }
+
+  try {
+    const updated = await prisma.smarticoBrand.update({ where: { id }, data: { name } });
+    res.json({ smarticoBrand: updated });
+  } catch {
+    res.status(404).json({ error: "not_found" });
+  }
+});
+
+adminRouter.delete("/smartico-brands/:id", async (req: Request, res: Response) => {
+  const id = req.params.id;
+  if (typeof id !== "string" || !id) {
+    res.status(400).json({ error: "id_required" });
+    return;
+  }
+  try {
+    await prisma.smarticoBrand.delete({ where: { id } });
+    res.json({ ok: true });
+  } catch {
+    res.status(404).json({ error: "not_found" });
+  }
+});

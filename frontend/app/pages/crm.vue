@@ -9,7 +9,7 @@ const { theme, toggle: toggleTheme } = useTheme();
 
 // Only services with real logic are openable (and favoritable). The "soon"
 // tiles are disabled placeholders — see SERVICES below.
-type ServiceKey = "calculator" | "bonuscalc" | "auditor";
+type ServiceKey = "calculator" | "bonuscalc" | "auditor" | "smartico";
 const activeService = ref<null | ServiceKey>(null);
 
 interface Service {
@@ -65,8 +65,8 @@ const SERVICES: Service[] = [
     desc: "Генерация уникальных изображений под кампании Smartico без ручной обработки.",
     icon: "🖼️",
     iconBg: "#fdf2f8",
-    footer: "Скоро",
-    soon: true,
+    footer: "Запустить сервис →",
+    soon: false,
   },
 ];
 
@@ -74,6 +74,7 @@ const SERVICE_TITLES: Record<ServiceKey, string> = {
   calculator: "Валютный калькулятор",
   bonuscalc: "Калькулятор Бонусов",
   auditor: "Массовый аудит",
+  smartico: "Unique Image Smartico",
 };
 
 const displayName = computed(() => auth.user?.name || auth.user?.email || "");
@@ -248,6 +249,7 @@ onMounted(() => {
           <CrmCalculator v-if="activeService === 'calculator'" />
           <CrmBonusCalculator v-else-if="activeService === 'bonuscalc'" />
           <CrmAuditor v-else-if="activeService === 'auditor'" />
+          <CrmSmartico v-else-if="activeService === 'smartico'" />
         </div>
       </div>
     </div>

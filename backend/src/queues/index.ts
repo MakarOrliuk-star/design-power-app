@@ -11,11 +11,18 @@ import { env } from "../env.js";
 
 export const PERSON_QUEUE = "person";
 export const ITEM_QUEUE = "item";
+export const SMARTICO_QUEUE = "smartico";
 
 export interface GenerationJobData {
   generationId: string;
   batchId: string;
   aspectRatio?: string; // fal aspect_ratio (Person); durable across retries
+}
+
+export interface SmarticoJobData {
+  token: string; // temp-storage token for the uploaded ZIP
+  zipName: string; // Cloudinary folder name (ZIP name without .zip)
+  selectedTypes: string[]; // canonical TypeKeys to generate
 }
 
 let _connection: Redis | null = null;
@@ -56,4 +63,24 @@ export function getItemQueue(): Queue<GenerationJobData, void, "generate"> {
     });
   }
   return _itemQueue;
+}
+
+// Smartico jobs keep their full result as the BullMQ return value (read back by
+// the polling endpoint), so they retain it longer and don't retry on partial
+// image failures (those are reported in the result's stats instead).
+const smarticoJobOptions = {
+  attempts: 1,
+  removeOnComplete: { age: 3600, count: 500 },
+  removeOnFail: { age: 3600, count: 500 },
+};
+
+let _smarticoQueue: Queue<SmarticoJobData, unknown, "generate"> | null = null;
+export function getSmarticoQueue(): Queue<SmarticoJobData, unknown, "generate"> {
+  if (!_smarticoQueue) {
+    _smarticoQueue = new Queue<SmarticoJobData, unknown, "generate">(SMARTICO_QUEUE, {
+      connection: getBullConnection(),
+      defaultJobOptions: smarticoJobOptions,
+    });
+  }
+  return _smarticoQueue;
 }
