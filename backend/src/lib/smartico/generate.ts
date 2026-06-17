@@ -1,19 +1,5 @@
 import type { TypeKey, NormalizedBrand } from "./detect.js";
 
-/**
- * Smartico function generator (Stage 4). Verbatim port of the legacy GAS
- * `generateOutput`: turns the brand→type→locale URL map into ready-to-paste
- * Smartico function strings.
- *
- *  - One block per selected campaign type (so Pop-up_1 and Pop-up_2 yield two
- *    separate functions — TASK B1).
- *  - "All brands" is a cross-brand label: a single-URL block, not a function
- *    (legacy behaviour, kept — TASK C1).
- *  - Brands carrying both a default and a Korean image emit a locale-aware
- *    {default, KO} entry and switch the function to its localized branch.
- *  - Brand keys use the canonical Smartico name from the admin brand list.
- */
-
 export interface UrlSlot {
   default: string | null;
   KO: string | null;
