@@ -1,17 +1,5 @@
-/**
- * Seed the SmarticoBrand table from the legacy hardcoded SMARTICO_BRANDS list
- * (ported verbatim from the GAS "Zip folder.txt" component). These are the
- * canonical brand_id values the Smartico function maps against; admins maintain
- * the list from /admin afterwards.
- *
- * Idempotent (upsert by name) — safe to re-run. Dry-run by default; pass --apply
- * to write. Uses DATABASE_URL from backend/.env, same as the app:
- *   npx tsx scripts/seed-smartico-brands.ts          # preview
- *   npx tsx scripts/seed-smartico-brands.ts --apply  # write
- */
 import { prisma } from "../src/lib/prisma.js";
 
-// Full legacy SMARTICO_BRANDS list (order preserved for readability only).
 const SMARTICO_BRANDS = [
   "BrunoCasino", "NineCasino", "Memocasino", "Spinmacho", "Baxterbet",
   "Needforslots", "Rodeoslot", "Boomzino", "Honeybetz", "Playjonny",
