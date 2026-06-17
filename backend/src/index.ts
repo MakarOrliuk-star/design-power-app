@@ -8,9 +8,10 @@ import { authRouter } from "./routes/auth.js";
 import { adminRouter } from "./routes/admin.js";
 import { catalogRouter } from "./routes/catalog.js";
 import { generateRouter } from "./routes/generate.js";
-import { loadUser, requireAdmin, requireAuth } from "./middleware/auth.js";
+import { loadUser, requireAdmin, requireAuth, requireZone } from "./middleware/auth.js";
 import { calculatorRouter } from "./routes/calculator.js";
 import { auditorRouter } from "./routes/auditor.js";
+import { crmRouter } from "./routes/crm.js";
 
 assertApiProductionConfig();
 
@@ -32,10 +33,14 @@ app.get("/", (_req, res) => {
 app.use("/health", healthRouter);
 app.use("/auth", authRouter);
 app.use("/api/admin", loadUser, requireAdmin, adminRouter);
-app.use("/api/catalog", loadUser, requireAuth, catalogRouter);
-app.use("/api", loadUser, requireAuth, generateRouter);
-app.use("/api/calculator", loadUser, requireAuth, calculatorRouter);
-app.use("/api/auditor", loadUser, requireAuth, auditorRouter); 
+// Zone guards: Design (DESIGNER) vs CRM (CRM); ADMIN passes both (see requireZone).
+app.use("/api/catalog", loadUser, requireAuth, requireZone("DESIGNER"), catalogRouter);
+app.use("/api/calculator", loadUser, requireAuth, requireZone("CRM"), calculatorRouter);
+app.use("/api/auditor", loadUser, requireAuth, requireZone("CRM"), auditorRouter);
+app.use("/api/crm", loadUser, requireAuth, requireZone("CRM"), crmRouter);
+// Generic /api (generate) is a Design-zone route — keep it last so the more
+// specific prefixes above match first.
+app.use("/api", loadUser, requireAuth, requireZone("DESIGNER"), generateRouter);
 
 const server = app.listen(env.PORT, "0.0.0.0", () => {
   console.log(`Backend listening on http://0.0.0.0:${env.PORT} (${env.NODE_ENV})`);

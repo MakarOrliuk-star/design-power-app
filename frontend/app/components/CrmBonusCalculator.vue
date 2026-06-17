@@ -206,11 +206,14 @@ const hyResult = computed(() => {
   color: var(--color-text);
 }
 
+/* Три карточки всегда в один ряд и ужимаются по ширине экрана.
+   minmax(0, 1fr) разрешает колонкам сжиматься ниже контента — без
+   переноса и горизонтального скролла. */
 .calc-grid {
   display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
-  gap: 20px;
-  align-items: flex-start;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 16px;
+  align-items: stretch;
 }
 
 .calc-card {
