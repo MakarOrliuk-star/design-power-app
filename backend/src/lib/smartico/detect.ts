@@ -1,25 +1,5 @@
-/**
- * Smartico ZIP structure detector (Stage 2).
- *
- * Pure, side-effect-free parsing of a flat list of ZIP entry paths into a
- * brand → type → locale map. Supports BOTH archive layouts (TASK A1):
- *
- *   Legacy:  DES-XXXXX / Brand / file
- *            DES-XXXXX / Oscar brands / Brand / file        (sibling folders ignored)
- *            → type detected from the FILENAME token (email / push / pop-up)
- *
- *   New:     Brand / Name / CRM / {email|push|pop-up_1|pop-up_2|subitem} / file
- *            → only the CRM subtree is read; CONTENT/SMARTICO siblings ignored;
- *              type = the leaf folder name under CRM; `subitem` ignored.
- *
- * Locale: "KO" when the word "korean" appears anywhere in the entry path,
- * otherwise "default" (mirrors the legacy `korean` token rule, widened to also
- * catch a `korean` folder).
- */
-
 export type LocaleKey = "default" | "KO";
 
-/** Canonical campaign types. Each becomes its own checkbox + its own function. */
 export type TypeKey = "email" | "push" | "pop-up" | "pop-up_1" | "pop-up_2";
 
 export const TYPE_ORDER: TypeKey[] = ["email", "push", "pop-up", "pop-up_1", "pop-up_2"];
@@ -31,7 +11,6 @@ export interface TypeSlot {
 export type BrandTypes = Partial<Record<TypeKey, TypeSlot>>;
 
 export interface ParsedStructure {
-  /** raw brand folder name → its detected type slots */
   brands: Record<string, BrandTypes>;
 }
 
@@ -47,7 +26,6 @@ function isJunkPath(path: string): boolean {
   );
 }
 
-/** zip-slip / malformed-path guard: reject absolute paths or `..` segments. */
 export function isUnsafePath(path: string): boolean {
   if (path.startsWith("/") || /^[a-zA-Z]:[\\/]/.test(path)) return true;
   return path.split(/[\\/]/).some((seg) => seg === "..");
@@ -96,11 +74,6 @@ function isOscarWrapper(seg: string): boolean {
   return n.includes("oscar") && n.includes("brand");
 }
 
-/**
- * Resolve (brand, type) for a single file path. Returns null when the entry is
- * not a recognized content image (e.g. a CONTENT/SMARTICO sibling, a subitem, or
- * an unparseable depth).
- */
 export function resolveEntry(path: string): { brand: string; type: TypeKey } | null {
   const segments = path.split("/").filter((p) => p.length > 0);
   if (segments.length < 2) return null;
@@ -121,7 +94,6 @@ export function resolveEntry(path: string): { brand: string; type: TypeKey } | n
     return { brand, type };
   }
 
-  // ---- Legacy structure: TopFolder / [Oscar brands /] Brand / file ----
   const oscar = segments.length >= 2 && isOscarWrapper(segments[1]!);
   let brand: string | undefined;
   if (oscar) {
@@ -164,11 +136,6 @@ export function isAllBrands(rawName: string): boolean {
   return norm(rawName) === "allbrands";
 }
 
-/**
- * Build a lowercase→canonical normalization map from the admin-managed Smartico
- * brand list (matches the legacy BRAND_NAME_MAP: keyed by lowercase and by
- * lowercase-without-spaces).
- */
 export function buildBrandMap(canonicalNames: string[]): Map<string, string> {
   const map = new Map<string, string>();
   for (const name of canonicalNames) {
