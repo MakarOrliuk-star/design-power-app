@@ -28,12 +28,6 @@ function deriveZipName(originalFilename: string | null): string {
   return base.replace(/\.zip$/i, "").trim() || "upload";
 }
 
-/**
- * POST /api/smartico/analyze — multipart ZIP upload.
- * Saves the archive under a token, reads its structure (no decompression), and
- * returns the detected brands + available campaign types. The token is reused by
- * the generate stage so the 100 MB file is uploaded only once.
- */
 smarticoRouter.post("/analyze", async (req: Request, res: Response) => {
   await ensureStorageDir();
   void sweepOldUploads(); // opportunistic cleanup of orphaned temp ZIPs
@@ -63,7 +57,7 @@ smarticoRouter.post("/analyze", async (req: Request, res: Response) => {
     const token = newToken();
     const finalPath = zipPathForToken(token);
     await rename(tempPath, finalPath);
-    tempPath = null; // ownership moved to finalPath
+    tempPath = null;
 
     try {
       const result = await analyzeZip(finalPath, zipName);
@@ -90,10 +84,6 @@ smarticoRouter.post("/analyze", async (req: Request, res: Response) => {
   }
 });
 
-/**
- * POST /api/smartico/generate — enqueue the upload+generation job for a
- * previously analyzed ZIP (referenced by token). Returns a jobId to poll.
- */
 const generateSchema = z.object({
   token: z.string(),
   zipName: z.string().min(1).max(200),
