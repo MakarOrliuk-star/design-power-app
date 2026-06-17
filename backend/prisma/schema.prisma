@@ -271,3 +271,35 @@ model Job {
 
   @@index([status, type])
 }
+
+// ============================================================
+// Smartico (Unique-Image-Smartico CRM service)
+// ============================================================
+
+/// Canonical Smartico brand_id values. Used to normalize ZIP folder names when
+/// generating the Smartico function: a folder "baxterbet" / "Baxter Bet" maps to
+/// the canonical "Baxterbet". Admin-managed (CRM service maintenance); seeded
+/// from the legacy hardcoded SMARTICO_BRANDS list.
+model SmarticoBrand {
+  id        String   @id @default(cuid())
+  name      String   @unique // canonical brand_id, e.g. "BrunoCasino"
+  createdAt DateTime @default(now())
+}
+
+/// Dedup cache for Smartico image uploads (TASK D3). Keyed by ZIP name + brand +
+/// type + locale; stores the content MD5 so re-uploading the same archive reuses
+/// the existing Cloudinary asset instead of re-uploading. A changed MD5 overwrites
+/// the asset under the same publicId.
+model SmarticoAsset {
+  id        String   @id @default(cuid())
+  zipName   String // Cloudinary folder = the uploaded ZIP file name (no .zip)
+  brand     String // raw brand folder name from the ZIP
+  type      String // email | push | pop-up_1 | pop-up_2
+  locale    String   @default("default") // default | KO
+  md5       String // MD5 of the image bytes
+  secureUrl String
+  publicId  String
+  updatedAt DateTime @updatedAt
+
+  @@unique([zipName, brand, type, locale])
+}

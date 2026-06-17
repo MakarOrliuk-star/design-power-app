@@ -268,9 +268,90 @@ async function saveItemPrompt(p: ItemPrompt) {
   }
 }
 
+// ---- Smartico brands (Unique-Image-Smartico maintenance) ----
+interface SmarticoBrand {
+  id: string;
+  name: string;
+  createdAt: string;
+}
+
+const smarticoBrands = ref<SmarticoBrand[]>([]);
+const newSmarticoName = ref("");
+const smarticoSearch = ref("");
+const smarticoMsg = ref("");
+const editingId = ref<string | null>(null);
+const editingName = ref("");
+
+const filteredSmarticoBrands = computed(() => {
+  const q = smarticoSearch.value.trim().toLowerCase();
+  if (!q) return smarticoBrands.value;
+  return smarticoBrands.value.filter((b) => b.name.toLowerCase().includes(q));
+});
+
+async function loadSmarticoBrands() {
+  try {
+    const res = await api<{ smarticoBrands: SmarticoBrand[] }>("/api/admin/smartico-brands");
+    smarticoBrands.value = res.smarticoBrands;
+  } catch {
+    error.value = "Не удалось загрузить Smartico-бренды.";
+  }
+}
+
+async function addSmarticoBrand() {
+  const name = newSmarticoName.value.trim();
+  if (!name) return;
+  smarticoMsg.value = "";
+  try {
+    await api("/api/admin/smartico-brands", { method: "POST", body: { name } });
+    newSmarticoName.value = "";
+    smarticoMsg.value = "Добавлено ✓";
+    await loadSmarticoBrands();
+  } catch (e: unknown) {
+    const code = (e as { data?: { error?: string } })?.data?.error;
+    smarticoMsg.value = code === "already_exists" ? "Такой бренд уже есть." : "Не удалось добавить.";
+  }
+}
+
+function startEditSmarticoBrand(b: SmarticoBrand) {
+  editingId.value = b.id;
+  editingName.value = b.name;
+}
+function cancelEditSmarticoBrand() {
+  editingId.value = null;
+  editingName.value = "";
+}
+
+async function saveSmarticoBrand(b: SmarticoBrand) {
+  const name = editingName.value.trim();
+  if (!name || name === b.name) {
+    cancelEditSmarticoBrand();
+    return;
+  }
+  smarticoMsg.value = "";
+  try {
+    await api(`/api/admin/smartico-brands/${b.id}`, { method: "PATCH", body: { name } });
+    cancelEditSmarticoBrand();
+    await loadSmarticoBrands();
+  } catch (e: unknown) {
+    const code = (e as { data?: { error?: string } })?.data?.error;
+    smarticoMsg.value = code === "already_exists" ? "Такое имя уже занято." : "Не удалось переименовать.";
+  }
+}
+
+async function removeSmarticoBrand(b: SmarticoBrand) {
+  smarticoMsg.value = "";
+  try {
+    await api(`/api/admin/smartico-brands/${b.id}`, { method: "DELETE" });
+    await loadSmarticoBrands();
+  } catch {
+    smarticoMsg.value = "Не удалось удалить.";
+  }
+}
+
 onMounted(() => {
   void load();
   void loadCatalog();
+  void loadSmarticoBrands();
 });
 </script>
 
@@ -514,6 +595,66 @@ onMounted(() => {
         </div>
       </div>
       <p v-if="!itemPrompts.length" class="muted">Стилей нет.</p>
+    </section>
+
+    <!-- Smartico brands (Unique-Image-Smartico) -->
+    <section class="panel">
+      <h2>Smartico-бренды</h2>
+      <p class="muted small">
+        Канонический список brand_id для сервиса Unique-Image-Smartico. По нему
+        нормализуются имена папок из ZIP при генерации функции. Если имя бренда из
+        архива не найдено здесь — он всё равно попадёт в функцию, но будет
+        подсвечен как «перепроверьте».
+      </p>
+
+      <form class="add-form" @submit.prevent="addSmarticoBrand">
+        <input v-model="newSmarticoName" type="text" placeholder="Напр. BrunoCasino" required />
+        <button type="submit" class="btn-primary">Добавить</button>
+        <span v-if="smarticoMsg" class="create-brand__msg">{{ smarticoMsg }}</span>
+      </form>
+
+      <input
+        v-model="smarticoSearch"
+        class="search"
+        type="text"
+        placeholder="Поиск бренда…"
+      />
+      <p class="muted small">Всего: {{ smarticoBrands.length }}</p>
+
+      <table class="table">
+        <thead>
+          <tr><th>Brand ID</th><th></th></tr>
+        </thead>
+        <tbody>
+          <tr v-for="b in filteredSmarticoBrands" :key="b.id">
+            <td>
+              <template v-if="editingId === b.id">
+                <input
+                  v-model="editingName"
+                  class="field__input"
+                  type="text"
+                  @keyup.enter="saveSmarticoBrand(b)"
+                  @keyup.esc="cancelEditSmarticoBrand"
+                />
+              </template>
+              <template v-else>{{ b.name }}</template>
+            </td>
+            <td class="smartico-actions">
+              <template v-if="editingId === b.id">
+                <button class="btn-primary" @click="saveSmarticoBrand(b)">Сохранить</button>
+                <button class="btn-toggle" @click="cancelEditSmarticoBrand">Отмена</button>
+              </template>
+              <template v-else>
+                <button class="btn-toggle" @click="startEditSmarticoBrand(b)">Переименовать</button>
+                <button class="btn-danger" @click="removeSmarticoBrand(b)">Удалить</button>
+              </template>
+            </td>
+          </tr>
+          <tr v-if="!filteredSmarticoBrands.length">
+            <td colspan="2" class="muted">Ничего не найдено.</td>
+          </tr>
+        </tbody>
+      </table>
     </section>
   </div>
 </template>
@@ -819,5 +960,10 @@ select {
 .create-brand__msg {
   font-size: 13px;
   color: var(--color-accent);
+}
+.smartico-actions {
+  display: flex;
+  gap: 8px;
+  justify-content: flex-end;
 }
 </style>
