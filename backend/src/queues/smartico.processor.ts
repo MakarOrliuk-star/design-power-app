@@ -15,13 +15,6 @@ import {
 import { generateOutputs, type OutputBlock } from "../lib/smartico/generate.js";
 import type { SmarticoJobData } from "./index.js";
 
-/**
- * Smartico upload worker (Stage 3): re-reads the stored ZIP, extracts the images
- * for the selected campaign types, uploads them to Cloudinary with MD5-based
- * dedup (TASK D3), and returns a brand→type→locale URL map. The Smartico function
- * strings are built from this map in Stage 4.
- */
-
 const UPLOAD_CONCURRENCY = 5;
 const LOCALES: LocaleKey[] = ["default", "KO"];
 
