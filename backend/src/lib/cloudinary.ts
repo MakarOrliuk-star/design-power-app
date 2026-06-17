@@ -78,6 +78,53 @@ export function uploadFromUrl(
   return upload(imageUrl, fileName, folder);
 }
 
+/**
+ * Upload raw image bytes via multipart/form-data (no base64 inflation — keeps
+ * memory ≈ the buffer size). Used by the Smartico service, which needs a
+ * deterministic public_id so a re-uploaded archive overwrites the same asset.
+ * `overwrite` also invalidates the CDN cache so the new bytes are served.
+ */
+export async function uploadBuffer(
+  buffer: Buffer,
+  publicId: string,
+  folder: string,
+  overwrite = true,
+): Promise<CloudinaryResult> {
+  try {
+    const timestamp = Math.round(Date.now() / 1000);
+    const signParams: Record<string, string | number> = { folder, public_id: publicId, timestamp };
+    if (overwrite) {
+      signParams.invalidate = "true";
+      signParams.overwrite = "true";
+    }
+    const signature = sign(signParams);
+
+    const form = new FormData();
+    // Copy into a fresh Uint8Array so the BlobPart type is satisfied (Buffer's
+    // ArrayBufferLike backing isn't assignable to BlobPart under strict libs).
+    form.append("file", new Blob([new Uint8Array(buffer)]), `${publicId}`);
+    form.append("api_key", env.CLOUDINARY_API_KEY ?? "");
+    form.append("timestamp", String(timestamp));
+    form.append("folder", folder);
+    form.append("public_id", publicId);
+    if (overwrite) {
+      form.append("invalidate", "true");
+      form.append("overwrite", "true");
+    }
+    form.append("signature", signature);
+
+    const res = await fetch(UPLOAD_URL(), { method: "POST", body: form });
+    const text = await res.text();
+    if (res.status === 200) {
+      const r = JSON.parse(text) as { secure_url: string; public_id: string };
+      return { success: true, secure_url: r.secure_url, public_id: r.public_id };
+    }
+    return { success: false, error: `Upload failed: ${res.status}`, details: text.slice(0, 300) };
+  } catch (err) {
+    return { success: false, error: String(err) };
+  }
+}
+
 const BACKOFF_MS = [500, 1500, 3000];
 
 /** Light retry/backoff wrapper (mirrors the legacy `*WithRetry` helpers). */
