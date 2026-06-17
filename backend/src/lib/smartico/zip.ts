@@ -1,12 +1,5 @@
 import yauzl from "yauzl";
 
-/**
- * Thin yauzl wrappers for the Smartico service. We read the ZIP central directory
- * to list entries WITHOUT decompressing (instant, memory-cheap even at 100 MB),
- * and decompress individual entries on demand during upload (Stage 3).
- */
-
-/** List every entry path in the archive (files and directories). */
 export function listEntryPaths(zipPath: string): Promise<string[]> {
   return new Promise((resolve, reject) => {
     yauzl.open(zipPath, { lazyEntries: true }, (err, zip) => {
@@ -35,12 +28,6 @@ function readEntryBuffer(zip: yauzl.ZipFile, entry: yauzl.Entry): Promise<Buffer
   });
 }
 
-/**
- * Decompress the `wanted` entries one at a time and hand each buffer to
- * `handler`. Decompression is sequential (a single buffer in memory at a time),
- * while up to `concurrency` handlers (uploads) run in parallel — so peak memory
- * is bounded by the in-flight upload count, never the whole archive.
- */
 export function extractAndProcess(
   zipPath: string,
   wanted: Set<string>,
