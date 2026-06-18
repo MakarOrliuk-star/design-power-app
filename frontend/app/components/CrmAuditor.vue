@@ -477,7 +477,98 @@ function downloadHtml() {
 
 <style scoped>
 /* =====================================================================
-   🌙 DARK MODE (ZINC PALETTE) 
+   🎨 BASE CSS (Каркас и Светлая тема)
+   ===================================================================== */
+.auditor-panel { display: flex; flex-direction: column; gap: 20px; max-width: 1200px; margin: 0; font-family: system-ui, -apple-system, sans-serif; }
+.auditor-card { background: #ffffff; border: 1px solid #e2e8f0; border-radius: 12px; padding: 24px; box-shadow: 0 4px 6px -1px rgba(0,0,0,0.05); width: 100%; box-sizing: border-box; transition: all 0.2s; }
+.card-title { color: #0f172a; font-weight: bold; margin-top: 0; margin-bottom: 16px; font-size: 18px; }
+.mb-4 { margin-bottom: 16px; }
+.mt-4 { margin-top: 16px; }
+.mt-5 { margin-top: 20px; }
+.w-full { width: 100%; }
+
+/* --- 🔑 Compact Top Auth Bar --- */
+.top-auth-bar { padding: 12px 20px; margin-bottom: 4px; display: flex; flex-wrap: wrap; justify-content: space-between; align-items: center; gap: 16px; }
+.auth-bar-left { display: flex; align-items: center; gap: 8px; }
+.auth-bar-right { display: flex; flex-wrap: wrap; gap: 16px; flex: 1; justify-content: flex-end; }
+.auth-env-group { display: flex; align-items: center; gap: 6px; }
+.env-badge { font-size: 12px; font-weight: bold; color: #64748b; font-family: monospace; width: 40px; }
+.compact-input { padding: 6px 10px !important; max-width: 120px; font-size: 12px !important; }
+.compact-btn { padding: 6px 12px !important; font-size: 12px !important; }
+
+/* Status Pills */
+.status-pill { font-size: 10px; font-weight: bold; padding: 2px 8px; border-radius: 999px; text-transform: uppercase; border: 1px solid transparent; }
+.pill-green { background: #dcfce7; color: #166534; border-color: #86efac; }
+.pill-red { background: #fee2e2; color: #991b1b; border-color: #fca5a5; }
+
+/* --- 📑 Tabs --- */
+.tabs-nav { display: flex; gap: 8px; border-bottom: 1px solid #e2e8f0; }
+.tab-btn { padding: 12px 24px; font-weight: 600; font-size: 14px; border: none; background: transparent; cursor: pointer; color: #64748b; border-bottom: 2px solid transparent; transition: 0.2s; }
+.tab-btn:hover:not(:disabled) { color: #0f172a; }
+.tab-active { color: #3b82f6; border-bottom-color: #3b82f6; }
+
+.sub-tabs-nav { display: flex; gap: 4px; background: #f8fafc; padding: 4px; border-radius: 8px; border: 1px solid #e2e8f0; }
+.sub-tab-btn { flex: 1; padding: 8px; font-size: 12px; font-weight: 600; border: none; background: transparent; border-radius: 6px; cursor: pointer; color: #64748b; }
+.sub-tab-btn:hover { color: #0f172a; }
+.sub-active { background: #ffffff; color: #3b82f6; box-shadow: 0 1px 3px rgba(0,0,0,0.05); }
+
+/* --- 📝 Forms & Inputs --- */
+.inputs-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; }
+.input-group label { display: block; color: #475569; font-size: 13px; font-weight: 500; margin-bottom: 6px; }
+.crm-input, .crm-textarea { width: 100%; padding: 10px 14px; border: 1px solid #e2e8f0; border-radius: 8px; font-size: 14px; outline: none; background: #f8fafc; color: #0f172a; box-sizing: border-box; }
+.crm-textarea { font-family: monospace; font-size: 13px; resize: vertical; }
+.crm-input:focus, .crm-textarea:focus { border-color: #3b82f6; }
+select.crm-input { appearance: none; background-image: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='24' height='24' viewBox='0 0 24 24' fill='none' stroke='%2394a3b8' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'><polyline points='6 9 12 15 18 9'></polyline></svg>"); background-repeat: no-repeat; background-position: right 10px center; background-size: 16px; padding-right: 35px; }
+
+.settings-row { display: flex; align-items: center; justify-content: space-between; background: #f8fafc; padding: 12px 16px; border-radius: 8px; border: 1px solid #e2e8f0; }
+.checkbox-label { display: flex; align-items: center; gap: 10px; font-size: 13px; font-weight: 500; cursor: pointer; color: #334155; }
+.checkbox-label input[type="checkbox"] { accent-color: #3b82f6; width: 15px; height: 15px; }
+.days-input { display: flex; align-items: center; gap: 8px; font-size: 13px; color: #475569; }
+
+/* --- 🔘 Buttons --- */
+.crm-btn { border: none; font-weight: bold; cursor: pointer; transition: 0.2s; border-radius: 6px; }
+.crm-btn:disabled { opacity: 0.5; cursor: not-allowed; }
+.crm-btn-primary { background: #3b82f6; color: white; }
+.crm-btn-primary:hover:not(:disabled) { background: #2563eb; }
+.crm-btn-danger { background: #ef4444; color: white; }
+.crm-btn-danger:hover:not(:disabled) { background: #dc2626; }
+.crm-btn-success { background: #059669; color: white; padding: 14px; font-size: 15px; border-radius: 10px; width: 100%; }
+.crm-btn-success:hover:not(:disabled) { background: #047857; }
+
+/* --- 📺 Terminal --- */
+.terminal-card { padding: 0 !important; overflow: hidden; background: #18181b !important; border-color: #27272a !important; }
+.progress-wrapper { width: 100%; height: 6px; background: #27272a; }
+.progress-bar { height: 100%; background: #3b82f6; transition: width 0.3s ease; }
+.progress-text { padding: 8px 16px 0; color: #a1a1aa; font-size: 11px; text-align: right; font-family: monospace; }
+.terminal { background: transparent; padding: 0 16px 16px; height: 220px; overflow-y: auto; font-family: monospace; font-size: 12px; line-height: 1.6; color: #e4e4e7; }
+.terminal-line { margin-bottom: 4px; }
+:deep(.log-time) { color: #71717a; }
+:deep(.log-success) { color: #34d399; font-weight: bold; }
+:deep(.log-err) { color: #f87171; font-weight: bold; }
+
+/* --- 📊 Table Results --- */
+.results-table-card { border-left: 4px solid #3b82f6; }
+.table-results-nested { background: #f8fafc; border: 1px solid #e2e8f0; border-radius: 8px; padding: 16px; margin-bottom: 12px; }
+.nested-header { display: flex; justify-content: space-between; align-items: center; border-bottom: 1px solid #e2e8f0; padding-bottom: 8px; font-weight: bold; font-size: 14px; color: #0f172a; }
+.match-success { background: #dcfce7; color: #166534; padding: 2px 8px; border-radius: 4px; font-size: 12px; border: 1px solid #86efac; }
+.match-none { color: #64748b; font-size: 12px; }
+.nested-row-match { background: #ffffff; border: 1px solid #e2e8f0; border-radius: 4px; padding: 10px; font-family: monospace; font-size: 12px; color: #334155; }
+.results-grid { width: 100%; border-collapse: collapse; }
+.results-grid th { background: #f1f5f9; color: #475569; font-weight: 600; font-size: 12px; text-transform: uppercase; padding: 12px; border: 1px solid #e2e8f0; text-align: left; }
+.results-grid td { padding: 12px; border: 1px solid #e2e8f0; font-family: monospace; font-size: 13px; color: #334155; }
+.table-key-cell { font-weight: bold; max-width: 250px; word-break: break-all; }
+.table-value-cell { word-break: break-all; }
+
+/* --- 🎉 Result Card --- */
+.result-card { background: #ecfdf5 !important; border-color: #a7f3d0 !important; display: flex; align-items: center; justify-content: space-between; }
+.result-content { display: flex; align-items: center; gap: 16px; }
+.result-icon { font-size: 32px; }
+.result-text h3 { margin: 0 0 4px 0; color: #065f46; font-size: 16px; font-weight: bold; }
+.result-text p { margin: 0; color: #047857; font-size: 13px; }
+.download-btn { width: auto; padding: 10px 20px; font-size: 14px; margin: 0; }
+
+/* =====================================================================
+   🌙 DARK MODE (ZINC PALETTE для data-theme="dark") 
    ===================================================================== */
 :global([data-theme="dark"]) .auditor-card { background: #18181b !important; border-color: #27272a !important; box-shadow: 0 4px 6px rgba(0,0,0,0.3) !important; }
 :global([data-theme="dark"]) .card-title, 
