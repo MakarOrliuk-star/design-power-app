@@ -1,214 +1,231 @@
 <template>
-  <div class="auditor-panel">
+  <div class="flex flex-col gap-6 max-w-[1200px] w-full font-sans">
     
-    <!-- Left-aligned Token Management Card -->
-    <div class="token-section-wrapper">
-      <div class="auditor-card token-card">
-        <div class="flex flex-col gap-4">
-          <div class="flex items-center gap-3">
-            <span class="card-icon">🔑</span>
-            <span class="token-title">Smartico Auth Tokens Configuration</span>
-            <span class="status-pill" :class="hasAnyToken ? 'pill-green' : 'pill-red'">
-              {{ hasAnyToken ? 'Configured' : 'No tokens saved' }}
-            </span>
-          </div>
-          
-          <div class="token-inputs-grid">
-            <div v-for="env in ['env2', 'env5', 'env7']" :key="env" class="token-row">
-              <label class="env-label">{{ env.toUpperCase() }}:</label>
-              <div class="flex gap-2 flex-1">
-                <input 
-                  type="password" 
-                  v-model="tokenInputs[env]" 
-                  :placeholder="`Enter ${env.toUpperCase()} active token...`" 
-                  class="crm-input flex-1"
-                />
-                <button @click="saveToken(env)" class="crm-btn crm-btn-primary">Save</button>
-                <button @click="clearToken(env)" v-if="savedTokens[env]" class="crm-btn crm-btn-danger">Clear</button>
-              </div>
-            </div>
+    <!-- 🔑 COMPACT TOP AUTH BAR -->
+    <div class="bg-white dark:bg-zinc-900 border border-zinc-200 dark:border-zinc-800 rounded-xl p-4 shadow-sm w-full flex flex-col xl:flex-row xl:items-center justify-between gap-4 transition-colors">
+      <div class="flex items-center gap-3 shrink-0">
+        <span class="text-xl">🔑</span>
+        <span class="font-bold text-zinc-900 dark:text-zinc-100">Smartico Tokens</span>
+        <span :class="hasAnyToken ? 'bg-emerald-100 text-emerald-700 dark:bg-emerald-900/30 dark:text-emerald-400 border-emerald-200 dark:border-emerald-800/50' : 'bg-red-100 text-red-700 dark:bg-red-900/30 dark:text-red-400 border-red-200 dark:border-red-800/50'" class="px-2.5 py-0.5 rounded-full text-[10px] font-bold border uppercase tracking-wider">
+          {{ hasAnyToken ? 'Configured' : 'No Tokens' }}
+        </span>
+      </div>
+
+      <div class="flex flex-wrap items-center gap-4 w-full xl:w-auto xl:justify-end">
+        <div v-for="env in ['env2', 'env5', 'env7']" :key="env" class="flex items-center gap-2">
+          <span class="text-xs font-bold text-zinc-500 dark:text-zinc-400 uppercase w-8">{{ env }}</span>
+          <div class="flex">
+            <input 
+              type="password" 
+              v-model="tokenInputs[env]" 
+              placeholder="Token..." 
+              class="w-28 bg-zinc-50 dark:bg-zinc-950 border border-zinc-200 dark:border-zinc-800 rounded-l-md px-3 py-1.5 text-xs text-zinc-900 dark:text-zinc-100 focus:outline-none focus:border-blue-500 transition-colors" 
+              :disabled="isLoading"
+            />
+            <button @click="saveToken(env)" class="bg-zinc-800 hover:bg-zinc-700 dark:bg-zinc-700 dark:hover:bg-zinc-600 text-white px-3 py-1.5 text-xs font-semibold transition-colors border border-transparent" :class="!savedTokens[env] ? 'rounded-r-md' : ''">Save</button>
+            <button @click="clearToken(env)" v-if="savedTokens[env]" class="bg-red-500 hover:bg-red-600 text-white px-3 py-1.5 rounded-r-md text-xs font-bold transition-colors border border-transparent">✕</button>
           </div>
         </div>
       </div>
     </div>
 
-    <!-- Navigational component main tabs -->
-    <div class="tabs-nav">
+    <!-- 📑 TABS NAVIGATION -->
+    <div class="flex gap-2 border-b border-zinc-200 dark:border-zinc-800 pb-0">
       <button 
         v-for="tab in tabs" 
         :key="tab.id" 
         @click="activeTab = tab.id" 
-        class="tab-btn"
-        :class="{ 'tab-active': activeTab === tab.id }"
+        class="px-5 py-3 font-semibold text-sm transition-colors border-b-2 focus:outline-none"
+        :class="activeTab === tab.id ? 'border-blue-500 text-blue-600 dark:text-blue-400' : 'border-transparent text-zinc-500 hover:text-zinc-800 dark:hover:text-zinc-200'"
         :disabled="isLoading"
       >
         {{ tab.label }}
       </button>
     </div>
 
-    <!-- Single Campaign Module -->
-    <div v-if="activeTab === 'single'" class="auditor-card">
-      <h3 class="card-title mb-4">🗺️ Single Campaign Auditor</h3>
-      <div class="inputs-grid">
-        <div class="input-group">
-          <label>📅 Scheduled Campaign URL</label>
-          <input type="text" v-model="singleMainUrl" placeholder="https://drive.smartico.ai/..." class="crm-input" :disabled="isLoading" />
+    <!-- 🗺️ SINGLE CAMPAIGN MODULE -->
+    <div v-if="activeTab === 'single'" class="bg-white dark:bg-zinc-900 border border-zinc-200 dark:border-zinc-800 rounded-xl p-6 shadow-sm w-full transition-colors">
+      <h3 class="text-lg font-bold text-zinc-900 dark:text-zinc-100 mb-5">🗺️ Single Campaign Auditor</h3>
+      <div class="grid grid-cols-1 md:grid-cols-2 gap-5">
+        <div>
+          <label class="block text-xs font-medium text-zinc-500 dark:text-zinc-400 mb-1.5">📅 Scheduled Campaign URL</label>
+          <input type="text" v-model="singleMainUrl" placeholder="https://drive.smartico.ai/..." class="w-full bg-zinc-50 dark:bg-zinc-950 border border-zinc-200 dark:border-zinc-800 rounded-lg px-4 py-2.5 text-sm text-zinc-900 dark:text-zinc-100 focus:outline-none focus:border-blue-500 transition-colors" :disabled="isLoading" />
         </div>
-        <div class="input-group">
-          <label>🎯 Journey / Pop-up Campaign URL</label>
-          <input type="text" v-model="singlePopUrl" placeholder="https://drive.smartico.ai/..." class="crm-input" :disabled="isLoading" />
+        <div>
+          <label class="block text-xs font-medium text-zinc-500 dark:text-zinc-400 mb-1.5">🎯 Journey / Pop-up Campaign URL</label>
+          <input type="text" v-model="singlePopUrl" placeholder="https://drive.smartico.ai/..." class="w-full bg-zinc-50 dark:bg-zinc-950 border border-zinc-200 dark:border-zinc-800 rounded-lg px-4 py-2.5 text-sm text-zinc-900 dark:text-zinc-100 focus:outline-none focus:border-blue-500 transition-colors" :disabled="isLoading" />
         </div>
       </div>
-      <div class="settings-row mt-4">
-        <label class="checkbox-label">
-          <input type="checkbox" v-model="useStats" :disabled="isLoading" />
-          <span>📈 Collect Flow Map Statistics (Live View)</span>
+      
+      <div class="flex items-center justify-between mt-5 bg-zinc-50 dark:bg-zinc-950 p-4 rounded-lg border border-zinc-200 dark:border-zinc-800 transition-colors">
+        <label class="flex items-center gap-2.5 cursor-pointer text-sm font-medium text-zinc-700 dark:text-zinc-300">
+          <input type="checkbox" v-model="useStats" class="w-4 h-4 accent-blue-500 rounded border-zinc-300" :disabled="isLoading" />
+          📈 Collect Flow Map Statistics (Live View)
         </label>
-        <div class="days-input" v-if="useStats">
-          <label>Days back:</label>
-          <input type="number" v-model="daysBack" min="1" max="90" class="crm-input max-w-[80px]" :disabled="isLoading" />
+        <div class="flex items-center gap-2" v-if="useStats">
+          <span class="text-xs font-medium text-zinc-500 dark:text-zinc-400">Days back:</span>
+          <input type="number" v-model="daysBack" min="1" max="90" class="w-16 bg-white dark:bg-zinc-900 border border-zinc-200 dark:border-zinc-700 rounded-md px-2 py-1 text-sm text-center text-zinc-900 dark:text-zinc-100 focus:outline-none focus:border-blue-500 transition-colors" :disabled="isLoading" />
         </div>
       </div>
-      <button @click="triggerSingleAudit" class="crm-btn crm-btn-success run-btn mt-5" :disabled="isLoading || (!singleMainUrl && !singlePopUrl)">
+      
+      <button @click="triggerSingleAudit" class="w-full mt-6 bg-emerald-600 hover:bg-emerald-500 text-white font-bold py-3.5 rounded-xl shadow-sm transition-all disabled:opacity-50 disabled:cursor-not-allowed active:scale-[0.99]" :disabled="isLoading || (!singleMainUrl && !singlePopUrl)">
         {{ isLoading ? 'Processing...' : '🚀 Execute Single Audit' }}
       </button>
     </div>
 
-    <!-- Bulk List Campaign Module -->
-    <div v-if="activeTab === 'mass'" class="auditor-card">
-      <h3 class="card-title mb-4">🕵️‍♂️ Bulk Campaign Auditor</h3>
-      <div class="input-group">
-        <label>🔗 Paste Smartico Campaign Links (One URL per line)</label>
-        <textarea v-model="massUrlsInput" rows="6" placeholder="https://drive.smartico.ai/2828#/j_audience_scheduled/11111&#10;https://drive.smartico.ai/2828#/j_audience_head/22222" class="crm-textarea" :disabled="isLoading"></textarea>
+    <!-- 🕵️‍♂️ BULK CAMPAIGN MODULE -->
+    <div v-if="activeTab === 'mass'" class="bg-white dark:bg-zinc-900 border border-zinc-200 dark:border-zinc-800 rounded-xl p-6 shadow-sm w-full transition-colors">
+      <h3 class="text-lg font-bold text-zinc-900 dark:text-zinc-100 mb-5">🕵️‍♂️ Bulk Campaign Auditor</h3>
+      <div>
+        <label class="block text-xs font-medium text-zinc-500 dark:text-zinc-400 mb-1.5">🔗 Paste Smartico Campaign Links (One URL per line)</label>
+        <textarea v-model="massUrlsInput" rows="6" placeholder="https://drive.smartico.ai/2828#/j_audience_scheduled/11111" class="w-full bg-zinc-50 dark:bg-zinc-950 border border-zinc-200 dark:border-zinc-800 rounded-lg px-4 py-3 text-sm font-mono text-zinc-900 dark:text-zinc-100 focus:outline-none focus:border-blue-500 transition-colors resize-y leading-relaxed" :disabled="isLoading"></textarea>
       </div>
-      <div class="settings-row mt-4">
-        <label class="checkbox-label">
-          <input type="checkbox" v-model="useStats" :disabled="isLoading" />
-          <span>📈 Collect Flow Map Statistics (Live View)</span>
+      
+      <div class="flex items-center justify-between mt-5 bg-zinc-50 dark:bg-zinc-950 p-4 rounded-lg border border-zinc-200 dark:border-zinc-800 transition-colors">
+        <label class="flex items-center gap-2.5 cursor-pointer text-sm font-medium text-zinc-700 dark:text-zinc-300">
+          <input type="checkbox" v-model="useStats" class="w-4 h-4 accent-blue-500 rounded border-zinc-300" :disabled="isLoading" />
+          📈 Collect Flow Map Statistics (Live View)
         </label>
-        <div class="days-input" v-if="useStats">
-          <label>Days back:</label>
-          <input type="number" v-model="daysBack" min="1" max="90" class="crm-input max-w-[80px]" :disabled="isLoading" />
+        <div class="flex items-center gap-2" v-if="useStats">
+          <span class="text-xs font-medium text-zinc-500 dark:text-zinc-400">Days back:</span>
+          <input type="number" v-model="daysBack" min="1" max="90" class="w-16 bg-white dark:bg-zinc-900 border border-zinc-200 dark:border-zinc-700 rounded-md px-2 py-1 text-sm text-center text-zinc-900 dark:text-zinc-100 focus:outline-none focus:border-blue-500 transition-colors" :disabled="isLoading" />
         </div>
       </div>
-      <button @click="triggerMassAudit" class="crm-btn crm-btn-success run-btn mt-5" :disabled="isLoading || !massUrlsInput.trim()">
+      
+      <button @click="triggerMassAudit" class="w-full mt-6 bg-emerald-600 hover:bg-emerald-500 text-white font-bold py-3.5 rounded-xl shadow-sm transition-all disabled:opacity-50 disabled:cursor-not-allowed active:scale-[0.99]" :disabled="isLoading || !massUrlsInput.trim()">
         {{ isLoading ? 'Processing Bulk List...' : '🚀 Execute Bulk Audit' }}
       </button>
     </div>
 
-    <!-- Brand Toolsets Module -->
-    <div v-if="activeTab === 'brands'" class="auditor-card">
-      <div class="sub-tabs-nav mb-4">
-        <button v-for="st in subTabs" :key="st.id" @click="activeSubTab = st.id" class="sub-tab-btn" :class="{ 'sub-active': activeSubTab === st.id }" :disabled="isLoading">
+    <!-- 🏷️ BRANDS TOOLS MODULE -->
+    <div v-if="activeTab === 'brands'" class="bg-white dark:bg-zinc-900 border border-zinc-200 dark:border-zinc-800 rounded-xl p-6 shadow-sm w-full transition-colors">
+      <div class="flex gap-1 bg-zinc-100 dark:bg-zinc-950 p-1 rounded-lg border border-zinc-200 dark:border-zinc-800 mb-6 transition-colors">
+        <button v-for="st in subTabs" :key="st.id" @click="activeSubTab = st.id" 
+          class="flex-1 py-2 text-xs font-bold rounded-md transition-colors" 
+          :class="activeSubTab === st.id ? 'bg-white dark:bg-zinc-800 text-zinc-900 dark:text-zinc-100 shadow-sm' : 'text-zinc-500 hover:text-zinc-700 dark:text-zinc-400 dark:hover:text-zinc-200'" 
+          :disabled="isLoading">
           {{ st.label }}
         </button>
       </div>
 
-      <div v-if="activeSubTab === 'search'" class="space-y-4">
-        <div class="input-group">
-          <label>🔗 Target Campaign Links (One URL per line)</label>
-          <textarea v-model="brandSearchUrls" rows="4" class="crm-textarea" placeholder="Urls to scan..."></textarea>
+      <!-- Sub-Tab: Search -->
+      <div v-if="activeSubTab === 'search'" class="flex flex-col gap-5">
+        <div>
+          <label class="block text-xs font-medium text-zinc-500 dark:text-zinc-400 mb-1.5">🔗 Target Campaign Links (One URL per line)</label>
+          <textarea v-model="brandSearchUrls" rows="4" class="w-full bg-zinc-50 dark:bg-zinc-950 border border-zinc-200 dark:border-zinc-800 rounded-lg px-4 py-3 text-sm font-mono text-zinc-900 dark:text-zinc-100 focus:outline-none focus:border-blue-500 transition-colors leading-relaxed" placeholder="Urls to scan..."></textarea>
         </div>
-        <div class="input-group">
-          <label>🔍 Brand Name / Keyword</label>
-          <input type="text" v-model="brandSearchKeyword" placeholder="e.g. Spinstein" class="crm-input" />
+        <div>
+          <label class="block text-xs font-medium text-zinc-500 dark:text-zinc-400 mb-1.5">🔍 Brand Name / Keyword</label>
+          <input type="text" v-model="brandSearchKeyword" placeholder="e.g. Spinstein" class="w-full bg-zinc-50 dark:bg-zinc-950 border border-zinc-200 dark:border-zinc-800 rounded-lg px-4 py-2.5 text-sm text-zinc-900 dark:text-zinc-100 focus:outline-none focus:border-blue-500 transition-colors" />
         </div>
-        <button @click="executeBrandSearch" class="crm-btn crm-btn-primary w-full" :disabled="isLoading || !brandSearchKeyword || !brandSearchUrls">Scan Campaigns</button>
+        <button @click="executeBrandSearch" class="w-full bg-blue-600 hover:bg-blue-500 text-white font-bold py-3.5 rounded-xl shadow-sm transition-all disabled:opacity-50 disabled:cursor-not-allowed active:scale-[0.99]" :disabled="isLoading || !brandSearchKeyword || !brandSearchUrls">Scan Campaigns</button>
       </div>
 
-      <div v-if="activeSubTab === 'labels'" class="space-y-4">
-        <div class="grid grid-cols-3 gap-4">
-          <div class="input-group">
-            <label>Environment</label>
-            <select v-model="labelEnv" class="crm-input">
+      <!-- Sub-Tab: Labels -->
+      <div v-if="activeSubTab === 'labels'" class="flex flex-col gap-5">
+        <div class="grid grid-cols-1 md:grid-cols-3 gap-5">
+          <div>
+            <label class="block text-xs font-medium text-zinc-500 dark:text-zinc-400 mb-1.5">Environment</label>
+            <select v-model="labelEnv" class="w-full bg-zinc-50 dark:bg-zinc-950 border border-zinc-200 dark:border-zinc-800 rounded-lg px-4 py-2.5 text-sm text-zinc-900 dark:text-zinc-100 focus:outline-none focus:border-blue-500 transition-colors appearance-none">
               <option value="env2">ENV 2 (Production)</option>
               <option value="env5">ENV 5</option>
               <option value="env7">ENV 7</option>
             </select>
           </div>
-          <div class="input-group">
-            <label>Brand ID</label>
-            <input type="text" v-model="labelBrandId" placeholder="e.g. 2828" class="crm-input" />
+          <div>
+            <label class="block text-xs font-medium text-zinc-500 dark:text-zinc-400 mb-1.5">Brand ID</label>
+            <input type="text" v-model="labelBrandId" placeholder="e.g. 2828" class="w-full bg-zinc-50 dark:bg-zinc-950 border border-zinc-200 dark:border-zinc-800 rounded-lg px-4 py-2.5 text-sm text-zinc-900 dark:text-zinc-100 focus:outline-none focus:border-blue-500 transition-colors" />
           </div>
-          <div class="input-group">
-            <label>Variation Criteria / Keyword</label>
-            <input type="text" v-model="labelKeyword" placeholder="e.g. Spinstein" class="crm-input" />
+          <div>
+            <label class="block text-xs font-medium text-zinc-500 dark:text-zinc-400 mb-1.5">Variation Criteria / Keyword</label>
+            <input type="text" v-model="labelKeyword" placeholder="e.g. Spinstein" class="w-full bg-zinc-50 dark:bg-zinc-950 border border-zinc-200 dark:border-zinc-800 rounded-lg px-4 py-2.5 text-sm text-zinc-900 dark:text-zinc-100 focus:outline-none focus:border-blue-500 transition-colors" />
           </div>
         </div>
-        <div class="input-group">
-          <label>📋 Paste Labels List</label>
-          <textarea v-model="labelNamesInput" rows="4" class="crm-textarea" placeholder="crm2_brand_link&#10;{{label.bonus_label}}"></textarea>
+        <div>
+          <label class="block text-xs font-medium text-zinc-500 dark:text-zinc-400 mb-1.5">📋 Paste Labels List</label>
+          <textarea v-model="labelNamesInput" rows="4" class="w-full bg-zinc-50 dark:bg-zinc-950 border border-zinc-200 dark:border-zinc-800 rounded-lg px-4 py-3 text-sm font-mono text-zinc-900 dark:text-zinc-100 focus:outline-none focus:border-blue-500 transition-colors leading-relaxed" placeholder="crm2_brand_link..."></textarea>
         </div>
-        <button @click="executeBulkLabels" class="crm-btn crm-btn-primary w-full" :disabled="isLoading || !labelKeyword || !labelNamesInput">Extract Dictionary Values</button>
+        <button @click="executeBulkLabels" class="w-full bg-blue-600 hover:bg-blue-500 text-white font-bold py-3.5 rounded-xl shadow-sm transition-all disabled:opacity-50 disabled:cursor-not-allowed active:scale-[0.99]" :disabled="isLoading || !labelKeyword || !labelNamesInput">Extract Dictionary Values</button>
       </div>
 
-      <div v-if="activeSubTab === 'links'" class="space-y-4">
-        <div class="input-group">
-          <label>🔗 Tracking Short Links (One per line)</label>
-          <textarea v-model="shortLinksInput" rows="4" class="crm-textarea" placeholder="rngsp.cc/xyz&#10;https://rebrand.ly/abc"></textarea>
+      <!-- Sub-Tab: Links -->
+      <div v-if="activeSubTab === 'links'" class="flex flex-col gap-5">
+        <div>
+          <label class="block text-xs font-medium text-zinc-500 dark:text-zinc-400 mb-1.5">🔗 Tracking Short Links (One per line)</label>
+          <textarea v-model="shortLinksInput" rows="4" class="w-full bg-zinc-50 dark:bg-zinc-950 border border-zinc-200 dark:border-zinc-800 rounded-lg px-4 py-3 text-sm font-mono text-zinc-900 dark:text-zinc-100 focus:outline-none focus:border-blue-500 transition-colors leading-relaxed" placeholder="rngsp.cc/xyz..."></textarea>
         </div>
-        <button @click="executeResolveLinks" class="crm-btn crm-btn-primary w-full" :disabled="isLoading || !shortLinksInput">Resolve Tracking Chains</button>
+        <button @click="executeResolveLinks" class="w-full bg-blue-600 hover:bg-blue-500 text-white font-bold py-3.5 rounded-xl shadow-sm transition-all disabled:opacity-50 disabled:cursor-not-allowed active:scale-[0.99]" :disabled="isLoading || !shortLinksInput">Resolve Tracking Chains</button>
       </div>
     </div>
 
-    <!-- Processing execution stream activity components -->
-    <div class="auditor-card terminal-card" v-if="isLoading || logs.length > 0">
-      <div class="progress-wrapper">
-        <div class="progress-bar" :style="{ width: progress + '%' }"></div>
+    <!-- 📺 TERMINAL OUTPUT -->
+    <div class="bg-zinc-950 border border-zinc-800 rounded-xl overflow-hidden shadow-xl" v-if="isLoading || logs.length > 0">
+      <div class="h-1.5 w-full bg-zinc-900">
+        <div class="h-full bg-blue-500 transition-all duration-300" :style="{ width: progress + '%' }"></div>
       </div>
-      <div class="progress-text">{{ progress }}%</div>
-      <div class="terminal" ref="terminalRef">
-        <div v-for="(log, idx) in logs" :key="idx" class="terminal-line" v-html="log"></div>
+      <div class="flex justify-between items-center px-4 pt-3 pb-1 border-b border-zinc-800/50">
+        <span class="text-[10px] font-bold text-zinc-500 uppercase tracking-wider">Execution Stream</span>
+        <span class="text-xs font-mono text-zinc-400">{{ progress }}%</span>
+      </div>
+      <div class="p-4 text-xs font-mono text-zinc-300 h-64 overflow-y-auto leading-relaxed" ref="terminalRef">
+        <div v-for="(log, idx) in logs" :key="idx" class="mb-1" v-html="log"></div>
       </div>
     </div>
 
-    <!-- Tabular analysis grid structured output response mapping -->
-    <div class="auditor-card results-table-card" v-if="tableResults && !isLoading">
-      <h4 class="text-md font-bold mb-3 operation-output-title">📊 Operation Execution Output</h4>
+    <!-- 📊 TABLE RESULTS (BRANDS TOOLS) -->
+    <div class="bg-white dark:bg-zinc-900 border border-zinc-200 dark:border-zinc-800 rounded-xl p-6 shadow-sm w-full transition-colors" v-if="tableResults && !isLoading">
+      <h4 class="text-md font-bold mb-4 text-zinc-900 dark:text-zinc-100">📊 Execution Output</h4>
       
-      <div v-if="activeSubTab === 'search' && activeTab === 'brands'" class="space-y-4">
-        <div v-for="(res, idx) in tableResults" :key="idx" class="table-results-nested border rounded-lg p-4">
-          <div class="flex justify-between font-bold text-sm border-b pb-2 nested-header">
-            <span>📋 {{ res.name }} (ID: {{ res.campaign_id }})</span>
-            <span :class="res.matches.length ? 'text-violet-600 dark:text-violet-400' : 'text-slate-400'">
+      <!-- Search Mode Results -->
+      <div v-if="activeSubTab === 'search' && activeTab === 'brands'" class="flex flex-col gap-3">
+        <div v-for="(res, idx) in tableResults" :key="idx" class="border border-zinc-200 dark:border-zinc-800 rounded-lg p-4 bg-zinc-50 dark:bg-zinc-950/50 transition-colors">
+          <div class="flex justify-between items-center border-b border-zinc-200 dark:border-zinc-800 pb-2 mb-3">
+            <span class="font-bold text-sm text-zinc-800 dark:text-zinc-200">📋 {{ res.name }} <span class="text-zinc-500 font-normal ml-1">(ID: {{ res.campaign_id }})</span></span>
+            <span :class="res.matches.length ? 'bg-emerald-100 text-emerald-700 dark:bg-emerald-900/30 dark:text-emerald-400 border-emerald-200 dark:border-emerald-800/50' : 'bg-zinc-100 text-zinc-600 dark:bg-zinc-800 dark:text-zinc-400 border-zinc-200 dark:border-zinc-700'" class="px-2 py-0.5 text-xs font-bold rounded-md border">
               Matches: {{ res.matches.length }}
             </span>
           </div>
-          <div class="text-xs font-mono mt-2 space-y-1" v-if="res.matches.length">
-            <div v-for="(m, mIdx) in res.matches" :key="mIdx" class="nested-row-match p-2 rounded border">
-              <b class="text-violet-600 dark:text-violet-400">Path:</b> {{ m.path }} <br/> <b class="text-amber-600">Value:</b> {{ m.value }}
+          <div class="text-xs font-mono space-y-2" v-if="res.matches.length">
+            <div v-for="(m, mIdx) in res.matches" :key="mIdx" class="bg-white dark:bg-zinc-900 p-3 rounded-md border border-zinc-200 dark:border-zinc-800 text-zinc-700 dark:text-zinc-300 leading-relaxed shadow-sm transition-colors">
+              <span class="text-blue-600 dark:text-blue-400 font-bold mr-1">Path:</span> {{ m.path }} <br/> 
+              <span class="text-emerald-600 dark:text-emerald-500 font-bold mr-1">Value:</span> {{ m.value }}
             </div>
           </div>
-          <div v-else class="text-xs italic text-slate-400 mt-2">No matching structural brand rules configured.</div>
+          <div v-else class="text-xs italic text-zinc-500 dark:text-zinc-400 mt-2">No matches found for the specified keyword.</div>
         </div>
       </div>
 
-      <table v-if="['labels', 'links'].includes(activeSubTab) && activeTab === 'brands'" class="results-grid">
-        <thead>
-          <tr>
-            <th>Input Token / Key</th>
-            <th>Resolved Output Target Data Payload</th>
-          </tr>
-        </thead>
-        <tbody>
-          <tr v-for="(val, key) in tableResults" :key="key">
-            <td class="font-bold font-mono text-xs max-w-[250px] break-all table-key-cell">{{ key }}</td>
-            <td class="font-mono text-xs break-all table-value-cell">{{ val }}</td>
-          </tr>
-        </tbody>
-      </table>
+      <!-- Labels/Links Grid Results -->
+      <div v-if="['labels', 'links'].includes(activeSubTab) && activeTab === 'brands'" class="overflow-x-auto rounded-lg border border-zinc-200 dark:border-zinc-800">
+        <table class="w-full text-left border-collapse">
+          <thead class="bg-zinc-100 dark:bg-zinc-950/50 text-xs uppercase text-zinc-500 dark:text-zinc-400 border-b border-zinc-200 dark:border-zinc-800">
+            <tr>
+              <th class="p-3 border-r border-zinc-200 dark:border-zinc-800 font-semibold tracking-wide">Input Token / Key</th>
+              <th class="p-3 font-semibold tracking-wide">Resolved Output Target Data Payload</th>
+            </tr>
+          </thead>
+          <tbody class="text-xs font-mono text-zinc-700 dark:text-zinc-300 divide-y divide-zinc-200 dark:divide-zinc-800">
+            <tr v-for="(val, key) in tableResults" :key="key" class="bg-white dark:bg-zinc-900 transition-colors hover:bg-zinc-50 dark:hover:bg-zinc-800/50">
+              <td class="p-3 border-r border-zinc-200 dark:border-zinc-800 font-bold max-w-[250px] break-all text-zinc-900 dark:text-zinc-100">{{ key }}</td>
+              <td class="p-3 break-all leading-relaxed">{{ val }}</td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
     </div>
 
-    <!-- Finalized report presentation card -->
-    <div class="auditor-card result-card" v-if="finalHtml && !isLoading">
-      <div class="result-content">
-        <div class="result-icon">🎉</div>
-        <div class="result-text">
-          <h3>HTML Analysis Matrix Document Rendered Successfully</h3>
-          <p>Interactive graph structures, deep text compliance checks, and cross-channel evaluations are ready.</p>
+    <!-- 🎉 DOWNLOAD READY PROMPT -->
+    <div class="bg-emerald-50 dark:bg-emerald-900/20 border border-emerald-200 dark:border-emerald-800/40 rounded-xl p-6 shadow-sm w-full flex flex-col md:flex-row md:items-center justify-between gap-5 transition-colors" v-if="finalHtml && !isLoading">
+      <div class="flex items-center gap-4">
+        <div class="text-4xl drop-shadow-sm">🎉</div>
+        <div>
+          <h3 class="text-emerald-800 dark:text-emerald-400 font-bold text-lg mb-1">Report Rendered Successfully</h3>
+          <p class="text-emerald-600 dark:text-emerald-500/80 text-sm m-0">Interactive graph structures and textual compliance checks are ready.</p>
         </div>
-        <button @click="downloadHtml" class="crm-btn crm-btn-primary download-btn">📥 Download HTML Report</button>
       </div>
+      <button @click="downloadHtml" class="bg-emerald-600 hover:bg-emerald-500 text-white font-bold py-3 px-6 rounded-lg shadow-sm transition-all active:scale-[0.98] whitespace-nowrap flex items-center justify-center gap-2">
+        <span class="text-lg">📥</span> Download Report
+      </button>
     </div>
 
   </div>
@@ -464,16 +481,14 @@ function downloadHtml() {
 
   let fileName = "Smartico_Audit_Report.html";
 
+  const titleMatch = finalHtml.value.match(/<title>Audit:\s*(.*?)<\/title>/i);
   
-  if (activeTab.value === 'single') {
-    
-    const url = singleMainUrl.value || singlePopUrl.value || "";
-    
-    const match = url.match(/(?:scheduled|head)\/(\d+)/);
-    const campId = match ? match[1] : "Unknown";
-    fileName = `Campaign_${campId}_Report.html`;
+  if (titleMatch && titleMatch[1]) {
+    let cleanName = titleMatch[1].replace(/[^a-zA-Z0-9\s\-_()а-яА-ЯёЁ]/gi, '').trim().replace(/\s+/g, '_');
+    if (cleanName) {
+      fileName = `${cleanName}_Report.html`;
+    }
   } else if (activeTab.value === 'mass') {
-    
     const urlsCount = massUrlsInput.value.split('\n').map(u => u.trim()).filter(u => !!u).length;
     fileName = `Mass_Audit_${urlsCount}_Campaigns_Report.html`;
   }
@@ -489,290 +504,11 @@ function downloadHtml() {
 </script>
 
 <style scoped>
-/* =====================================================================
-   ☀️ DYNAMIC ARCHITECTURE WITH PURPLE/VIOLET HIGHLIGHT ACCENTS
-   ===================================================================== */
-.auditor-panel {
-  display: flex;
-  flex-direction: column;
-  gap: 20px;
-  max-width: 1200px;
-  margin: 0;
-  font-family: system-ui, -apple-system, sans-serif;
-}
-
-.token-section-wrapper {
-  display: flex;
-  justify-content: flex-start;
-  width: 100%;
-}
-
-/* Auditor Card - Fully dynamic light mode basis */
-.auditor-card {
-  background: #ffffff;
-  border: 1px solid #e2e8f0;
-  border-radius: 12px;
-  padding: 24px;
-  box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.05);
-  transition: all 0.2s cubic-bezier(0.4, 0, 0.2, 1);
-  width: 100%;
-}
-
-.token-card {
-  max-width: 600px;
-}
-
-/* Static fallback contrast safe color overrides */
-.card-title,
-.token-title,
-.env-label, 
-.checkbox-label span, 
-.days-input label,
-.operation-output-title {
-  color: #0f172a; 
-  font-weight: 600;
-}
-
-.input-group label {
-  color: #475569;
-  font-size: 13px;
-  font-weight: 500;
-  margin-bottom: 6px;
-  display: block;
-}
-
-.disabled-card {
-  opacity: 0.4;
-  pointer-events: none;
-}
-
-.status-pill {
-  font-size: 11px;
-  font-weight: 700;
-  padding: 3px 10px;
-  border-radius: 9999px;
-}
-.pill-green { background: #dcfce7; color: #166534; border: 1px solid rgba(22, 101, 52, 0.1); }
-.pill-red { background: #fee2e2; color: #991b1b; border: 1px solid rgba(153, 27, 27, 0.1); }
-
-.token-inputs-grid {
-  display: flex;
-  flex-direction: column;
-  gap: 10px;
-}
-.token-row { display: flex; align-items: center; gap: 12px; }
-.env-label { min-width: 60px; font-size: 12px; color: #64748b; }
-
-/* Main Tabs - Purple accent implementation */
-.tabs-nav { display: flex; gap: 8px; border-bottom: 1px solid #e2e8f0; padding-bottom: 0px; }
-.tab-btn {
-  padding: 12px 24px;
-  font-weight: 600;
-  font-size: 14px;
-  border: none;
-  background: transparent;
-  cursor: pointer;
-  color: #64748b;
-  border-bottom: 2px solid transparent;
-  transition: all 0.15s ease;
-}
-.tab-btn:hover:not(:disabled) { color: #0f172a; }
-.tab-active { color: #7c3aed !important; border-bottom-color: #7c3aed !important; }
-
-/* Secondary Submodule navigation items */
-.sub-tabs-nav { display: flex; gap: 4px; background: #f8fafc; padding: 4px; border-radius: 8px; border: 1px solid #e2e8f0; }
-.sub-tab-btn { flex: 1; padding: 8px; font-size: 12px; font-weight: 600; border: none; background: transparent; border-radius: 6px; cursor: pointer; color: #64748b; transition: all 0.15s ease; }
-.sub-tab-btn:hover { color: #0f172a; }
-.sub-active { background: #ffffff; color: #7c3aed !important; box-shadow: 0 1px 3px rgba(0,0,0,0.05); border: 1px solid #e2e8f0; }
-
-.inputs-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; }
-@media (max-width: 768px) { .inputs-grid { grid-template-columns: 1fr; } }
-
-/* Universal interactive form layout fields */
-.crm-input, .crm-textarea {
-  width: 100%;
-  padding: 10px 14px;
-  border: 1px solid #e2e8f0;
-  border-radius: 8px;
-  font-size: 14px;
-  outline: none;
-  background: #f8fafc; 
-  color: #0f172a;
-  box-sizing: border-box;
-  transition: border-color 0.15s ease;
-}
-.crm-textarea { resize: vertical; font-family: monospace; font-size: 13px; }
-.crm-input:focus, .crm-textarea:focus { border-color: #a78bfa; }
-
-select.crm-input {
-  appearance: none;
-  background-image: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='24' height='24' viewBox='0 0 24 24' fill='none' stroke='%2394a3b8' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'><polyline points='6 9 12 15 18 9'></polyline></svg>");
-  background-repeat: no-repeat;
-  background-position: right 10px center;
-  background-size: 16px;
-  padding-right: 35px;
-}
-
-/* Parameter controls presentation grouping rows */
-.settings-row {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  background: #f8fafc;
-  padding: 12px 16px;
-  border-radius: 8px;
-  border: 1px solid #e2e8f0;
-}
-.checkbox-label { display: flex; align-items: center; gap: 10px; font-size: 13px; font-weight: 500; cursor: pointer; }
-.checkbox-label input[type="checkbox"] {
-  accent-color: #7c3aed;
-  width: 15px;
-  height: 15px;
-}
-.days-input { display: flex; align-items: center; gap: 8px; font-size: 13px; }
-
-/* Control pipeline trigger configurations - Violet and Success colors split */
-.crm-btn { padding: 10px 16px; border-radius: 8px; font-size: 13px; font-weight: 600; cursor: pointer; border: 1px solid transparent; transition: all 0.15s ease; }
-.crm-btn-primary { background: #7c3aed; color: white; }
-.crm-btn-primary:hover { background: #6d28d9; }
-.crm-btn-danger { background: #fee2e2; color: #b91c1c; border-color: #fca5a5; }
-.crm-btn-danger:hover { background: #fca5a5; }
-.crm-btn-success { background: #059669; color: white; }
-.crm-btn-success:hover { background: #047857; }
-.run-btn { width: 100%; padding: 14px; font-size: 15px; border-radius: 10px; }
-.crm-btn:disabled { opacity: 0.5; cursor: not-allowed; }
-
-/* Continuous active operations logging telemetry screen boxes */
-.terminal-card { background: #09090b; border-color: #27272a; }
-.progress-wrapper { width: 100%; height: 6px; background: #27272a; border-radius: 3px; overflow: hidden; }
-.progress-bar { height: 100%; background: linear-gradient(90deg, #7c3aed, #059669); transition: width 0.3s ease; }
-.progress-text { color: #71717a; font-size: 11px; text-align: right; margin-top: 4px; font-family: monospace; }
-.terminal { background: #000000; border: 1px solid #27272a; border-radius: 8px; padding: 14px; height: 220px; overflow-y: auto; font-family: monospace; font-size: 12px; line-height: 1.6; margin-top: 10px; color: #e4e4e7; }
-.terminal-line { margin-bottom: 4px; }
-:deep(.log-time) { color: #3f3f46; }
-:deep(.log-success) { color: #34d399; font-weight: bold; }
-:deep(.log-err) { color: #f87171; font-weight: bold; }
-
-/* Structural tabular grid components matching parameters styles */
-.results-table-card { border-left: 4px solid #7c3aed; }
-.table-results-nested { border-color: #e2e8f0; background: #f8fafc; }
-.nested-header { border-color: #e2e8f0; color: #334155; }
-.nested-row-match { background: #ffffff; border-color: #e2e8f0; color: #475569; }
-
-.results-grid { width: 100%; border-collapse: collapse; margin-top: 10px; }
-.results-grid th { background: #f8fafc; color: #475569; font-weight: 600; font-size: 11px; text-transform: uppercase; padding: 10px; border: 1px solid #e2e8f0; text-align: left; }
-.results-grid td { padding: 12px 10px; border: 1px solid #e2e8f0; background: #ffffff; color: #334155; }
-.table-key-cell { color: #0f172a; }
-.table-value-cell { color: #334155; }
-
-/* Downloader prompts layout metrics styling settings configurations */
-.result-card { background: #f0fdf4; border-color: #bbf7d0; }
-.result-content { display: flex; align-items: center; gap: 16px; }
-.result-icon { font-size: 28px; }
-.result-text h3 { margin: 0 0 2px 0; color: #166534; font-size: 16px; font-weight: 700; }
-.result-text p { margin: 0; color: #15803d; font-size: 13px; opacity: 0.9; }
-.download-btn { margin-left: auto; background: #15803d; color: white; border: none; }
-.download-btn:hover { background: #166534; }
-
-
-/* =====================================================================
-   🌙 GLOBAL CASCADING DARK MODE SYSTEM MATRIX CONTEXT
-   ===================================================================== */
-:global(.dark) .auditor-card {
-  background: #0f172a;
-  border-color: #1e293b;
-  box-shadow: 0 10px 15px -3px rgba(0, 0, 0, 0.3);
-}
-
-:global(.dark) .card-title, 
-:global(.dark) .token-title, 
-:global(.dark) .env-label, 
-:global(.dark) .checkbox-label span, 
-:global(.dark) .days-input label,
-:global(.dark) .operation-output-title {
-  color: #f1f5f9;
-}
-
-:global(.dark) .input-group label {
-  color: #94a3b8;
-}
-
-:global(.dark) .tabs-nav {
-  border-color: #1e293b;
-}
-
-:global(.dark) .tab-btn:hover:not(:disabled) {
-  color: #f1f5f9;
-}
-:global(.dark) .tab-active { 
-  color: #a78bfa !important; 
-  border-bottom-color: #a78bfa !important; 
-}
-
-:global(.dark) .sub-tabs-nav {
-  background: #020617;
-  border-color: #1e293b;
-}
-:global(.dark) .sub-tab-btn {
-  color: #64748b;
-}
-:global(.dark) .sub-tab-btn:hover {
-  color: #e2e8f0;
-}
-:global(.dark) .sub-active {
-  background: #1e293b;
-  color: #a78bfa !important;
-  border-color: #1e293b;
-}
-
-:global(.dark) .crm-input, 
-:global(.dark) .crm-textarea {
-  background: #020617;
-  border-color: #1e293b;
-  color: #f1f5f9;
-}
-:global(.dark) .crm-input:focus, 
-:global(.dark) .crm-textarea:focus { 
-  border-color: #a78bfa; 
-}
-
-:global(.dark) .settings-row {
-  background: #020617;
-  border-color: #1e293b;
-}
-
-:global(.dark) .table-results-nested { 
-  border-color: #1e293b; 
-  background: #020617; 
-}
-:global(.dark) .nested-header { 
-  border-color: #1e293b; 
-  color: #f1f5f9; 
-}
-:global(.dark) .nested-row-match { 
-  background: #0f172a; 
-  border-color: #1e293b; 
-  color: #94a3b8; 
-}
-
-:global(.dark) .results-grid th {
-  background: #020617;
-  color: #94a3b8;
-  border-color: #1e293b;
-}
-:global(.dark) .results-grid td {
-  background: #0f172a;
-  border-color: #1e293b;
-}
-:global(.dark) .table-key-cell { color: #f1f5f9; }
-:global(.dark) .table-value-cell { color: #cbd5e1; }
-
-:global(.dark) .result-card {
-  background: rgba(6, 78, 59, 0.2);
-  border-color: rgba(4, 120, 87, 0.4);
-}
-:global(.dark) .result-text h3 { color: #34d399; }
-:global(.dark) .result-text p { color: #a7f3d0; }
-:global(.dark) .download-btn { background: #059669; }
-:global(.dark) .download-btn:hover { background: #047857; }
+/* 
+  Стили для инжектируемого HTML из бэкенда (терминал логов). 
+  Всё остальное теперь на 100% контролируется утилитами Tailwind в шаблоне.
+*/
+:deep(.log-time) { color: #71717a; } /* zinc-500 */
+:deep(.log-success) { color: #34d399; font-weight: 700; } /* emerald-400 */
+:deep(.log-err) { color: #f87171; font-weight: 700; } /* red-400 */
 </style>

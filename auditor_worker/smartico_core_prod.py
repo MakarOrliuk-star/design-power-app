@@ -24,11 +24,7 @@ class SmarticoCore:
             "content-type": "application/json"
         }
         self.enum_cache = {}
-        # ... остальные константы ...
-
-        # ==========================================
-        # 2. СЛОВАРИ И КОНСТАНТЫ
-        # ==========================================
+        
         
         self.IGNORED_LABELS = {
             "{{label.text_block_3}}", "{{label.text_block_2}}", "{{label.text_block_1}}", 
@@ -64,7 +60,6 @@ class SmarticoCore:
             "{{label.webhook_data_3}}", "{{label.webhook_data_4}}", "{{label.webhook_data_5}}"
         }
         
-        # Обрати внимание: здесь мы обращаемся к своим же словарям через self
         self.ALL_IGNORED_LABELS = self.IGNORED_LABELS.union(self.IGNORED_WEBHOOK_DEFAULTS)
 
         self.PROP_TO_ENUM_ID = {
@@ -98,59 +93,48 @@ class SmarticoCore:
         """Определяет тип лейбла по ключевым словам в его названии"""
         name = label_name.lower().replace("{{label.", "").replace("}}", "")
         
-        # 🛑 0. СТОП-СЛОВА (Структурные элементы)
         stop_words = ["preheader", "h1", "h2", "h3", "greeting", "content", "subject", "text", "img", "image", "button", "link", "url", "icon", "sms", "push", "popup", "pwa"]
         if any(word in name for word in stop_words):
             return None, None
             
-        # 1. ПРОМОКОД
         if "code" in name: 
             return "promocode", "Promo Code"
             
-        # 2. ДАТЫ
         if "end" in name and "date" in name: 
             return "end_date", "End Date"
             
-        # 3. ВЕЙДЖЕР
         if "wager" in name or "rollover" in name: 
             return "wager", "Wager"
             
-        # 4. ПРОЦЕНТ БОНУСА (Ищем percent или pct)
-        # Ловит: deposit_bonus_ladder_round_block_3_percentage_value
         if "percent" in name or "pct" in name:
             return "bonus_percent", "Bonus Percentage"
             
-        # 5. ДЕПОЗИТ (Строго dep И amount)
-        # Ловит: aapromo_dep_amount_without_czk_huf_75_150_300_sph
+       
         if "dep" in name and "amount" in name: 
             return "min_dep", "Deposit Amount"
             
-        # 6. СУММА БОНУСА (Строго bonus И amount)
+       
         if "bonus" in name and "amount" in name: 
             return "bonus_amount", "Bonus Amount"
             
         return None, None
 
     def validate_offer_value(self, label_type, label_value, expected_data):
-        """Сверяет значение лейбла с данными из распарсенной таблицы"""
+        """Checks labels based on the parsed sheet"""
         if not expected_data or not expected_data.get("offers") or not label_value:
             return None, []
             
         val_str = str(label_value).upper()
         expected_vals = set()
         
-        # Умный сбор значений (Поддерживает и Шаблон 1, и Лесенки из Шаблона 2)
         for offer in expected_data["offers"]:
-            # Общие параметры (вейджер, промокод)
             if label_type == "wager" and offer.get("wager"): expected_vals.add(str(offer["wager"]))
             elif label_type == "promocode" and offer.get("promocode"): expected_vals.add(str(offer["promocode"]).upper())
             
-            # Параметры из Шаблона 1 (Плоский список)
             if label_type == "min_dep" and offer.get("min_dep"): expected_vals.add(str(offer["min_dep"]))
             elif label_type == "bonus_percent" and offer.get("bonus_percent"): expected_vals.add(str(offer["bonus_percent"]))
             elif label_type == "bonus_amount" and offer.get("max_bonus"): expected_vals.add(str(offer["max_bonus"]))
             
-            # Параметры из Шаблона 2 (Ступени лесенки)
             if "ladder_steps" in offer:
                 for step in offer["ladder_steps"]:
                     if label_type == "min_dep" and step.get("min_dep"): expected_vals.add(str(step["min_dep"]))
@@ -158,9 +142,9 @@ class SmarticoCore:
                     elif label_type == "bonus_amount" and step.get("max_bonus"): expected_vals.add(str(step["max_bonus"]))
             
         if not expected_vals: 
-            return None, [] # В таблице нет данных для сверки этого параметра
+            return None, [] 
         
-        # Ищем точное совпадение (игнорируя подчеркивания, скобки и символы валют)
+       
         for ev in expected_vals:
             if re.search(r'(?<![A-Za-z0-9])' + re.escape(ev) + r'(?![A-Za-z0-9])', val_str):
                 return True, [ev] 
@@ -168,15 +152,15 @@ class SmarticoCore:
         return False, list(expected_vals)
 
     def is_ignored_label(self, lbl):
-        """Проверяет, нужно ли пропустить лейбл по полному совпадению или подстроке"""
+       
         lbl_lower = lbl.lower()
-        # Обращаемся к словарю через self!
+      
         if lbl in self.ALL_IGNORED_LABELS:
             return True
         return False   
     
     def inject_flags(self, cond_str):
-        """Подставляет эмодзи флагов, если условие связано с языком"""
+        """flag emojis"""
         if not cond_str: return "Default"
         if "language" in cond_str.lower():
             # 🚨 ФИКС СКОРОСТИ 1: Компилируем регулярку один раз, а не 26 раз для каждой из 10 000 вариаций!
@@ -191,7 +175,7 @@ class SmarticoCore:
             return ""
         text = raw_label.lower()
         
-        # 🚨 ФИКС: Сначала очищаем от макро-оберток {{ }} и префикса label.
+        
         text = text.replace('{{', '').replace('}}', '').strip()
         if text.startswith('label.'):
             text = text.replace('label.', '', 1)
@@ -209,17 +193,13 @@ class SmarticoCore:
         """Жестко проверяет текст на синтаксис {{label.ключ}} и сортирует ошибки на критические и замечания."""
         if not text: return {"critical": [], "warning": []}
 
-        # ⚡️ ЖЕСТКИЙ ИГНОР ЧЕРЕЗ ОБЫЧНЫЙ REPLACE (Игнорируем спец-символы регулярных выражений)
-        # Вырезаем именно ту строку, которая написана в твоей JS-функции
+       
         text = text.replace("'{{label.highlight_font}}$1{{label.highlight_font_end}}'", "")
         text = text.replace("'{{label.highlight_font}}$1{{label.highlight_font_end}}'", "")
         text = text.replace("<font color=\"{{label.popup_highlight_color}}\"><b>$1</b></font>", "")
         text = text.replace("<font color='{{label.popup_highlight_color}}'><b>$1</b></font>", "")
 
-        # Дальше идет твой стандартный код функции...
-
-        # ⚡ ГЛАВНЫЙ ФИКС СКОРОСТИ: Абсолютный Fast Path. 
-        # Если в тексте нет фигурных скобок и спецслов, пропускаем все тяжелые регулярки.
+        
         has_braces = '{' in text or '}' in text
         has_symbols = '#' in text or '@' in text
         has_fixed = 'fixed' in text.lower()
@@ -240,7 +220,7 @@ class SmarticoCore:
         text_without_html = re.sub(r'<[^>]+>', '', clean_for_symbols)
         
         if not ignore_formatting_tags:
-            # --- ПРОВЕРКА РЕШЕТОК # # ---
+           
             hash_parts = text_without_html.split('#')
             if len(hash_parts) % 2 == 0:
                 criticals.add(f"Нечетное количество решеток (#): найдено {len(hash_parts)-1} шт. Тег не закрыт.")
@@ -254,7 +234,7 @@ class SmarticoCore:
                         snippet = content[-20:].replace('\n', ' ') if len(content) > 20 else content.replace('\n', ' ')
                         warnings.add(f"Недопустимый пробел ПЕРЕД закрывающей решеткой: «{snippet.strip()} #»")
 
-            # --- ПРОВЕРКА СОБАК @ @ ---
+            # ---  Checking @ @ ---
             at_parts = text_without_html.split('@')
             if len(at_parts) % 2 == 0:
                 criticals.add(f"Нечетное количество знаков @: найдено {len(at_parts)-1} шт. Тег не закрыт.")
@@ -374,7 +354,6 @@ class SmarticoCore:
                 "range": json.dumps([0, 4999]), "sort": json.dumps(["id", "ASC"]), "lbl": self.brand_id
             }
 
-        # 2. Выполняем запросы
         req_timeout_ms = 60000 if use_live_view else 15000 
         
         res_n = self.ctx.request.get(f"https://{self.boapi_host}/api/j_audience_activity", params=n_params, headers=self.headers, timeout=req_timeout_ms)
@@ -397,7 +376,7 @@ class SmarticoCore:
             res_t = self.ctx.request.get(f"https://{self.boapi_host}/api/j_audience_any", params=t_params, headers=self.headers, timeout=15000)
             period_str = "Данные без статистики (Live View Error / Timeout)"
 
-        # 4. ЖЕЛЕЗОБЕТОННЫЙ ПАРСИНГ ОТВЕТОВ СЕРВЕРА
+       
         n_data, t_data = {}, {}
         try:
             if res_n.ok: n_data = res_n.json() or {}
@@ -411,11 +390,9 @@ class SmarticoCore:
         nodes_raw = n_data.get("result", []) if isinstance(n_data, dict) else (n_data if isinstance(n_data, list) else [])
         trans_raw = t_data.get("result", []) if isinstance(t_data, dict) else (t_data if isinstance(t_data, list) else [])
         
-        # 🚨 ТОТАЛЬНАЯ ЗАЩИТА ОТ NoneType: принудительно оставляем только реальные словари, отсекая [None], строки и мусор
         nodes = [x for x in (nodes_raw or []) if isinstance(x, dict)]
         trans = [x for x in (trans_raw or []) if isinstance(x, dict)]
         
-        # 5. Вычищаем архивные ноды
         active_nodes = []
         for n in nodes:
             if n.get("is_archived") or n.get("archived") or n.get("status_id") == 6:
@@ -468,7 +445,6 @@ class SmarticoCore:
                 if details.get("is_archived") or details.get("archived") or details.get("status_id") == 6:
                     continue
 
-                # 💡 ИСПРАВЛЕНИЕ: Берем СТРОГО given_by_audience_id (ID входящей стрелочки)
                 aud_id = node.get("given_by_audience_id")
                 if not aud_id and isinstance(details, dict):
                     aud_id = details.get("given_by_audience_id")
@@ -526,7 +502,7 @@ class SmarticoCore:
         return fallback_name
 
     def get_enum_mapping(self, property_id):
-        """Скачивает универсальные справочники по их property_id"""
+        """utilizing property_id"""
         url = f"https://{self.boapi_host}/api/cj_properties_enum_ref"
         query_params = {
             "filter": json.dumps({"property_id": property_id}),
@@ -543,7 +519,7 @@ class SmarticoCore:
             return {}
 
     def get_enum_mapping_by_ids(self, ids):
-        """Универсальный поиск имен напрямую по списку ID (Фолбэк)"""
+        """Universal ID search - fallback"""
         url = f"https://{self.boapi_host}/api/cj_properties_enum_ref"
         query_params = {
             "filter": json.dumps({"id": [int(x) for x in ids]}),
@@ -559,7 +535,7 @@ class SmarticoCore:
             return {}
 
     def flatten_conditions(self, conds):
-        """Разворачивает вложенные GROUP условия"""
+        """Unfolds GROUP conditions"""
         flat = []
         for c in conds:
             if c.get("p") == "GROUP":
@@ -586,7 +562,6 @@ class SmarticoCore:
             line_lower = line.lower()
             matched_c = None
             
-            # Поиск соответствия JSON-поля и текста строки
             for i, c in enumerate(flat_conds):
                 if i in used_conds: continue
                 p = str(c.get("p", "")).lower()
@@ -622,7 +597,7 @@ class SmarticoCore:
         return '\n'.join(fixed_lines)
     
     def get_campaign_metadata(self, campaign_id, campaign_url):
-        """Получает общие настройки кампании (General tab)"""
+        """Getting settings from (General tab)"""
         is_popup = "head" in campaign_url
         camp_type = "j_audience_head" if is_popup else "j_audience_scheduled"
         url = f"https://{self.boapi_host}/api/{camp_type}/{campaign_id}"
