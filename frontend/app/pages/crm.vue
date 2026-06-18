@@ -20,6 +20,7 @@ interface Service {
   iconBg: string;
   footer: string;
   soon: boolean;
+  externalUrl?: string;
 }
 
 const SERVICES: Service[] = [
@@ -67,6 +68,16 @@ const SERVICES: Service[] = [
     iconBg: "#fdf2f8",
     footer: "Запустить сервис →",
     soon: false,
+  },
+  {
+    key: "chrome_extensions",
+    title: "Расширения Chrome",
+    desc: "Google Drive со всеми Chrome-расширениями для автоматизации",
+    icon: "🧩",
+    iconBg: "#f5f3ff", 
+    footer: "Открыть папку →",
+    soon: false,
+    externalUrl: import.meta.env.VITE_GOOGLE_DRIVE_URL, 
   },
 ];
 
