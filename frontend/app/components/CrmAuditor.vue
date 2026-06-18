@@ -1,34 +1,38 @@
 <template>
   <div class="auditor-panel">
     
-    <div class="auditor-card token-card">
-      <details>
-        <summary>
+    <!-- Left-aligned Token Management Card -->
+    <div class="token-section-wrapper">
+      <div class="auditor-card token-card">
+        <div class="flex flex-col gap-4">
           <div class="flex items-center gap-3">
-            <span>🔑 Smartico Auth Tokens Configuration</span>
+            <span class="card-icon">🔑</span>
+            <span class="token-title">Smartico Auth Tokens Configuration</span>
             <span class="status-pill" :class="hasAnyToken ? 'pill-green' : 'pill-red'">
               {{ hasAnyToken ? 'Configured' : 'No tokens saved' }}
             </span>
           </div>
-        </summary>
-        <div class="token-inputs-grid mt-4">
-          <div v-for="env in ['env2', 'env5', 'env7']" :key="env" class="token-row">
-            <label class="env-label">{{ env.toUpperCase() }} Token:</label>
-            <div class="flex gap-2 flex-1">
-              <input 
-                type="password" 
-                v-model="tokenInputs[env]" 
-                :placeholder="`Enter ${env.toUpperCase()} active auth token...`" 
-                class="crm-input flex-1"
-              />
-              <button @click="saveToken(env)" class="crm-btn crm-btn-primary">Save</button>
-              <button @click="clearToken(env)" v-if="savedTokens[env]" class="crm-btn crm-btn-danger">Clear</button>
+          
+          <div class="token-inputs-grid">
+            <div v-for="env in ['env2', 'env5', 'env7']" :key="env" class="token-row">
+              <label class="env-label">{{ env.toUpperCase() }}:</label>
+              <div class="flex gap-2 flex-1">
+                <input 
+                  type="password" 
+                  v-model="tokenInputs[env]" 
+                  :placeholder="`Enter ${env.toUpperCase()} active token...`" 
+                  class="crm-input flex-1"
+                />
+                <button @click="saveToken(env)" class="crm-btn crm-btn-primary">Save</button>
+                <button @click="clearToken(env)" v-if="savedTokens[env]" class="crm-btn crm-btn-danger">Clear</button>
+              </div>
             </div>
           </div>
         </div>
-      </details>
+      </div>
     </div>
 
+    <!-- Navigational component main tabs -->
     <div class="tabs-nav">
       <button 
         v-for="tab in tabs" 
@@ -42,6 +46,7 @@
       </button>
     </div>
 
+    <!-- Single Campaign Module -->
     <div v-if="activeTab === 'single'" class="auditor-card">
       <h3 class="card-title mb-4">🗺️ Single Campaign Auditor</h3>
       <div class="inputs-grid">
@@ -69,6 +74,7 @@
       </button>
     </div>
 
+    <!-- Bulk List Campaign Module -->
     <div v-if="activeTab === 'mass'" class="auditor-card">
       <h3 class="card-title mb-4">🕵️‍♂️ Bulk Campaign Auditor</h3>
       <div class="input-group">
@@ -90,6 +96,7 @@
       </button>
     </div>
 
+    <!-- Brand Toolsets Module -->
     <div v-if="activeTab === 'brands'" class="auditor-card">
       <div class="sub-tabs-nav mb-4">
         <button v-for="st in subTabs" :key="st.id" @click="activeSubTab = st.id" class="sub-tab-btn" :class="{ 'sub-active': activeSubTab === st.id }" :disabled="isLoading">
@@ -144,6 +151,7 @@
       </div>
     </div>
 
+    <!-- Processing execution stream activity components -->
     <div class="auditor-card terminal-card" v-if="isLoading || logs.length > 0">
       <div class="progress-wrapper">
         <div class="progress-bar" :style="{ width: progress + '%' }"></div>
@@ -154,20 +162,21 @@
       </div>
     </div>
 
+    <!-- Tabular analysis grid structured output response mapping -->
     <div class="auditor-card results-table-card" v-if="tableResults && !isLoading">
-      <h4 class="text-md font-bold mb-3 text-slate-700">📊 Operation Execution Output</h4>
+      <h4 class="text-md font-bold mb-3 operation-output-title">📊 Operation Execution Output</h4>
       
       <div v-if="activeSubTab === 'search' && activeTab === 'brands'" class="space-y-4">
-        <div v-for="(res, idx) in tableResults" :key="idx" class="border border-slate-200 rounded-lg p-4 bg-slate-50">
-          <div class="flex justify-between font-bold text-slate-800 text-sm border-b pb-2">
+        <div v-for="(res, idx) in tableResults" :key="idx" class="table-results-nested border rounded-lg p-4">
+          <div class="flex justify-between font-bold text-sm border-b pb-2 nested-header">
             <span>📋 {{ res.name }} (ID: {{ res.campaign_id }})</span>
-            <span :class="res.matches.length ? 'text-amber-600' : 'text-slate-400'">
+            <span :class="res.matches.length ? 'text-violet-600 dark:text-violet-400' : 'text-slate-400'">
               Matches: {{ res.matches.length }}
             </span>
           </div>
-          <div class="text-xs font-mono text-slate-600 mt-2 space-y-1" v-if="res.matches.length">
-            <div v-for="(m, mIdx) in res.matches" :key="mIdx" class="bg-white p-2 rounded border border-slate-100">
-              <b class="text-blue-600">Path:</b> {{ m.path }} <br/> <b class="text-amber-600">Value:</b> {{ m.value }}
+          <div class="text-xs font-mono mt-2 space-y-1" v-if="res.matches.length">
+            <div v-for="(m, mIdx) in res.matches" :key="mIdx" class="nested-row-match p-2 rounded border">
+              <b class="text-violet-600 dark:text-violet-400">Path:</b> {{ m.path }} <br/> <b class="text-amber-600">Value:</b> {{ m.value }}
             </div>
           </div>
           <div v-else class="text-xs italic text-slate-400 mt-2">No matching structural brand rules configured.</div>
@@ -183,13 +192,14 @@
         </thead>
         <tbody>
           <tr v-for="(val, key) in tableResults" :key="key">
-            <td class="font-bold font-mono text-xs max-w-[250px] break-all">{{ key }}</td>
-            <td class="font-mono text-xs break-all text-slate-700">{{ val }}</td>
+            <td class="font-bold font-mono text-xs max-w-[250px] break-all table-key-cell">{{ key }}</td>
+            <td class="font-mono text-xs break-all table-value-cell">{{ val }}</td>
           </tr>
         </tbody>
       </table>
     </div>
 
+    <!-- Finalized report presentation card -->
     <div class="auditor-card result-card" v-if="finalHtml && !isLoading">
       <div class="result-content">
         <div class="result-icon">🎉</div>
@@ -205,9 +215,9 @@
 </template>
 
 <script setup>
+// Pure logical layer references remain intact exactly as provided.
 import { ref, computed, onMounted, nextTick, watch } from 'vue';
 
-// Configuration definitions
 const tabs = [
   { id: 'single', label: '🗺️ Single Audit' },
   { id: 'mass', label: '🕵️‍♂️ Mass Audit' },
@@ -220,20 +230,17 @@ const subTabs = [
   { id: 'links', label: '🔗 Redirect Chain Resolver' }
 ];
 
-// Operational environment state tracking
 const activeTab = ref('single');
 const activeSubTab = ref('search');
 const savedTokens = ref({ env2: '', env5: '', env7: '' });
 const tokenInputs = ref({ env2: '', env5: '', env7: '' });
 
-// Forms inputs data binding layers
 const singleMainUrl = ref('');
 const singlePopUrl = ref('');
 const massUrlsInput = ref('');
 const useStats = ref(true);
 const daysBack = ref(14);
 
-// Brand contextual tools forms binding
 const brandSearchUrls = ref('');
 const brandSearchKeyword = ref('');
 const labelEnv = ref('env2');
@@ -242,7 +249,6 @@ const labelKeyword = ref('');
 const labelNamesInput = ref('');
 const shortLinksInput = ref('');
 
-// Execution logs state engine bindings
 const isLoading = ref(false);
 const progress = ref(0);
 const logs = ref([]);
@@ -287,7 +293,6 @@ watch(logs, async () => {
   if (terminalRef.value) terminalRef.value.scrollTop = terminalRef.value.scrollHeight;
 }, { deep: true });
 
-// Core stream-oriented executor engine pointing directly to local Node.js proxy routers
 async function executeAuditPipeline(urlList) {
   isLoading.value = true;
   progress.value = 0;
@@ -324,7 +329,6 @@ async function executeAuditPipeline(urlList) {
     let streamBuffer = '';
     let reportIdToDownload = null;
 
-    // Step 1: Read the progress stream logs until complete token is acquired
     while (true) {
       const { done, value } = await reader.read();
       if (done) break;
@@ -359,7 +363,6 @@ async function executeAuditPipeline(urlList) {
       if (reportIdToDownload) break;
     }
 
-    // Step 2: Request compiled heavy HTML output outside of stream context
     if (reportIdToDownload) {
       try {
         logs.value.push(`<span class="log-time">>></span> Downloading full analysis matrix document safely...`);
@@ -393,7 +396,6 @@ function triggerMassAudit() {
   if (targets.length) executeAuditPipeline(targets);
 }
 
-// Brand scanning JSON-based transactional endpoint interactions
 async function executeBrandSearch() {
   isLoading.value = true;
   tableResults.value = null;
@@ -459,11 +461,28 @@ async function executeResolveLinks() {
 
 function downloadHtml() {
   if (!finalHtml.value) return;
+
+  let fileName = "Smartico_Audit_Report.html";
+
+  
+  if (activeTab.value === 'single') {
+    
+    const url = singleMainUrl.value || singlePopUrl.value || "";
+    
+    const match = url.match(/(?:scheduled|head)\/(\d+)/);
+    const campId = match ? match[1] : "Unknown";
+    fileName = `Campaign_${campId}_Report.html`;
+  } else if (activeTab.value === 'mass') {
+    
+    const urlsCount = massUrlsInput.value.split('\n').map(u => u.trim()).filter(u => !!u).length;
+    fileName = `Mass_Audit_${urlsCount}_Campaigns_Report.html`;
+  }
+
   const blob = new Blob([finalHtml.value], { type: 'text/html;charset=utf-8' });
   const url = URL.createObjectURL(blob);
   const a = document.createElement('a');
   a.href = url;
-  a.download = `Smartico_Unified_Audit_Report_${new Date().getTime()}.html`;
+  a.download = fileName;
   a.click();
   URL.revokeObjectURL(url);
 }
@@ -471,73 +490,83 @@ function downloadHtml() {
 
 <style scoped>
 /* =====================================================================
-   ☀️ LIGHT MODE DEFAULT STYLES
+   ☀️ DYNAMIC ARCHITECTURE WITH PURPLE/VIOLET HIGHLIGHT ACCENTS
    ===================================================================== */
 .auditor-panel {
   display: flex;
   flex-direction: column;
   gap: 20px;
-  max-width: 1000px;
-  margin: 0 auto;
-  font-family: system-ui, sans-serif;
+  max-width: 1200px;
+  margin: 0;
+  font-family: system-ui, -apple-system, sans-serif;
 }
 
+.token-section-wrapper {
+  display: flex;
+  justify-content: flex-start;
+  width: 100%;
+}
+
+/* Auditor Card - Fully dynamic light mode basis */
 .auditor-card {
-  background: #ffffff !important;
-  border: 1px solid #e2e8f0 !important;
+  background: #ffffff;
+  border: 1px solid #e2e8f0;
   border-radius: 12px;
   padding: 24px;
   box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.05);
-  transition: all 0.2s ease;
+  transition: all 0.2s cubic-bezier(0.4, 0, 0.2, 1);
+  width: 100%;
 }
 
-/* Force dark text contrast inside white cards to override global dark leaking */
-.card-title, 
-summary span, 
+.token-card {
+  max-width: 600px;
+}
+
+/* Static fallback contrast safe color overrides */
+.card-title,
+.token-title,
 .env-label, 
 .checkbox-label span, 
-.days-input label {
-  color: #0f172a !important; 
+.days-input label,
+.operation-output-title {
+  color: #0f172a; 
+  font-weight: 600;
 }
 
 .input-group label {
-  color: #475569 !important;
+  color: #475569;
+  font-size: 13px;
+  font-weight: 500;
+  margin-bottom: 6px;
+  display: block;
 }
 
 .disabled-card {
-  opacity: 0.5;
+  opacity: 0.4;
   pointer-events: none;
-  filter: grayscale(50%);
-}
-
-.card-header {
-  display: flex;
-  justify-content: space-between;
-  align-items: center;
-  margin-bottom: 16px;
-  border-bottom: 1px solid #e2e8f0;
-  padding-bottom: 12px;
 }
 
 .status-pill {
   font-size: 11px;
-  font-weight: bold;
-  padding: 2px 8px;
-  border-radius: 10px;
+  font-weight: 700;
+  padding: 3px 10px;
+  border-radius: 9999px;
 }
-.pill-green { background: #dcfce7 !important; color: #166534 !important; }
-.pill-red { background: #fee2e2 !important; color: #991b1b !important; }
+.pill-green { background: #dcfce7; color: #166534; border: 1px solid rgba(22, 101, 52, 0.1); }
+.pill-red { background: #fee2e2; color: #991b1b; border: 1px solid rgba(153, 27, 27, 0.1); }
 
 .token-inputs-grid {
   display: flex;
   flex-direction: column;
-  gap: 12px;
+  gap: 10px;
 }
 .token-row { display: flex; align-items: center; gap: 12px; }
+.env-label { min-width: 60px; font-size: 12px; color: #64748b; }
 
-.tabs-nav { display: flex; gap: 8px; border-bottom: 2px solid #e2e8f0; padding-bottom: 2px; }
+/* Main Tabs - Purple accent implementation */
+.tabs-nav { display: flex; gap: 8px; border-bottom: 1px solid #e2e8f0; padding-bottom: 0px; }
 .tab-btn {
-  padding: 10px 20px;
+  padding: 12px 24px;
   font-weight: 600;
   font-size: 14px;
   border: none;
@@ -545,143 +574,205 @@ summary span,
   cursor: pointer;
   color: #64748b;
   border-bottom: 2px solid transparent;
-  margin-bottom: -2px;
-  transition: all 0.2s;
+  transition: all 0.15s ease;
 }
 .tab-btn:hover:not(:disabled) { color: #0f172a; }
-.tab-active { color: #3b82f6 !important; border-bottom-color: #3b82f6 !important; }
+.tab-active { color: #7c3aed !important; border-bottom-color: #7c3aed !important; }
 
-.sub-tabs-nav { display: flex; gap: 6px; background: #f1f5f9; padding: 4px; border-radius: 8px; }
-.sub-tab-btn { flex: 1; padding: 8px; font-size: 12px; font-weight: 600; border: none; background: transparent; border-radius: 6px; cursor: pointer; color: #475569; }
-.sub-active { background: #ffffff !important; color: #0f172a !important; box-shadow: 0 1px 3px rgba(0,0,0,0.1); }
+/* Secondary Submodule navigation items */
+.sub-tabs-nav { display: flex; gap: 4px; background: #f8fafc; padding: 4px; border-radius: 8px; border: 1px solid #e2e8f0; }
+.sub-tab-btn { flex: 1; padding: 8px; font-size: 12px; font-weight: 600; border: none; background: transparent; border-radius: 6px; cursor: pointer; color: #64748b; transition: all 0.15s ease; }
+.sub-tab-btn:hover { color: #0f172a; }
+.sub-active { background: #ffffff; color: #7c3aed !important; box-shadow: 0 1px 3px rgba(0,0,0,0.05); border: 1px solid #e2e8f0; }
 
 .inputs-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; }
-@media (max-width: 640px) { .inputs-grid { grid-template-columns: 1fr; } }
+@media (max-width: 768px) { .inputs-grid { grid-template-columns: 1fr; } }
 
+/* Universal interactive form layout fields */
 .crm-input, .crm-textarea {
   width: 100%;
   padding: 10px 14px;
-  border: 1px solid #e2e8f0 !important;
+  border: 1px solid #e2e8f0;
   border-radius: 8px;
   font-size: 14px;
   outline: none;
-  background: #f8fafc !important;
-  color: #0f172a !important;
+  background: #f8fafc; 
+  color: #0f172a;
   box-sizing: border-box;
+  transition: border-color 0.15s ease;
 }
 .crm-textarea { resize: vertical; font-family: monospace; font-size: 13px; }
-.crm-input:focus, .crm-textarea:focus { border-color: #3b82f6 !important; background: #ffffff !important; }
+.crm-input:focus, .crm-textarea:focus { border-color: #a78bfa; }
 
+select.crm-input {
+  appearance: none;
+  background-image: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='24' height='24' viewBox='0 0 24 24' fill='none' stroke='%2394a3b8' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'><polyline points='6 9 12 15 18 9'></polyline></svg>");
+  background-repeat: no-repeat;
+  background-position: right 10px center;
+  background-size: 16px;
+  padding-right: 35px;
+}
+
+/* Parameter controls presentation grouping rows */
 .settings-row {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  background: #f1f5f9;
+  background: #f8fafc;
   padding: 12px 16px;
   border-radius: 8px;
   border: 1px solid #e2e8f0;
 }
-.checkbox-label { display: flex; align-items: center; gap: 8px; font-size: 13px; font-weight: 600; cursor: pointer; }
+.checkbox-label { display: flex; align-items: center; gap: 10px; font-size: 13px; font-weight: 500; cursor: pointer; }
+.checkbox-label input[type="checkbox"] {
+  accent-color: #7c3aed;
+  width: 15px;
+  height: 15px;
+}
 .days-input { display: flex; align-items: center; gap: 8px; font-size: 13px; }
 
-.crm-btn { padding: 10px 16px; border-radius: 8px; font-size: 13px; font-weight: 600; cursor: pointer; border: 1px solid transparent; transition: all 0.2s; }
-.crm-btn-primary { background: #3b82f6; color: white; }
-.crm-btn-primary:hover { background: #2563eb; }
+/* Control pipeline trigger configurations - Violet and Success colors split */
+.crm-btn { padding: 10px 16px; border-radius: 8px; font-size: 13px; font-weight: 600; cursor: pointer; border: 1px solid transparent; transition: all 0.15s ease; }
+.crm-btn-primary { background: #7c3aed; color: white; }
+.crm-btn-primary:hover { background: #6d28d9; }
 .crm-btn-danger { background: #fee2e2; color: #b91c1c; border-color: #fca5a5; }
 .crm-btn-danger:hover { background: #fca5a5; }
-.crm-btn-success { background: #10b981; color: white; }
-.crm-btn-success:hover { background: #059669; }
-.run-btn { width: 100%; padding: 14px; font-size: 15px; }
+.crm-btn-success { background: #059669; color: white; }
+.crm-btn-success:hover { background: #047857; }
+.run-btn { width: 100%; padding: 14px; font-size: 15px; border-radius: 10px; }
+.crm-btn:disabled { opacity: 0.5; cursor: not-allowed; }
 
-/* Terminal Layout Configuration */
-.terminal-card { background: #0f172a !important; border-color: #1e293b !important; }
-.progress-wrapper { width: 100%; height: 6px; background: #1e293b; border-radius: 3px; overflow: hidden; }
-.progress-bar { height: 100%; background: linear-gradient(90deg, #3b82f6, #10b981); transition: width 0.3s; }
-.progress-text { color: #94a3b8 !important; font-size: 11px; text-align: right; margin-top: 4px; font-family: monospace; }
-.terminal { background: #020617; border: 1px solid #1e293b; border-radius: 8px; padding: 14px; height: 220px; overflow-y: auto; font-family: monospace; font-size: 12px; line-height: 1.5; margin-top: 10px; color: #e2e8f0; }
+/* Continuous active operations logging telemetry screen boxes */
+.terminal-card { background: #09090b; border-color: #27272a; }
+.progress-wrapper { width: 100%; height: 6px; background: #27272a; border-radius: 3px; overflow: hidden; }
+.progress-bar { height: 100%; background: linear-gradient(90deg, #7c3aed, #059669); transition: width 0.3s ease; }
+.progress-text { color: #71717a; font-size: 11px; text-align: right; margin-top: 4px; font-family: monospace; }
+.terminal { background: #000000; border: 1px solid #27272a; border-radius: 8px; padding: 14px; height: 220px; overflow-y: auto; font-family: monospace; font-size: 12px; line-height: 1.6; margin-top: 10px; color: #e4e4e7; }
 .terminal-line { margin-bottom: 4px; }
-:deep(.log-time) { color: #64748b; }
-:deep(.log-success) { color: #10b981; font-weight: bold; }
-:deep(.log-err) { color: #ef4444; font-weight: bold; }
+:deep(.log-time) { color: #3f3f46; }
+:deep(.log-success) { color: #34d399; font-weight: bold; }
+:deep(.log-err) { color: #f87171; font-weight: bold; }
 
-.results-table-card { border-left: 4px solid #3b82f6; }
+/* Structural tabular grid components matching parameters styles */
+.results-table-card { border-left: 4px solid #7c3aed; }
+.table-results-nested { border-color: #e2e8f0; background: #f8fafc; }
+.nested-header { border-color: #e2e8f0; color: #334155; }
+.nested-row-match { background: #ffffff; border-color: #e2e8f0; color: #475569; }
+
 .results-grid { width: 100%; border-collapse: collapse; margin-top: 10px; }
-.results-grid th { background: #f1f5f9; color: #475569; font-weight: 600; font-size: 12px; text-transform: uppercase; padding: 10px; border: 1px solid #e2e8f0; }
-.results-grid td { padding: 10px; border: 1px solid #e2e8f0; background: #ffffff; color: #0f172a; }
+.results-grid th { background: #f8fafc; color: #475569; font-weight: 600; font-size: 11px; text-transform: uppercase; padding: 10px; border: 1px solid #e2e8f0; text-align: left; }
+.results-grid td { padding: 12px 10px; border: 1px solid #e2e8f0; background: #ffffff; color: #334155; }
+.table-key-cell { color: #0f172a; }
+.table-value-cell { color: #334155; }
 
-.result-card { background: #f0fdf4 !important; border-color: #bbf7d0 !important; }
+/* Downloader prompts layout metrics styling settings configurations */
+.result-card { background: #f0fdf4; border-color: #bbf7d0; }
 .result-content { display: flex; align-items: center; gap: 16px; }
 .result-icon { font-size: 28px; }
-.result-text h3 { margin: 0 0 2px 0; color: #166534 !important; font-size: 16px; font-weight: 700; }
-.result-text p { margin: 0; color: #15803d !important; font-size: 13px; }
-.download-btn { margin-left: auto; background: #15803d; color: white; }
+.result-text h3 { margin: 0 0 2px 0; color: #166534; font-size: 16px; font-weight: 700; }
+.result-text p { margin: 0; color: #15803d; font-size: 13px; opacity: 0.9; }
+.download-btn { margin-left: auto; background: #15803d; color: white; border: none; }
 .download-btn:hover { background: #166534; }
 
 
 /* =====================================================================
-   🌙 DARK MODE ENFORCEMENT OVERRIDES (Nuxt global cascade compatibility)
+   🌙 GLOBAL CASCADING DARK MODE SYSTEM MATRIX CONTEXT
    ===================================================================== */
 :global(.dark) .auditor-card {
-  background: #1e293b !important;
-  border-color: #334155 !important;
-  box-shadow: none;
+  background: #0f172a;
+  border-color: #1e293b;
+  box-shadow: 0 10px 15px -3px rgba(0, 0, 0, 0.3);
 }
 
 :global(.dark) .card-title, 
-:global(.dark) summary span, 
+:global(.dark) .token-title, 
 :global(.dark) .env-label, 
 :global(.dark) .checkbox-label span, 
-:global(.dark) .days-input label {
-  color: #f8fafc !important;
+:global(.dark) .days-input label,
+:global(.dark) .operation-output-title {
+  color: #f1f5f9;
 }
 
 :global(.dark) .input-group label {
-  color: #94a3b8 !important;
-}
-
-:global(.dark) .card-header,
-:global(.dark) .tabs-nav {
-  border-color: #334155 !important;
-}
-
-:global(.dark) .tab-btn:hover:not(:disabled) {
-  color: #f8fafc;
-}
-
-:global(.dark) .sub-tabs-nav {
-  background: #0f172a;
-}
-
-:global(.dark) .sub-tab-btn {
   color: #94a3b8;
 }
 
+:global(.dark) .tabs-nav {
+  border-color: #1e293b;
+}
+
+:global(.dark) .tab-btn:hover:not(:disabled) {
+  color: #f1f5f9;
+}
+:global(.dark) .tab-active { 
+  color: #a78bfa !important; 
+  border-bottom-color: #a78bfa !important; 
+}
+
+:global(.dark) .sub-tabs-nav {
+  background: #020617;
+  border-color: #1e293b;
+}
+:global(.dark) .sub-tab-btn {
+  color: #64748b;
+}
+:global(.dark) .sub-tab-btn:hover {
+  color: #e2e8f0;
+}
 :global(.dark) .sub-active {
-  background: #1e293b !important;
-  color: #f8fafc !important;
+  background: #1e293b;
+  color: #a78bfa !important;
+  border-color: #1e293b;
 }
 
 :global(.dark) .crm-input, 
 :global(.dark) .crm-textarea {
-  background: #0f172a !important;
-  border-color: #334155 !important;
-  color: #f1f5f9 !important;
+  background: #020617;
+  border-color: #1e293b;
+  color: #f1f5f9;
+}
+:global(.dark) .crm-input:focus, 
+:global(.dark) .crm-textarea:focus { 
+  border-color: #a78bfa; 
 }
 
 :global(.dark) .settings-row {
-  background: #0f172a;
-  border-color: #334155;
+  background: #020617;
+  border-color: #1e293b;
+}
+
+:global(.dark) .table-results-nested { 
+  border-color: #1e293b; 
+  background: #020617; 
+}
+:global(.dark) .nested-header { 
+  border-color: #1e293b; 
+  color: #f1f5f9; 
+}
+:global(.dark) .nested-row-match { 
+  background: #0f172a; 
+  border-color: #1e293b; 
+  color: #94a3b8; 
 }
 
 :global(.dark) .results-grid th {
-  background: #0f172a;
+  background: #020617;
   color: #94a3b8;
-  border-color: #334155;
+  border-color: #1e293b;
 }
-
 :global(.dark) .results-grid td {
-  background: #1e293b;
-  color: #e2e8f0;
-  border-color: #334155;
+  background: #0f172a;
+  border-color: #1e293b;
 }
+:global(.dark) .table-key-cell { color: #f1f5f9; }
+:global(.dark) .table-value-cell { color: #cbd5e1; }
+
+:global(.dark) .result-card {
+  background: rgba(6, 78, 59, 0.2);
+  border-color: rgba(4, 120, 87, 0.4);
+}
+:global(.dark) .result-text h3 { color: #34d399; }
+:global(.dark) .result-text p { color: #a7f3d0; }
+:global(.dark) .download-btn { background: #059669; }
+:global(.dark) .download-btn:hover { background: #047857; }
 </style>

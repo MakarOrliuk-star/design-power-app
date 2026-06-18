@@ -292,7 +292,7 @@ async def audit_stream(request: AuditRequest):
                     <div style="border: 4px solid #cbd5e1; border-top: 8px solid #3b82f6; border-radius: 12px; margin-bottom: 40px; background: white; overflow: hidden; box-shadow: 0 4px 6px rgba(0,0,0,0.1);">
                         <div style="background: #f1f5f9; padding: 15px 20px; border-bottom: 1px solid #cbd5e1;">
                             <h2 style="margin: 0; color: #0f172a; font-size: 20px;">📌 Campaign ID #{camp_id}</h2>
-                            <a href="{current_url}" target="_blank" style="color: #3b82f6; font-size: 13px;">{current_url}</a>
+                            <a href="{current_url}" target="_blank" style="color: #3b82f6; font-size: 13px; word-break: break-all; display: block; margin-top: 4px;">{current_url}</a>
                         </div>
                         <div style="padding: 20px;">
                             {single_campaign_report}

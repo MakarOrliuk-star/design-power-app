@@ -16,23 +16,6 @@ class SmarticoCore:
         self.boapi_host = boapi_host
         self.drive_host = drive_host
         
-        # ==========================================================
-        # 👥 РЕЕСТР QA-ПЕРСОН (из web_auditor_app)
-        # ==========================================================
-        self.QA_REGISTRY = {
-            # DRIVE-7
-            "896": "896:1754238177731145185",
-            # DRIVE-5
-            "829": "829:8448539841010620822", "839": "839:1531686315825469657",
-            "836": "836:1706495762523592130", "869": "869:183708819059120879",
-            "885": "885:1719220158045499111", "904": "904:1716533076811932616",
-            "912": "912:461525723524107789",
-            # DRIVE (ENV 2)
-            "673": "673:1723144455787313991", "822": "822:1758983921962607028",
-            "828": "828:1602915985410109535", "678": "678:7510192718669794302",
-            "651": "651:86114211798740340",   "842": "842:1801871159569785305",
-            "645": "645:108467023969063098", "2828": "825:3281290609143656674"
-        }
 
         self.headers = {
             "accept": "application/json",
@@ -3047,7 +3030,7 @@ class SmarticoCore:
 
                     card_inner += f"<details style='margin-top:5px;'><summary style='cursor:pointer; font-weight:bold; color:#8e44ad;'>📁 All labels ({len(f_lbls)})</summary><div class='pre-text' style='font-size:12px;'>{fmt(f_lbls)}</div></details>"
                     
-                    card_inner += f"<details style='margin-top:5px;'><summary style='cursor:pointer; font-weight:bold; color:#e67e22;'>🖼️ Baner ({len(b_l)})</summary><div style='margin-top:8px;'>{get_labels_ui(b_l)}</div></details>"
+                    card_inner += f"<details style='margin-top:5px;'><summary style='cursor:pointer; font-weight:bold; color:#e67e22;'>🖼️ Banner ({len(b_l)})</summary><div style='margin-top:8px;'>{get_labels_ui(b_l)}</div></details>"
                     card_inner += f"<details style='margin-top:5px;'><summary style='cursor:pointer; font-weight:bold; color:#2980b9;'>📜 Terms and Conditions ({len(t_l)})</summary><div style='margin-top:8px;'>{get_labels_ui(t_l)}</div></details>"
                     card_inner += f"<details style='margin-top:5px;'><summary style='cursor:pointer; font-weight:bold; color:#2c3e50;'>📝 Dynamic content ({len(d_l)})</summary><div style='margin-top:8px;'>{get_labels_ui(d_l)}</div></details>"
                     card_inner += f"<details style='margin-top:5px;'><summary style='cursor:pointer; font-weight:bold; color:#16a085;'>🔗 UTM ({len(u_l)})</summary><div style='margin-top:8px;'>{get_utm_ui(u_l, camp_name)}</div></details>"
