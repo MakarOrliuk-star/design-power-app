@@ -106,6 +106,10 @@ const otherServices = computed(() =>
 
 function openService(s: Service) {
   if (s.soon) return; // soon tiles are not clickable
+  if (s.externalUrl) {
+    window.open(s.externalUrl, "_blank", "noopener,noreferrer");
+    return;
+  }
   activeService.value = s.key as ServiceKey;
 }
 
