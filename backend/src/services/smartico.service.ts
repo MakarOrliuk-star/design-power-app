@@ -6,6 +6,7 @@ import {
   normalizeBrand,
   buildBrandMap,
   type TypeKey,
+  type KoreaVariant,
 } from "../lib/smartico/detect.js";
 
 /**
@@ -18,8 +19,10 @@ export interface AnalyzedBrand {
   raw: string; // brand folder name as found in the ZIP
   canonical: string; // mapped canonical Smartico name (or `raw` when unmatched)
   matched: boolean; // present in the SmarticoBrand table
-  suspicious: boolean; // unmatched and not the All-brands label
-  isAllBrands: boolean; // cross-brand label case (legacy "All brands")
+  suspicious: boolean; // unmatched real brand (pseudo-brands are exempt)
+  isAllBrands: boolean; // cross-brand "All brands" case → constant function
+  isKorea: boolean; // Korea / Korea realistic → separate KO function
+  koreaVariant: KoreaVariant | null;
   types: Partial<Record<TypeKey, { default: boolean; KO: boolean }>>;
   imageCount: number;
 }
