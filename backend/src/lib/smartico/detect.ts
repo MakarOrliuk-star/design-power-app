@@ -51,6 +51,9 @@ export function typeFromFolder(name: string): TypeKey | null {
 export function typeFromFilename(filename: string): TypeKey | null {
   const base = stripExt(filename);
   if (/(?:^|[^a-z0-9])subitem(?:[^a-z0-9]|$)/i.test(base)) return null;
+  // "email_text" sits next to "email" inside CRM but is not a campaign asset —
+  // ignore it so it doesn't shadow the real "email" image.
+  if (/email[-_ ]?text/i.test(base)) return null;
   if (/(?:^|[^a-z0-9])pop[-_ ]?up[-_ ]?1(?:[^0-9]|$)/i.test(base)) return "pop-up_1";
   if (/(?:^|[^a-z0-9])pop[-_ ]?up[-_ ]?2(?:[^0-9]|$)/i.test(base)) return "pop-up_2";
   if (/(?:^|[^a-z0-9])pop[-_ ]?up(?:[^a-z0-9]|$)/i.test(base)) return "pop-up";
@@ -82,7 +85,10 @@ export function resolveEntry(path: string): { brand: string; type: TypeKey } | n
   // ---- New structure: anchored on a "CRM" segment ----
   const crmIdx = segments.findIndex((s) => norm(s) === "crm");
   if (crmIdx >= 1) {
-    const brand = segments[Math.max(0, crmIdx - 2)]!.trim();
+    // Real structure is DES-XXXXX / <Brand> / CRM / <file>, so the brand is the
+    // segment immediately above CRM. (Korea / Korea realistic / All brands sit at
+    // the same level and are classified later as pseudo-brands.)
+    const brand = segments[crmIdx - 1]!.trim();
     const afterCrm = segments.slice(crmIdx + 1); // [...typeFolder?, filename]
     let type: TypeKey | null = null;
     if (afterCrm.length >= 2) {
@@ -131,9 +137,23 @@ export function availableTypes(structure: ParsedStructure): TypeKey[] {
   return TYPE_ORDER.filter((t) => found.has(t));
 }
 
-/** A brand whose normalized name equals "allbrands" is the cross-brand label case. */
+/** A brand whose normalized name equals "allbrands" is the cross-brand case. */
 export function isAllBrands(rawName: string): boolean {
   return norm(rawName) === "allbrands";
+}
+
+export type KoreaVariant = "standard" | "realistic";
+
+/**
+ * "Korea" / "Korea realistic" are KO-locale pseudo-brands that live alongside
+ * real brands. Each becomes its own KO-guarded Smartico function (the manager
+ * picks one of the two implementations by hand), so they are never folded into
+ * the per-brand map. Returns the variant, or null for ordinary brands.
+ */
+export function koreaVariantOf(rawName: string): KoreaVariant | null {
+  const n = norm(rawName);
+  if (!n.includes("korea")) return null;
+  return n.includes("realistic") ? "realistic" : "standard";
 }
 
 export function buildBrandMap(canonicalNames: string[]): Map<string, string> {
@@ -150,12 +170,16 @@ export interface NormalizedBrand {
   raw: string; // folder name as in the ZIP
   canonical: string; // mapped canonical name, or `raw` when unmatched
   matched: boolean; // found in the Smartico brand table
-  suspicious: boolean; // unmatched and not the All-brands label → flag in UI
+  suspicious: boolean; // unmatched real brand → flag in UI
   isAllBrands: boolean;
+  isKorea: boolean; // Korea / Korea realistic pseudo-brand
+  koreaVariant: KoreaVariant | null;
 }
 
 export function normalizeBrand(raw: string, brandMap: Map<string, string>): NormalizedBrand {
   const allBrands = isAllBrands(raw);
+  const koreaVariant = koreaVariantOf(raw);
+  const isKorea = koreaVariant !== null;
   const key = raw.trim().toLowerCase();
   const keyNoSpaces = key.replace(/\s+/g, "");
   const canonical = brandMap.get(key) ?? brandMap.get(keyNoSpaces);
@@ -164,7 +188,11 @@ export function normalizeBrand(raw: string, brandMap: Map<string, string>): Norm
     raw,
     canonical: canonical ?? raw,
     matched,
-    suspicious: !matched && !allBrands,
+    // Pseudo-brands (All brands / Korea) are expected to be absent from the
+    // brand table, so they are never flagged as suspicious.
+    suspicious: !matched && !allBrands && !isKorea,
     isAllBrands: allBrands,
+    isKorea,
+    koreaVariant,
   };
 }

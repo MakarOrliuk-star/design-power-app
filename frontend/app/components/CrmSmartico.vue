@@ -18,6 +18,8 @@ interface AnalyzedBrand {
   matched: boolean;
   suspicious: boolean;
   isAllBrands: boolean;
+  isKorea: boolean;
+  koreaVariant: "standard" | "realistic" | null;
   types: Partial<Record<TypeKey, { default: boolean; KO: boolean }>>;
   imageCount: number;
 }
@@ -44,14 +46,6 @@ interface JobResponse {
   result?: JobResult;
   error?: string;
 }
-
-const TYPE_META: Record<TypeKey, { label: string; icon: string }> = {
-  email: { label: "Email", icon: "📧" },
-  push: { label: "Push", icon: "🔔" },
-  "pop-up": { label: "Pop-up", icon: "💬" },
-  "pop-up_1": { label: "Pop-up 1", icon: "💬" },
-  "pop-up_2": { label: "Pop-up 2", icon: "💬" },
-};
 
 const ERROR_TEXT: Record<string, string> = {
   file_too_large: "Файл больше 100 МБ — уменьшите архив.",
@@ -92,8 +86,39 @@ const suspiciousBrands = computed(() =>
   (analysis.value?.brands ?? []).filter((b) => b.suspicious),
 );
 const canGenerate = computed(
-  () => phase.value === "configure" && selectedTypes.value.length > 0,
+  () =>
+    (phase.value === "configure" || phase.value === "done") &&
+    selectedTypes.value.length > 0,
 );
+
+// Fixed UI checkboxes (Email / Pop-up / Push) + a dynamic "Pop-up 2" that only
+// appears when the archive contains a second pop-up. "Pop-up" maps to pop-up_1
+// (or the legacy bare "pop-up"); selecting both pop-ups yields two separate
+// Smartico functions on the backend. Types absent from the archive are disabled.
+interface UiType {
+  id: string;
+  label: string;
+  icon: string;
+  type: TypeKey; // backend TypeKey this checkbox toggles
+  present: boolean; // found in the uploaded archive
+}
+const availableSet = computed(() => new Set(analysis.value?.availableTypes ?? []));
+const popupBase = computed<TypeKey>(() =>
+  availableSet.value.has("pop-up_1") ? "pop-up_1" : "pop-up",
+);
+const uiTypes = computed<UiType[]>(() => {
+  const a = availableSet.value;
+  const popupPresent = a.has("pop-up_1") || a.has("pop-up");
+  const list: UiType[] = [
+    { id: "email", label: "Email", icon: "📧", type: "email", present: a.has("email") },
+    { id: "pop-up", label: "Pop-up", icon: "💬", type: popupBase.value, present: popupPresent },
+    { id: "push", label: "Push", icon: "🔔", type: "push", present: a.has("push") },
+  ];
+  if (a.has("pop-up_2")) {
+    list.push({ id: "pop-up_2", label: "Pop-up 2", icon: "💬", type: "pop-up_2", present: true });
+  }
+  return list;
+});
 
 function errText(code: string | undefined): string {
   return (code && ERROR_TEXT[code]) || ERROR_TEXT.upload_failed!;
@@ -160,7 +185,8 @@ async function handleFile(file: File) {
   try {
     const res = await uploadAndAnalyze(file);
     analysis.value = res;
-    selectedTypes.value = [...res.availableTypes]; // pre-select everything found
+    // Pre-select every checkbox the archive actually has (mapped to backend types).
+    selectedTypes.value = uiTypes.value.filter((u) => u.present).map((u) => u.type);
     phase.value = "configure";
   } catch (e) {
     phase.value = "error";
@@ -266,6 +292,8 @@ onUnmounted(() => {
 
 <template>
   <div class="smartico">
+    <!-- LEFT: upload + configure + generate -->
+    <div class="smartico__left">
     <!-- Step 1: upload -->
     <div
       v-if="phase === 'idle' || phase === 'analyzing' || phase === 'error'"
@@ -284,8 +312,9 @@ onUnmounted(() => {
         {{ phase === "analyzing" ? "Загрузка и анализ…" : "Перетащите ZIP или нажмите, чтобы выбрать" }}
       </div>
       <div class="drop__hint">
-        Поддерживаются обе структуры: <code>DES-XXXXX/Brand/…</code> и
-        <code>Brand/Name/CRM/{email,push,pop-up_1,pop-up_2}</code>. До 100 МБ.
+        Структура: <code>DES-XXXXX/Бренд/CRM/{email, pop-up_1, pop-up_2, push}</code>.
+        <code>All brands</code> → сквозная функция, <code>Korea</code> /
+        <code>Korea realistic</code> → отдельные KO-функции. До 100 МБ.
       </div>
       <input ref="fileInput" type="file" accept=".zip" hidden @change="onInputChange" />
 
@@ -298,7 +327,10 @@ onUnmounted(() => {
     <p v-if="phase === 'error'" class="alert alert--error">{{ errorMsg }}</p>
 
     <!-- Step 2: configure -->
-    <div v-if="phase === 'configure' && analysis" class="panel">
+    <div
+      v-if="analysis && (phase === 'configure' || phase === 'generating' || phase === 'done')"
+      class="panel"
+    >
       <div class="filemeta">
         <span class="filemeta__name">✅ {{ fileName }}</span>
         <span class="filemeta__sub">{{ fileSizeMb }} · {{ analysis.brands.length }} брендов · {{ analysis.totalImages }} картинок</span>
@@ -315,14 +347,20 @@ onUnmounted(() => {
         <div class="field__label">Типы для генерации</div>
         <div class="types">
           <label
-            v-for="t in analysis.availableTypes"
-            :key="t"
+            v-for="u in uiTypes"
+            :key="u.id"
             class="type"
-            :class="{ 'type--on': selectedTypes.includes(t) }"
+            :class="{ 'type--on': u.present && selectedTypes.includes(u.type), 'type--off': !u.present }"
+            :title="u.present ? '' : 'Не найдено в архиве'"
           >
-            <input type="checkbox" :checked="selectedTypes.includes(t)" @change="toggleType(t)" />
-            <span class="type__icon">{{ TYPE_META[t].icon }}</span>
-            {{ TYPE_META[t].label }}
+            <input
+              type="checkbox"
+              :checked="selectedTypes.includes(u.type)"
+              :disabled="!u.present"
+              @change="toggleType(u.type)"
+            />
+            <span class="type__icon">{{ u.icon }}</span>
+            {{ u.label }}
           </label>
         </div>
       </div>
@@ -333,7 +371,8 @@ onUnmounted(() => {
           <li v-for="b in analysis.brands" :key="b.raw" :class="{ 'brands__row--warn': b.suspicious }">
             <span class="brands__name">
               {{ b.raw }}
-              <span v-if="b.isAllBrands" class="tag">label</span>
+              <span v-if="b.isAllBrands" class="tag">Сквозной</span>
+              <span v-else-if="b.isKorea" class="tag tag--ko">KO</span>
               <span v-else-if="b.suspicious" class="tag tag--warn">?</span>
               <span v-else-if="b.canonical !== b.raw" class="brands__canon">→ {{ b.canonical }}</span>
             </span>
@@ -343,11 +382,15 @@ onUnmounted(() => {
       </details>
 
       <button class="btn btn--primary" :disabled="!canGenerate" @click="generate">
-        Сгенерировать ({{ selectedTypes.length }})
+        {{ phase === "generating" ? "Генерация…" : `Сгенерировать (${selectedTypes.length})` }}
       </button>
     </div>
+    </div>
+    <!-- /LEFT -->
 
-    <!-- Step 3: generating -->
+    <!-- RIGHT: generated functions, top-to-bottom -->
+    <div class="smartico__right" :class="{ 'smartico__right--results': phase === 'done' }">
+    <!-- generating -->
     <div v-if="phase === 'generating'" class="panel panel--center">
       <div class="spinner" />
       <div class="gen__status">
@@ -357,8 +400,8 @@ onUnmounted(() => {
       <div class="bar__text">{{ genPct }}%</div>
     </div>
 
-    <!-- Step 4: done -->
-    <div v-if="phase === 'done' && result" class="panel">
+    <!-- done -->
+    <div v-else-if="phase === 'done' && result" class="panel">
       <div class="filemeta">
         <span class="filemeta__name">Готово — {{ result.outputs.length }} блоков</span>
         <span class="filemeta__sub">
@@ -386,15 +429,69 @@ onUnmounted(() => {
         <pre class="block__code">{{ b.code }}</pre>
       </div>
     </div>
+
+    <!-- placeholder before any result -->
+    <div v-else class="placeholder">
+      <div class="placeholder__icon">🧩</div>
+      <div class="placeholder__text">
+        Здесь появятся Smartico-функции.<br />
+        Загрузите ZIP и нажмите «Сгенерировать».
+      </div>
+    </div>
+    </div>
+    <!-- /RIGHT -->
   </div>
 </template>
 
 <style scoped>
 .smartico {
   display: flex;
+  align-items: flex-start;
+  gap: 24px;
+  width: 100%;
+}
+.smartico__left,
+.smartico__right {
+  flex: 1 1 0;
+  min-width: 0;
+  display: flex;
   flex-direction: column;
   gap: 18px;
-  width: 100%;
+}
+/* Scroll only once functions exist — nothing scrolls before generation. */
+.smartico__right--results {
+  position: sticky;
+  top: 16px;
+  max-height: calc(100vh - 32px);
+  overflow-y: auto;
+}
+
+/* result placeholder */
+.placeholder {
+  border: 2px dashed var(--color-border);
+  border-radius: var(--radius-lg);
+  padding: 48px 24px;
+  text-align: center;
+  color: var(--color-grey);
+}
+.placeholder__icon {
+  font-size: 40px;
+  margin-bottom: 10px;
+}
+.placeholder__text {
+  font-size: 14px;
+  line-height: 1.5;
+}
+
+@media (max-width: 900px) {
+  .smartico {
+    flex-direction: column;
+  }
+  .smartico__right--results {
+    position: static;
+    max-height: none;
+    overflow-y: visible;
+  }
 }
 
 /* drop zone */
@@ -542,6 +639,13 @@ onUnmounted(() => {
   border-color: var(--color-accent);
   background: var(--color-bubble);
 }
+.type--off {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+.type--off:hover {
+  border-color: var(--color-border);
+}
 .type__icon {
   font-size: 16px;
 }
@@ -603,6 +707,10 @@ onUnmounted(() => {
 .tag--warn {
   background: rgba(244, 175, 64, 0.2);
   color: #b9791b;
+}
+.tag--ko {
+  background: rgba(102, 126, 234, 0.18);
+  color: #4d5bd0;
 }
 
 /* buttons */

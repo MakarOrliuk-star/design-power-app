@@ -22,14 +22,19 @@ const DISPLAY: Record<TypeKey, string> = {
   "pop-up_2": "Pop-up 2",
 };
 
+// Shared header for every Smartico function (canonical from the legacy GAS app).
+const JAVA_PREAMBLE =
+  "    // Importing the necessary Java classes\n" +
+  "    Date = Java.type('java.util.Date');\n" +
+  "    Int = Java.type('java.lang.Integer');\n" +
+  "    Math = Java.type('java.lang.Math');\n";
+
+/** Per-brand function: resolves the image URL by `state.core_sm_brand_id`. */
 function buildFunction(entries: string[], hasLocalization: boolean, displayType: string): string {
   const subjectLineContent = entries.join(",\n");
 
   let output = "(function() {\n";
-  output += "    // Importing the necessary Java classes\n";
-  output += "    Date = Java.type('java.util.Date');\n";
-  output += "    Int = Java.type('java.lang.Integer');\n";
-  output += "    Math = Java.type('java.lang.Math');\n";
+  output += JAVA_PREAMBLE;
   output += "\n";
   output += `    // Image URLs for each brand (${displayType})\n`;
   output += "    var subjectLine = {\n";
@@ -66,18 +71,47 @@ function buildFunction(entries: string[], hasLocalization: boolean, displayType:
   return output;
 }
 
+/** "All brands" (Сквозной): one shared image for every brand — constant return. */
+function buildConstantFunction(url: string, displayType: string): string {
+  let output = "(function() {\n";
+  output += JAVA_PREAMBLE;
+  output += "\n";
+  output += `    // Сквозной All brands (${displayType})\n`;
+  output += `    return "${url}";\n`;
+  output += "})();";
+  return output;
+}
+
+/** Korea / Korea realistic: KO-locale image, gated on the user language. */
+function buildKoreaFunction(url: string, displayType: string, label: string): string {
+  let output = "(function() {\n";
+  output += JAVA_PREAMBLE;
+  output += "\n";
+  output += `    // ${label} (${displayType}, KO)\n`;
+  output += "    var language = state.core_user_language;\n";
+  output += '    if (language === "KO") {\n';
+  output += `        return "${url}";\n`;
+  output += "    }\n";
+  output += `    return "${FALLBACK}";\n`;
+  output += "})();";
+  return output;
+}
+
 export function generateOutputs(
   urls: UrlMap,
   selectedTypes: TypeKey[],
   brands: NormalizedBrand[],
 ): OutputBlock[] {
-  // Map raw brand → canonical name, and split off the "All brands" label case.
+  // Map raw brand → canonical name, and split off the pseudo-brand cases:
+  // "All brands" (shared image) and Korea / Korea realistic (separate KO functions).
   const canonicalByRaw = new Map<string, string>();
   let allBrandsRaw: string | null = null;
+  const koreaBrands: NormalizedBrand[] = [];
   const individualRaws: string[] = [];
   for (const b of brands) {
     canonicalByRaw.set(b.raw, b.canonical);
     if (b.isAllBrands) allBrandsRaw = b.raw;
+    else if (b.isKorea) koreaBrands.push(b);
     else individualRaws.push(b.raw);
   }
 
@@ -86,20 +120,7 @@ export function generateOutputs(
   for (const type of selectedTypes) {
     const displayType = DISPLAY[type] ?? type;
 
-    // Case 1: "All brands" — a single shared URL shown as a label.
-    if (allBrandsRaw) {
-      const slot = urls[allBrandsRaw]?.[type];
-      const allUrl = slot ? slot.default || slot.KO : null;
-      if (allUrl) {
-        blocks.push({
-          title: `${displayType} — All Brands (Label)`,
-          code: `Create a label with this image URL:\n${allUrl}`,
-          kind: "label",
-        });
-      }
-    }
-
-    // Case 2: individual brands — one Smartico function.
+    // 1) Individual brands — one Smartico function keyed by brand_id.
     const entries: string[] = [];
     let hasLocalization = false;
     for (const raw of individualRaws) {
@@ -124,13 +145,38 @@ export function generateOutputs(
         entries.push(`        "${canonical}": "${koUrl}"`);
       }
     }
-
     if (entries.length > 0) {
       blocks.push({
         title: `${displayType} — Function`,
         code: buildFunction(entries, hasLocalization, displayType),
         kind: "function",
       });
+    }
+
+    // 2) "All brands" — a single shared image, emitted as a constant function.
+    if (allBrandsRaw) {
+      const slot = urls[allBrandsRaw]?.[type];
+      const allUrl = slot ? slot.default || slot.KO : null;
+      if (allUrl) {
+        blocks.push({
+          title: `${displayType} — All Brands (Сквозной)`,
+          code: buildConstantFunction(allUrl, displayType),
+          kind: "function",
+        });
+      }
+    }
+
+    // 3) Korea / Korea realistic — separate KO-guarded functions (manager picks one).
+    for (const k of koreaBrands) {
+      const slot = urls[k.raw]?.[type];
+      const koreaUrl = slot ? slot.default || slot.KO : null;
+      if (koreaUrl) {
+        blocks.push({
+          title: `${displayType} — ${k.raw} (KO)`,
+          code: buildKoreaFunction(koreaUrl, displayType, k.raw),
+          kind: "function",
+        });
+      }
     }
   }
 
