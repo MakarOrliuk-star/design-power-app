@@ -29,7 +29,6 @@ const JAVA_PREAMBLE =
   "    Int = Java.type('java.lang.Integer');\n" +
   "    Math = Java.type('java.lang.Math');\n";
 
-/** Per-brand function: resolves the image URL by `state.core_sm_brand_id`. */
 function buildFunction(entries: string[], hasLocalization: boolean, displayType: string): string {
   const subjectLineContent = entries.join(",\n");
 
@@ -102,8 +101,6 @@ export function generateOutputs(
   selectedTypes: TypeKey[],
   brands: NormalizedBrand[],
 ): OutputBlock[] {
-  // Map raw brand → canonical name, and split off the pseudo-brand cases:
-  // "All brands" (shared image) and Korea / Korea realistic (separate KO functions).
   const canonicalByRaw = new Map<string, string>();
   let allBrandsRaw: string | null = null;
   const koreaBrands: NormalizedBrand[] = [];
@@ -120,7 +117,6 @@ export function generateOutputs(
   for (const type of selectedTypes) {
     const displayType = DISPLAY[type] ?? type;
 
-    // 1) Individual brands — one Smartico function keyed by brand_id.
     const entries: string[] = [];
     let hasLocalization = false;
     for (const raw of individualRaws) {
@@ -153,7 +149,6 @@ export function generateOutputs(
       });
     }
 
-    // 2) "All brands" — a single shared image, emitted as a constant function.
     if (allBrandsRaw) {
       const slot = urls[allBrandsRaw]?.[type];
       const allUrl = slot ? slot.default || slot.KO : null;

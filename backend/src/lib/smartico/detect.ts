@@ -47,7 +47,6 @@ export function typeFromFolder(name: string): TypeKey | null {
   return null;
 }
 
-/** Detect a type token embedded in a filename (legacy rule, widened for _1/_2). */
 export function typeFromFilename(filename: string): TypeKey | null {
   const base = stripExt(filename);
   if (/(?:^|[^a-z0-9])subitem(?:[^a-z0-9]|$)/i.test(base)) return null;
@@ -85,9 +84,6 @@ export function resolveEntry(path: string): { brand: string; type: TypeKey } | n
   // ---- New structure: anchored on a "CRM" segment ----
   const crmIdx = segments.findIndex((s) => norm(s) === "crm");
   if (crmIdx >= 1) {
-    // Real structure is DES-XXXXX / <Brand> / CRM / <file>, so the brand is the
-    // segment immediately above CRM. (Korea / Korea realistic / All brands sit at
-    // the same level and are classified later as pseudo-brands.)
     const brand = segments[crmIdx - 1]!.trim();
     const afterCrm = segments.slice(crmIdx + 1); // [...typeFolder?, filename]
     let type: TypeKey | null = null;
@@ -114,7 +110,6 @@ export function resolveEntry(path: string): { brand: string; type: TypeKey } | n
   return { brand, type };
 }
 
-/** Parse a flat list of ZIP entry paths into the brand/type/locale structure. */
 export function parseStructure(paths: string[]): ParsedStructure {
   const brands: Record<string, BrandTypes> = {};
   for (const path of paths) {
@@ -144,12 +139,6 @@ export function isAllBrands(rawName: string): boolean {
 
 export type KoreaVariant = "standard" | "realistic";
 
-/**
- * "Korea" / "Korea realistic" are KO-locale pseudo-brands that live alongside
- * real brands. Each becomes its own KO-guarded Smartico function (the manager
- * picks one of the two implementations by hand), so they are never folded into
- * the per-brand map. Returns the variant, or null for ordinary brands.
- */
 export function koreaVariantOf(rawName: string): KoreaVariant | null {
   const n = norm(rawName);
   if (!n.includes("korea")) return null;
