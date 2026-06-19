@@ -235,7 +235,9 @@ function pollJob(jobId: string) {
       }
       if (res.status === "failed") {
         phase.value = "error";
-        errorMsg.value = "Генерация не удалась. Попробуйте ещё раз.";
+        errorMsg.value = res.error
+          ? `Генерация не удалась: ${res.error}`
+          : "Генерация не удалась. Попробуйте ещё раз.";
         return;
       }
       pollTimer = setTimeout(tick, 1200);
