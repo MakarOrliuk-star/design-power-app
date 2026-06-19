@@ -13,6 +13,7 @@ import { calculatorRouter } from "./routes/calculator.js";
 import { auditorRouter } from "./routes/auditor.js";
 import { crmRouter } from "./routes/crm.js";
 import { smarticoRouter } from "./routes/smartico.js";
+import { startSmarticoWorker, stopSmarticoWorker } from "./queues/smartico.worker.js";
 
 assertApiProductionConfig();
 
@@ -47,12 +48,15 @@ app.use("/api", loadUser, requireAuth, requireZone("DESIGNER"), generateRouter);
 const server = app.listen(env.PORT, "0.0.0.0", () => {
   console.log(`Backend listening on http://0.0.0.0:${env.PORT} (${env.NODE_ENV})`);
   initCronJobs();
+  // Smartico jobs read the uploaded ZIP from this container's local temp dir, so
+  // they must be processed here (not on the separate worker container).
+  startSmarticoWorker();
 });
 
 // Graceful shutdown so `tsx watch` restarts don't leak the port.
 for (const signal of ["SIGINT", "SIGTERM"] as const) {
   process.on(signal, () => {
     console.log(`\n${signal} received — shutting down`);
-    server.close(() => process.exit(0));
+    void stopSmarticoWorker().finally(() => server.close(() => process.exit(0)));
   });
 }
