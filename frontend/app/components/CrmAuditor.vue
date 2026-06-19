@@ -479,7 +479,7 @@ function downloadHtml() {
 /* =====================================================================
    🎨 BASE CSS (Каркас и Светлая тема)
    ===================================================================== */
-.auditor-panel { display: flex; flex-direction: column; gap: 20px; max-width: 1200px; margin: 0; font-family: system-ui, -apple-system, sans-serif; }
+.auditor-panel { display: flex; flex-direction: column; gap: 20px; width: 100%; font-family: system-ui, -apple-system, sans-serif; }
 .auditor-card { background: #ffffff; border: 1px solid #e2e8f0; border-radius: 12px; padding: 24px; box-shadow: 0 4px 6px -1px rgba(0,0,0,0.05); width: 100%; box-sizing: border-box; transition: all 0.2s; }
 .card-title { color: #0f172a; font-weight: bold; margin-top: 0; margin-bottom: 16px; font-size: 18px; }
 .mb-4 { margin-bottom: 16px; }
@@ -566,52 +566,57 @@ select.crm-input { appearance: none; background-image: url("data:image/svg+xml;u
 .result-text h3 { margin: 0 0 4px 0; color: #065f46; font-size: 16px; font-weight: bold; }
 .result-text p { margin: 0; color: #047857; font-size: 13px; }
 .download-btn { width: auto; padding: 10px 20px; font-size: 14px; margin: 0; }
+</style>
 
-/* =====================================================================
-   🌙 DARK MODE (ZINC PALETTE для data-theme="dark") 
-   ===================================================================== */
-:global([data-theme="dark"]) .auditor-card { background: #18181b !important; border-color: #27272a !important; box-shadow: 0 4px 6px rgba(0,0,0,0.3) !important; }
-:global([data-theme="dark"]) .card-title, 
-:global([data-theme="dark"]) .token-title, 
-:global([data-theme="dark"]) .env-label, 
-:global([data-theme="dark"]) .checkbox-label span, 
-:global([data-theme="dark"]) .days-input label { color: #f4f4f5 !important; }
-:global([data-theme="dark"]) .input-group label { color: #a1a1aa !important; }
+<!-- 
+  =====================================================================
+  🌙 DARK MODE (Железобетонный метод) 
+  Отдельный тег style БЕЗ слова "scoped", чтобы точно пробить изоляцию Vue!
+  ===================================================================== 
+-->
+<style>
+html[data-theme="dark"] .auditor-panel .auditor-card { background: #18181b !important; border-color: #27272a !important; box-shadow: 0 4px 6px rgba(0,0,0,0.3) !important; }
+html[data-theme="dark"] .auditor-panel .card-title, 
+html[data-theme="dark"] .auditor-panel .token-title, 
+html[data-theme="dark"] .auditor-panel .env-label, 
+html[data-theme="dark"] .auditor-panel .checkbox-label span, 
+html[data-theme="dark"] .auditor-panel .days-input label { color: #f4f4f5 !important; }
+html[data-theme="dark"] .auditor-panel .input-group label { color: #a1a1aa !important; }
 
 /* Dark mode overrides */
-:global([data-theme="dark"]) .tabs-nav { border-color: #27272a !important; }
-:global([data-theme="dark"]) .tab-btn:hover:not(:disabled) { color: #f4f4f5 !important; }
-:global([data-theme="dark"]) .tab-active { color: #38bdf8 !important; border-bottom-color: #38bdf8 !important; }
-:global([data-theme="dark"]) .sub-tabs-nav { background: #09090b !important; border-color: #27272a !important; }
-:global([data-theme="dark"]) .sub-tab-btn { color: #71717a !important; }
-:global([data-theme="dark"]) .sub-tab-btn:hover { color: #e4e4e7 !important; }
-:global([data-theme="dark"]) .sub-active { background: #27272a !important; color: #38bdf8 !important; border-color: #27272a !important; box-shadow: none !important; }
+html[data-theme="dark"] .auditor-panel .tabs-nav { border-color: #27272a !important; }
+html[data-theme="dark"] .auditor-panel .tab-btn:hover:not(:disabled) { color: #f4f4f5 !important; }
+html[data-theme="dark"] .auditor-panel .tab-active { color: #38bdf8 !important; border-bottom-color: #38bdf8 !important; }
+html[data-theme="dark"] .auditor-panel .sub-tabs-nav { background: #09090b !important; border-color: #27272a !important; }
+html[data-theme="dark"] .auditor-panel .sub-tab-btn { color: #71717a !important; }
+html[data-theme="dark"] .auditor-panel .sub-tab-btn:hover { color: #e4e4e7 !important; }
+html[data-theme="dark"] .auditor-panel .sub-active { background: #27272a !important; color: #38bdf8 !important; border-color: #27272a !important; box-shadow: none !important; }
 
-:global([data-theme="dark"]) .crm-input, 
-:global([data-theme="dark"]) .crm-textarea { background: #09090b !important; border-color: #27272a !important; color: #f4f4f5 !important; }
-:global([data-theme="dark"]) .crm-input:focus, 
-:global([data-theme="dark"]) .crm-textarea:focus { border-color: #38bdf8 !important; }
-:global([data-theme="dark"]) .settings-row { background: #09090b !important; border-color: #27272a !important; }
+html[data-theme="dark"] .auditor-panel .crm-input, 
+html[data-theme="dark"] .auditor-panel .crm-textarea { background: #09090b !important; border-color: #27272a !important; color: #f4f4f5 !important; }
+html[data-theme="dark"] .auditor-panel .crm-input:focus, 
+html[data-theme="dark"] .auditor-panel .crm-textarea:focus { border-color: #38bdf8 !important; }
+html[data-theme="dark"] .auditor-panel .settings-row { background: #09090b !important; border-color: #27272a !important; }
 
 /* Status Pills Dark */
-:global([data-theme="dark"]) .pill-green { background: rgba(16, 185, 129, 0.1) !important; color: #34d399 !important; border-color: rgba(16, 185, 129, 0.2) !important; }
-:global([data-theme="dark"]) .pill-red { background: rgba(239, 68, 68, 0.1) !important; color: #f87171 !important; border-color: rgba(239, 68, 68, 0.2) !important; }
+html[data-theme="dark"] .auditor-panel .pill-green { background: rgba(16, 185, 129, 0.1) !important; color: #34d399 !important; border-color: rgba(16, 185, 129, 0.2) !important; }
+html[data-theme="dark"] .auditor-panel .pill-red { background: rgba(239, 68, 68, 0.1) !important; color: #f87171 !important; border-color: rgba(239, 68, 68, 0.2) !important; }
 
 /* Table Results Dark */
-:global([data-theme="dark"]) .table-results-nested { border-color: #27272a !important; background: #09090b !important; }
-:global([data-theme="dark"]) .nested-header { border-color: #27272a !important; color: #f4f4f5 !important; }
-:global([data-theme="dark"]) .nested-row-match { background: #18181b !important; border-color: #27272a !important; color: #a1a1aa !important; }
-:global([data-theme="dark"]) .match-success { background: rgba(16, 185, 129, 0.1) !important; color: #34d399 !important; border-color: rgba(16, 185, 129, 0.2) !important; }
+html[data-theme="dark"] .auditor-panel .table-results-nested { border-color: #27272a !important; background: #09090b !important; }
+html[data-theme="dark"] .auditor-panel .nested-header { border-color: #27272a !important; color: #f4f4f5 !important; }
+html[data-theme="dark"] .auditor-panel .nested-row-match { background: #18181b !important; border-color: #27272a !important; color: #a1a1aa !important; }
+html[data-theme="dark"] .auditor-panel .match-success { background: rgba(16, 185, 129, 0.1) !important; color: #34d399 !important; border-color: rgba(16, 185, 129, 0.2) !important; }
 
-:global([data-theme="dark"]) .results-grid th { background: #09090b !important; color: #a1a1aa !important; border-color: #27272a !important; }
-:global([data-theme="dark"]) .results-grid td { background: #18181b !important; border-color: #27272a !important; color: #d4d4d8 !important; }
+html[data-theme="dark"] .auditor-panel .results-grid th { background: #09090b !important; color: #a1a1aa !important; border-color: #27272a !important; }
+html[data-theme="dark"] .auditor-panel .results-grid td { background: #18181b !important; border-color: #27272a !important; color: #d4d4d8 !important; }
 
 /* Terminal Dark */
-:global([data-theme="dark"]) .terminal-card { background: #18181b !important; border-color: #27272a !important; }
-:global([data-theme="dark"]) .terminal { background: transparent !important; color: #e4e4e7 !important; }
+html[data-theme="dark"] .auditor-panel .terminal-card { background: #18181b !important; border-color: #27272a !important; }
+html[data-theme="dark"] .auditor-panel .terminal { background: transparent !important; color: #e4e4e7 !important; }
 
 /* Result Card Dark */
-:global([data-theme="dark"]) .result-card { background: rgba(6, 78, 59, 0.2) !important; border-color: rgba(4, 120, 87, 0.4) !important; }
-:global([data-theme="dark"]) .result-text h3 { color: #34d399 !important; }
-:global([data-theme="dark"]) .result-text p { color: #a7f3d0 !important; }
+html[data-theme="dark"] .auditor-panel .result-card { background: rgba(6, 78, 59, 0.2) !important; border-color: rgba(4, 120, 87, 0.4) !important; }
+html[data-theme="dark"] .auditor-panel .result-text h3 { color: #34d399 !important; }
+html[data-theme="dark"] .auditor-panel .result-text p { color: #a7f3d0 !important; }
 </style>

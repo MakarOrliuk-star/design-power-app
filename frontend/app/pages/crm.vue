@@ -1,6 +1,9 @@
 <script setup lang="ts">
 import { ref, computed, onMounted } from "vue";
 
+const config = useRuntimeConfig();
+
+
 useHead({ title: "Design Power — CRM Power" });
 
 const auth = useAuthStore();
@@ -77,7 +80,7 @@ const SERVICES: Service[] = [
     iconBg: "#f5f3ff", 
     footer: "Открыть папку →",
     soon: false,
-    externalUrl: import.meta.env.VITE_GOOGLE_DRIVE_URL, 
+    externalUrl: config.public.googleDriveUrl as string, 
   },
 ];
 

@@ -49,6 +49,7 @@ export default defineNuxtConfig({
       // Do NOT set NUXT_PUBLIC_API_BASE in prod — that would point the browser
       // straight at the cross-site backend and reintroduce the cookie problem.
       apiBase: "",
+      googleDriveUrl: "",
     },
   },
 });
