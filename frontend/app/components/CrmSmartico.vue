@@ -1,13 +1,5 @@
 <script setup lang="ts">
-/**
- * Unique-Image-Smartico (CRM): upload a ZIP of brand campaign images, pick the
- * campaign types found inside, and get ready-to-paste Smartico functions.
- *
- * Flow: analyze (multipart upload, with progress) → configure (dynamic type
- * checkboxes + suspicious-brand flags) → generate (enqueue) → poll job → output
- * blocks with Copy. Heavy work runs on the backend; this component only drives
- * the steps and renders results.
- */
+
 import { ref, computed, onUnmounted } from "vue";
 
 type TypeKey = "email" | "push" | "pop-up" | "pop-up_1" | "pop-up_2";
@@ -91,10 +83,6 @@ const canGenerate = computed(
     selectedTypes.value.length > 0,
 );
 
-// Fixed UI checkboxes (Email / Pop-up / Push) + a dynamic "Pop-up 2" that only
-// appears when the archive contains a second pop-up. "Pop-up" maps to pop-up_1
-// (or the legacy bare "pop-up"); selecting both pop-ups yields two separate
-// Smartico functions on the backend. Types absent from the archive are disabled.
 interface UiType {
   id: string;
   label: string;
