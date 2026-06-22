@@ -960,10 +960,11 @@ class SmarticoCore:
             res = self.ctx.request.get(f"https://{self.boapi_host}/api/templated_mail/{email_id}", params={"lbl": self.brand_id}, headers=self.headers)
             if res.ok: 
                 data = res.json()[0] if isinstance(res.json(), list) and res.json() else res.json()
-                var_params = {"filter": json.dumps({"status": [1, 3], "resource_id": int(email_id)}), "range": "[0,499]", "sort": '["variation_priority","DESC"]', "lbl": self.brand_id}
+                var_params = {"filter": json.dumps({"status": [1, 3], "templated_mail_id": int(email_id), "resource_id": int(email_id)}), "range": "[0,499]", "sort": '["variation_priority","DESC"]', "lbl": self.brand_id}
                 var_res = self.ctx.request.get(f"https://{self.boapi_host}/api/templated_mail_variation", params=var_params, headers=self.headers)
                 items = var_res.json().get("result", var_res.json()) if var_res.ok and isinstance(var_res.json(), dict) else (var_res.json() if var_res.ok else [])
-                data["variations"] = items if isinstance(items, list) else []
+                valid_vars = [v for v in items if str(v.get("templated_mail_id")) == str(email_id) or str(v.get("resource_id")) == str(email_id)] if isinstance(items, list) else []
+                data["variations"] = valid_vars
                 return data
         except: pass
         return {}
@@ -973,7 +974,6 @@ class SmarticoCore:
         
         preview_url = f"https://{self.boapi_host}/api/private-api"
         
-        # Используем user_id "как есть", так как он уже содержит нужный префикс (например, 866:...)
         formatted_user_id = str(user_id)
         
         print(f" [Rendering for: {formatted_user_id}]", end="")
@@ -1038,10 +1038,11 @@ class SmarticoCore:
             res = self.ctx.request.get(f"https://{self.boapi_host}/api/resource_sms/{sms_id}", params={"lbl": self.brand_id}, headers=self.headers)
             if res.ok: 
                 data = res.json()[0] if isinstance(res.json(), list) and res.json() else res.json()
-                var_params = {"filter": json.dumps({"status": [1, 3], "resource_id": int(sms_id)}), "range": "[0,499]", "sort": '["variation_priority","DESC"]', "lbl": self.brand_id}
+                var_params = {"filter": json.dumps({"status": [1, 3], "resource_sms_id": int(sms_id), "resource_id": int(sms_id)}), "range": "[0,499]", "sort": '["variation_priority","DESC"]', "lbl": self.brand_id}
                 var_res = self.ctx.request.get(f"https://{self.boapi_host}/api/resource_sms_variation", params=var_params, headers=self.headers)
                 items = var_res.json().get("result", var_res.json()) if var_res.ok and isinstance(var_res.json(), dict) else (var_res.json() if var_res.ok else [])
-                data["variations"] = items if isinstance(items, list) else []
+                valid_vars = [v for v in items if str(v.get("resource_sms_id")) == str(sms_id) or str(v.get("resource_id")) == str(sms_id)] if isinstance(items, list) else []
+                data["variations"] = valid_vars
                 return data
         except: pass
         return {}
@@ -1052,10 +1053,11 @@ class SmarticoCore:
             res = self.ctx.request.get(f"https://{self.boapi_host}/api/resource_push/{push_id}", params={"lbl": self.brand_id}, headers=self.headers)
             if res.ok: 
                 data = res.json()[0] if isinstance(res.json(), list) and res.json() else res.json()
-                var_params = {"filter": json.dumps({"status": [1, 3], "resource_id": int(push_id)}), "range": "[0,499]", "sort": '["variation_priority","DESC"]', "lbl": self.brand_id}
+                var_params = {"filter": json.dumps({"status": [1, 3], "resource_push_id": int(push_id), "resource_id": int(push_id)}), "range": "[0,499]", "sort": '["variation_priority","DESC"]', "lbl": self.brand_id}
                 var_res = self.ctx.request.get(f"https://{self.boapi_host}/api/resource_push_variation", params=var_params, headers=self.headers)
                 items = var_res.json().get("result", var_res.json()) if var_res.ok and isinstance(var_res.json(), dict) else (var_res.json() if var_res.ok else [])
-                data["variations"] = items if isinstance(items, list) else []
+                valid_vars = [v for v in items if str(v.get("resource_push_id")) == str(push_id) or str(v.get("resource_id")) == str(push_id)] if isinstance(items, list) else []
+                data["variations"] = valid_vars
                 return data
         except: pass
         return {}
@@ -1066,13 +1068,13 @@ class SmarticoCore:
             res = self.ctx.request.get(f"https://{self.boapi_host}/api/resource_inapp/{inapp_id}", params={"lbl": self.brand_id}, headers=self.headers)
             if res.ok: 
                 data = res.json()[0] if isinstance(res.json(), list) and res.json() else res.json()
-                var_params = {"filter": json.dumps({"status": [1, 3], "resource_id": int(inapp_id)}), "range": "[0,499]", "sort": '["variation_priority","DESC"]', "lbl": self.brand_id}
+                var_params = {"filter": json.dumps({"status": [1, 3], "templated_popup_id": int(inapp_id), "resource_inapp_id": int(inapp_id), "resource_id": int(inapp_id)}), "range": "[0,499]", "sort": '["variation_priority","DESC"]', "lbl": self.brand_id}
                 var_res = self.ctx.request.get(f"https://{self.boapi_host}/api/resource_inapp_variation", params=var_params, headers=self.headers)
-                # Фолбэк на случай если Smartico использует templated_popup_variation
                 if not var_res.ok:
                     var_res = self.ctx.request.get(f"https://{self.boapi_host}/api/templated_popup_variation", params=var_params, headers=self.headers)
                 items = var_res.json().get("result", var_res.json()) if var_res.ok and isinstance(var_res.json(), dict) else (var_res.json() if var_res.ok else [])
-                data["variations"] = items if isinstance(items, list) else []
+                valid_vars = [v for v in items if str(v.get("templated_popup_id")) == str(inapp_id) or str(v.get("resource_inapp_id")) == str(inapp_id) or str(v.get("resource_id")) == str(inapp_id)] if isinstance(items, list) else []
+                data["variations"] = valid_vars
                 return data
         except: pass
         return {}
@@ -2950,45 +2952,34 @@ class SmarticoCore:
                     else: return f"<div style='margin-top:6px; background:#f0fdf4; border:1px solid #86efac; padding:8px 12px; border-radius:4px; font-size:12px; color:#166534;'>📱 <b>SMS Симуляция:</b> ~{sim_len} симв. | {encoding} | <b>{parts} SMS</b>{text_preview}</div>"
 
                 if variations:
-                    # Четко собираем только текстовые поля, чтобы не цеплять системные ссылки и ID
-                    if t == "Email":
-                        baseline_all_text = str(item.get("body","")) + " " + str(item.get("subject",""))
-                    elif t in ["Push", "Push PWA", "WebHook"]:
-                        baseline_all_text = str(item.get("title_url","")) + " " + str(item.get("body","")) + " " + str(item.get("link","")) + " " + str(item.get("button1",""))
-                    elif t == "Pop-up":
-                        baseline_all_text = str(item.get("title_url","")) + " " + str(item.get("body","")) + " " + str(item.get("link","")) + " " + str(item.get("button1",""))
-                    elif t == "SMS":
-                        baseline_all_text = str(item.get("body",""))
-                    else:
-                        baseline_all_text = item.get("body", "")
-
+                    # Универсальная склейка текста для оригинала
+                    baseline_all_text = f"{item.get('title_url','')} {item.get('body','')} {item.get('link','')} {item.get('subject','')} {item.get('button1','')}"
                     baseline_labels = [l for l in re.findall(r'\{\{label\.[^\s\}]+\}\}', baseline_all_text) if not self.is_ignored_label(l)]
                     baseline_counts = Counter(baseline_labels)
                     
                     var_html = f"<details style='margin-top:15px;'><summary style='cursor:pointer; font-weight:bold; color:#8e44ad;'>🔄 Сверка макросов в вариациях ({len(variations)} шт.)</summary><div style='display:flex; flex-direction:column; gap:6px; margin-top:8px;'>"
                     for var in variations:
-                        raw_cond = str(var.get("variation_condition_readable") or var.get("conditions_readable") or "Unknown")
+                        raw_cond = str(var.get("variation_condition_readable") or var.get("conditions_readable") or "")
+                        if not raw_cond or raw_cond.lower() in ["not set", "none"]:
+                            raw_cond = "All users (Default)"
+                            
                         var_cond = self.inject_flags(raw_cond)
                         lang_match = re.search(r'\b([A-Z]{2})\b', raw_cond.upper())
                         target_lang = lang_match.group(1) if lang_match else "EN"
                         var_id = var.get("id", "")
                         
-                        endpoint_map = {"SMS": "resource_sms_variation", "Push": "resource_push_variation", "Push PWA": "resource_push_variation", "WebHook": "resource_push_variation", "Pop-up": "resource_inapp_variation"}
+                        endpoint_map = {"Email": "templated_mail_variation", "SMS": "resource_sms_variation", "Push": "resource_push_variation", "Push PWA": "resource_push_variation", "WebHook": "resource_push_variation", "Pop-up": "templated_popup_variation"}
                         actual_ui_route = endpoint_map.get(t, "")
                         var_url = f"https://{self.drive_host}/{self.brand_id}#/{actual_ui_route}/{var_id}" if self.drive_host and self.brand_id and actual_ui_route else "#"
                         var_link_html = f"<a href='{var_url}' target='_blank' style='color:#3b82f6; text-decoration:none; border-bottom:1px dashed #93c5fd; transition:0.2s;' onmouseover=\"this.style.color='#2563eb'\" onmouseout=\"this.style.color='#3b82f6'\">{esc(var_cond)}</a> <span style='color:#94a3b8; font-size:10px; font-weight:normal;'>(ID: {var_id})</span>"
                         
-                        # Собираем текстовые поля из вариации так же, как из оригинала
-                        if t == "Email":
-                            var_all_text = str(var.get("body","")) + " " + str(var.get("subject",""))
-                        elif t in ["Push", "Push PWA", "WebHook"]:
-                            var_all_text = str(var.get("title","")) + " " + str(var.get("body","")) + " " + str(var.get("action","")) + " " + str(var.get("button1",""))
-                        elif t == "Pop-up":
-                            var_all_text = str(var.get("title","")) + " " + str(var.get("sub_title","")) + " " + str(var.get("action","")) + " " + str(var.get("button1",""))
-                        elif t == "SMS":
-                            var_all_text = str(var.get("body",""))
-                        else:
-                            var_all_text = str(var.get("body",""))
+                        v_title = var.get('title') if var.get('title') is not None else item.get('title_url','')
+                        v_body = var.get('body') if var.get('body') is not None else item.get('body','')
+                        v_action = var.get('action') if var.get('action') is not None else (var.get('button_url') if var.get('button_url') is not None else item.get('link',''))
+                        v_subject = var.get('subject') if var.get('subject') is not None else item.get('subject','')
+                        v_button = var.get('button1') if var.get('button1') is not None else item.get('button1','')
+                        
+                        var_all_text = f"{v_title} {v_body} {v_action} {v_subject} {v_button}"
                             
                         var_labels = [l for l in re.findall(r'\{\{label\.[^\s\}]+\}\}', var_all_text) if not self.is_ignored_label(l)]
                         var_counts = Counter(var_labels)
