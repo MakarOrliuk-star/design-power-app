@@ -196,17 +196,47 @@ async def audit_stream(request: AuditRequest):
                             report_data["condition_registry"].append({"name": n_name, "condition": cond_str})
                             
                         elif n_type in ["Email", "Push", "SMS", "Pop-up"]:
-                            caps = "Respect user and global caps" if not det.get("ignore_caps") else "Ignore caps"
-                            optout = "Respect Platform and Smartico" if not det.get("ignore_optout") else "Ignore Opt-out"
+                            is_pop = (n_type == "Pop-up")
                             
+                            caps_map = {1: "Respect user level and global caps", 2: "Ignore user and global level caps", 3: "Respect user caps, but ignore global caps", 4: "Respect global caps, but ignore user caps"}
+                            caps = caps_map.get(det.get("caps_impact"), "N/A")
+                            if caps == "N/A": 
+                                ignore_caps = det.get("ignore_frequency_capping") if det.get("ignore_frequency_capping") is not None else det.get("ignore_caps", False)
+                                caps = "Ignore caps" if ignore_caps else "Respect user and global caps"
+                            
+                            optout = "N/A"
+                            if not is_pop:
+                                optout_map = {1: "Respect Platform and Smartico opt-out flags", 2: "Ignore Platform, opt-out flags, but respect Smartico", 3: "Ignore Smartico opt-out flags, but respect Platform", 4: "Ignore platform and Smartico opt-out flags"}
+                                optout = optout_map.get(det.get("optout_impact"), "N/A")
+                                if optout == "N/A":
+                                    ignore_opt = det.get("ignore_opt_out") if det.get("ignore_opt_out") is not None else det.get("ignore_optout", False)
+                                    optout = "Ignore Opt-out" if ignore_opt else "Respect Platform and Smartico"
+                                
                             timeout_str = "N/A"
-                            if n_type == "Pop-up":
+                            if is_pop:
                                 timeout_ms = det.get("delivery_timeout_ms", 0)
                                 if timeout_ms > 0: timeout_str = f"{timeout_ms // 60000} minutes"
+                                else: timeout_str = str(det.get("delivery_timeout") or det.get("expiration_time", "N/A"))
+
+                            period_disp = "N/A"
+                            if not is_pop:
+                                period_map = {1: "Send only in activity period", 2: "Send always, disregarding activity period", 3: "Send if possible and if not - in next available activity period", 4: "Send in specific hour (User TZ)", 5: "Send in specific hour (UTC)", 260: "BEST TIME: Deposit+SB+CASINO Bet", 261: "BEST TIME: Online", 262: "BEST TIME: Clicks"}
+                                period = det.get("period")
+                                if period is not None:
+                                    period_str = period_map.get(period, f"ID: {period}")
+                                    time_str = ""
+                                    if period == 1:
+                                        a_from = str(det.get("activity_from_time", "00:00"))
+                                        a_to = str(det.get("activity_to_time", "23:59"))
+                                        tz = "in user timezone" if det.get("use_user_tz", True) else "in UTC"
+                                        time_str = f"From {a_from} till {a_to} {tz}"
+                                    elif period in [4, 5]:
+                                        time_str = f"From {det.get('time_to_send', 'N/A')}"
+                                    period_disp = f"{period_str}. {time_str}".strip() if time_str else period_str
 
                             report_data["settings_registry"].append({
                                 "name": n_name, "type": n_type, "caps": caps, "optout": optout,
-                                "period_display": det.get("activity_from_time", "N/A"), "delivery_timeout": timeout_str
+                                "period_display": period_disp, "delivery_timeout": timeout_str
                             })
                             
                             res_list = det.get("resources", [])
@@ -226,15 +256,19 @@ async def audit_stream(request: AuditRequest):
                                     actual_type = "Push PWA"
                                 
                                 email_previews = []
+                                variations = []
+                                
                                 if n_type == "Email" and r_id:
-                                    if r_id in rendered_emails_cache:
-                                        print(f" [WORKER] Using cached email previews for node #{r_id}", flush=True)
-                                        send_event({'type': 'progress', 'percent': 60, 'msg': f'♻️ Loading cached high-res renders for Email #{r_id}...'})
-                                        email_previews = rendered_emails_cache[r_id]
-                                    else:
-                                        mail_details = core.get_email_details(r_id)
-                                        full_raw_html = mail_details.get("body", "")
-                                        if full_raw_html:
+                                    mail_details = core.get_email_details(r_id)
+                                    variations = mail_details.get("variations", [])
+                                    full_raw_html = mail_details.get("body", "")
+                                    
+                                    if full_raw_html:
+                                        if r_id in rendered_emails_cache:
+                                            print(f" [WORKER] Using cached email previews for node #{r_id}", flush=True)
+                                            send_event({'type': 'progress', 'percent': 60, 'msg': f'♻️ Loading cached high-res renders for Email #{r_id}...'})
+                                            email_previews = rendered_emails_cache[r_id]
+                                        else:
                                             qa_personas = core.get_qa_personas()
                                             for desc, uid in qa_personas.items():
                                                 print(f" [WORKER] Rendering email for {desc} ({uid})...", flush=True)
@@ -248,18 +282,21 @@ async def audit_stream(request: AuditRequest):
                                 elif n_type == "Push" and r_id:
                                     ext_details = core.get_push_details(r_id)
                                     if ext_details:
+                                        variations = ext_details.get("variations", [])
                                         title_text = ext_details.get("title", title_text)
                                         body_text = ext_details.get("body", body_text)
                                 
                                 elif n_type == "Pop-up" and r_id:
                                     ext_details = core.get_inapp_details(r_id)
                                     if ext_details:
+                                        variations = ext_details.get("variations", [])
                                         title_text = ext_details.get("title", title_text)
                                         body_text = ext_details.get("sub_title", body_text)
                                 
                                 elif n_type == "SMS" and r_id:
                                     res_details = core.get_sms_details(r_id)
                                     if res_details:
+                                        variations = res_details.get("variations", [])
                                         body_text = res_details.get("body", body_text)
 
                                 all_other_labels.update(re.findall(r'\{\{label\.[^\}]+\}\}', f"{title_text} {body_text} {link_text} {subj_text}"))
@@ -269,7 +306,9 @@ async def audit_stream(request: AuditRequest):
                                     "link": link_text, "resource_name": r_name, "subject": subj_text,
                                     "status_name": "Active", "email_url": f"https://{drive_host}/{brand_id}#/{n_type.lower()}/{r_id}" if r_id else "#",
                                     "syntax_errors": core.validate_label_syntax(f"{title_text} {body_text}", ignore_formatting_tags=True),
-                                    "previews": email_previews
+                                    "previews": email_previews,
+                                    "variations": variations,
+                                    "resource_id": r_id
                                 })
                                 
                     print(f" [WORKER] Deep searching and resolved for {len(all_other_labels)} smartico macros...", flush=True)
@@ -286,7 +325,7 @@ async def audit_stream(request: AuditRequest):
                     
                     print(" [WORKER] Generating HTML payload...", flush=True)
                     send_event({'type': 'progress', 'percent': 95, 'msg': f'✨ Compiling interactive HTML matrix report...'})
-                    single_campaign_report = core.generate_html_report(report_data)
+                    single_campaign_report = core.generate_html_report(report_data, is_mass_audit=True)
                     
                     combined_html += f'''
                     <div style="border: 4px solid #cbd5e1; border-top: 8px solid #3b82f6; border-radius: 12px; margin-bottom: 40px; background: white; overflow: hidden; box-shadow: 0 4px 6px rgba(0,0,0,0.1);">

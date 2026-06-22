@@ -2509,7 +2509,7 @@ class SmarticoCore:
             print("ERROR: Failed to parse QA_PERSONAS_JSON. Ensure it is valid JSON.")
             return {}
             
-    def generate_html_report(self, data):
+    def generate_html_report(self, data, is_mass_audit=False):
         import time
         expected_data = data.get('expected_data')
         t_start_html = time.time()
@@ -2526,8 +2526,8 @@ class SmarticoCore:
                 val_html = f"<a href='{v}' target='_blank' style='color: #2980b9; text-decoration: none; border-bottom: 1px dashed;'>{esc(v)}</a>" if k == "Target URL" else esc(v)
                 general_rows += f"<tr class='dim-target'><td><b>{esc(k)}</b></td><td>{val_html}</td></tr>"
 
-            state_html = "".join([f"<li style='margin-bottom: 4px;'>{esc(c)}</li>" for c in seg_data['state_conditions']]) or "<i>Нет условий</i>"
-            modal_html = "".join([f"<li style='margin-bottom: 4px;'>{esc(c)}</li>" for c in seg_data['modal_conditions']]) or "<i>Нет исключений</i>"
+            state_html = "".join([f"<li style='margin-bottom: 4px;'>{esc(c)}</li>" for c in seg_data.get('state_conditions', [])]) or "<i>Нет условий</i>"
+            modal_html = "".join([f"<li style='margin-bottom: 4px;'>{esc(c)}</li>" for c in seg_data.get('modal_conditions', [])]) or "<i>Нет исключений</i>"
 
             return f"""
             <div style="flex:1; min-width: 320px; background: #fff; border: 1px solid #D1D5DB; border-radius: 8px; padding: 16px; box-shadow: 0 2px 4px rgba(0,0,0,0.02);">
@@ -2537,12 +2537,11 @@ class SmarticoCore:
                 </div>
                 <div class="dim-target" style="border-top: 1px dashed #ddd; padding-top: 12px;">
                     <div style="margin-bottom: 12px; display: flex; align-items: center; gap: 8px;">
-                         
                         <strong style="color: #2c3e50; font-size: 14px;">Segment:</strong>
-                        <a href="{seg_data['url']}" target="_blank" style="font-weight:bold; color:#2980b9; text-decoration:none; border-bottom: 1px dashed;">{esc(seg_data['name'])}</a>
+                        <a href="{seg_data.get('url', '#')}" target="_blank" style="font-weight:bold; color:#2980b9; text-decoration:none; border-bottom: 1px dashed;">{esc(seg_data.get('name', 'Unknown'))}</a>
                     </div>
-                    <details style="margin-bottom: 8px; background:#fdfefe; border: 1px solid #d4efdf; padding:6px 10px; border-radius:4px;"><summary style="cursor: pointer; font-weight: bold; color: #27ae60; font-size: 12px;">✅ Настройки сегмента ({len(seg_data['state_conditions'])})</summary><ul style="margin: 8px 0 0; padding-left: 20px; font-size: 12px; font-family: monospace;">{state_html}</ul></details>
-                    <details style="background:#fdfefe; border: 1px solid #f5b041; padding:6px 10px; border-radius:4px;"><summary style="cursor: pointer; font-weight: bold; color: #d35400; font-size: 12px;">🚫 Исключения ({len(seg_data['modal_conditions'])})</summary><ul style="margin: 8px 0 0; padding-left: 20px; font-size: 12px; font-family: monospace;">{modal_html}</ul></details>
+                    <details style="margin-bottom: 8px; background:#fdfefe; border: 1px solid #d4efdf; padding:6px 10px; border-radius:4px;"><summary style="cursor: pointer; font-weight: bold; color: #27ae60; font-size: 12px;">✅ Настройки сегмента ({len(seg_data.get('state_conditions', []))})</summary><ul style="margin: 8px 0 0; padding-left: 20px; font-size: 12px; font-family: monospace;">{state_html}</ul></details>
+                    <details style="background:#fdfefe; border: 1px solid #f5b041; padding:6px 10px; border-radius:4px;"><summary style="cursor: pointer; font-weight: bold; color: #d35400; font-size: 12px;">🚫 Исключения ({len(seg_data.get('modal_conditions', []))})</summary><ul style="margin: 8px 0 0; padding-left: 20px; font-size: 12px; font-family: monospace;">{modal_html}</ul></details>
                 </div>
             </div>
             """
@@ -2559,85 +2558,62 @@ class SmarticoCore:
         
         def render_ctx_badge(status, camp_label):
             if not status: return ""
-            if '✅' in str(status):
-                badge = f"<span style='background:#dcfce7; color:#166534; padding:4px 10px; border-radius:12px; font-size:13px; font-weight:bold; border:1px solid #86efac; word-break: break-word;'>{esc(status)}</span>"
-            else:
-                badge = f"<span style='background:#fef2f2; color:#991b1b; padding:4px 10px; border-radius:12px; font-size:13px; font-weight:bold; border:1px solid #fca5a5; word-break: break-word;'>{esc(status)}</span>"
+            if '✅' in str(status): badge = f"<span style='background:#dcfce7; color:#166534; padding:4px 10px; border-radius:12px; font-size:13px; font-weight:bold; border:1px solid #86efac; word-break: break-word;'>{esc(status)}</span>"
+            else: badge = f"<span style='background:#fef2f2; color:#991b1b; padding:4px 10px; border-radius:12px; font-size:13px; font-weight:bold; border:1px solid #fca5a5; word-break: break-word;'>{esc(status)}</span>"
             return f"<div style='display:flex; align-items:center; gap:8px; margin-bottom:4px;'><span style='color:#64748b; font-size:12px;'>{camp_label}:</span> {badge}</div>"
 
         main_badge_html = render_ctx_badge(ctx_status_main, "Scheduled")
         pop_badge_html = render_ctx_badge(ctx_status_pop, "Journey")
-
-        # Если вообще нет ссылок, выводим заглушку
-        if not main_badge_html and not pop_badge_html:
-             main_badge_html = render_ctx_badge("N/A", "Context")
+        if not main_badge_html and not pop_badge_html: main_badge_html = render_ctx_badge("N/A", "Context")
 
         context_html = f"""<div class="dim-target" style="margin-top: 15px; background: #f8f9fa; border-left: 4px solid #3498db; padding: 12px; border-radius: 4px; display: flex; align-items: flex-start; justify-content: space-between; gap: 10px; flex-wrap: wrap;">
-            <div style="display: flex; flex-direction: column; gap: 4px;">
-                <strong>🔗 campaign tags:</strong>
-                {main_badge_html}
-                {pop_badge_html}
-            </div>
-            <label style="cursor: pointer; display: inline-flex; align-items: center; gap: 8px; font-size: 13px; font-weight: bold; color: #64748b; background: #ffffff; padding: 4px 10px; border-radius: 6px; border: 1px solid #e2e8f0; transition: 0.2s;" onmouseover="this.style.background='#e2e8f0'" onmouseout="this.style.background='#ffffff'">
-                <input type="checkbox" class="general-cb" style="transform: scale(1.2);"> Проверено
-            </label>
+            <div style="display: flex; flex-direction: column; gap: 4px;"><strong>🔗 campaign tags:</strong>{main_badge_html}{pop_badge_html}</div>
+            <label style="cursor: pointer; display: inline-flex; align-items: center; gap: 8px; font-size: 13px; font-weight: bold; color: #64748b; background: #ffffff; padding: 4px 10px; border-radius: 6px; border: 1px solid #e2e8f0; transition: 0.2s;" onmouseover="this.style.background='#e2e8f0'" onmouseout="this.style.background='#ffffff'"><input type="checkbox" class="general-cb" style="transform: scale(1.2);"> Проверено</label>
         </div>"""
 
-        # Достаем список карт и склеиваем их в один большой HTML-блок
+        # 🚨 ФИКС 1: Жестко выводим этот блок всегда, убрав if flows else ""
+        links_block_html = f"""
+        <div class="flex flex-col gap-8 mb-8">
+            <div class="card !mb-0">
+                <h2 class="text-xl font-bold mb-5 flex items-center gap-2 border-b border-slate-100 dark:border-slate-700 pb-3">📍 General & Segments</h2>
+                {general_and_segment_html}
+                <div class="mt-4">{context_html}</div>
+            </div>
+        </div>
+        """
+
         flow_html_list = data.get('interactive_flow', [])
         flow_html = "".join(flow_html_list) if isinstance(flow_html_list, list) else data.get('interactive_flow', '')
         audit_period = data.get('audit_period', 'N/A')
 
         mc_html_parts = []
         grouped_mcs = {}
-        
         for mc in data.get('mc_registry', []) or []:
             node_name = mc.get('name', 'Unknown')
             branches_for_sig = []
             display_branches = []
-            
             for b in mc.get('branches', []):
                 b_name = str(b.get('name', 'Unknown')).strip()
                 norm_b_name = " ".join(sorted(b_name.lower().split()))
                 b_cond_raw = str(b.get('condition', '')).strip()
-                
-                if not b_cond_raw or b_cond_raw == "No conditions" or b_cond_raw == "()":
-                    sorted_cond = ""
+                if not b_cond_raw or b_cond_raw in ["No conditions", "()"]: sorted_cond = ""
                 else:
                     rules = [r.strip() for r in re.split(r'\nAND\s+|\s+AND\s+', b_cond_raw) if r.strip()]
-                    
-                    def normalize_rule_string_local(rule_str):
+                    def norm_rule(rule_str):
                         m = re.search(r'\(([^()]+)\)\s*$', rule_str)
                         if m:
                             inner = m.group(1)
                             if not inner.strip(): return rule_str
-                            vals = []
-                            for v in inner.split(','):
-                                v = v.strip()
-                                if ' / ' in v:
-                                    v = v.split(' / ')[-1].strip()
-                                vals.append(v)
-                            vals.sort(key=lambda x: x.lower())
+                            vals = sorted([v.split(' / ')[-1].strip() if ' / ' in v else v.strip() for v in inner.split(',')])
                             return rule_str[:m.start(1)] + ", ".join(vals) + rule_str[m.end(1):]
                         return rule_str
-
-                    cleaned_rules = [normalize_rule_string_local(r) for r in rules]
-                    sorted_cond = " AND ".join(sorted(cleaned_rules, key=lambda x: x.lower()))
-                    
+                    sorted_cond = " AND ".join(sorted([norm_rule(r) for r in rules], key=lambda x: x.lower()))
                 branches_for_sig.append((norm_b_name, sorted_cond))
                 display_branches.append((b_name, sorted_cond))
-                
             branches_for_sig.sort()
             display_branches.sort(key=lambda x: " ".join(sorted(x[0].lower().split())))
-                
             sig = (node_name, tuple(branches_for_sig))
-            
-            if sig not in grouped_mcs:
-                grouped_mcs[sig] = {
-                    "name": node_name,
-                    "count": 0,
-                    "display_branches": display_branches
-                }
+            if sig not in grouped_mcs: grouped_mcs[sig] = {"name": node_name, "count": 0, "display_branches": display_branches}
             grouped_mcs[sig]["count"] += 1
 
         def format_smartico_rule_local(rule_str):
@@ -2655,208 +2631,69 @@ class SmarticoCore:
 
         for sig, group in list(grouped_mcs.items()):
             count_label = f" <span style='background:#eff6ff; color:#1d4ed8; padding:2px 8px; border-radius:12px; font-size:12px; margin-left:6px;'>x{group['count']}</span>" if group['count'] > 1 else ""
-            node_name_esc = esc(group['name'])
-            
             branches_html = "<ul style='margin-top: 12px; padding-left: 0; font-size: 14px; line-height: 1.6; list-style-type: none;'>"
-            
             for b_name, norm_cond in group['display_branches']:
-                b_name_esc = esc(b_name)
-                
-                if not norm_cond:
-                    rules_html = "<i style='color: #94a3b8;'>Нет заданных условий (All users)</i>"
+                if not norm_cond: rules_html = "<i style='color: #94a3b8;'>Нет заданных условий (All users)</i>"
                 else:
                     rules = norm_cond.split(" AND ")
-                    or_rules = []
-                    std_rules = []
+                    or_rules, std_rules = [], []
                     for r in rules:
-                        r_clean = r.strip()
-                        r_clean = re.sub(r'\s*\n\s*', ' ', r_clean)
-                        if re.search(r'\bOR\b', r_clean) and r_clean.lstrip(" '\"").startswith("("):
-                            r_clean = r_clean.strip("'\"")
-                            or_rules.append(r_clean)
-                        else:
-                            std_rules.append(r_clean)
-                            
+                        r_clean = re.sub(r'\s*\n\s*', ' ', r.strip())
+                        if re.search(r'\bOR\b', r_clean) and r_clean.lstrip(" '\"").startswith("("): or_rules.append(r_clean.strip("'\""))
+                        else: std_rules.append(r_clean)
                     rules_html_parts = []
-                    if or_rules:
-                        or_inner = "<br>".join([f"🔸 <span style='color:#b45309; font-family:monospace;'>{esc(r)}</span>" for r in or_rules])
-                        rules_html_parts.append(f"<div style='background:#fef3c7; border:1px solid #fde68a; border-left:4px solid #f59e0b; padding:8px 12px; border-radius:4px; margin-bottom:10px; font-size:13px;'><b>⚠️ Сработает любое из условий (OR):</b><br>{or_inner}</div>")
-                    if std_rules:
-                        rules_html_parts.append("<br>".join([format_smartico_rule_local(r) for r in std_rules]))
-                        
+                    if or_rules: rules_html_parts.append(f"<div style='background:#fef3c7; border:1px solid #fde68a; border-left:4px solid #f59e0b; padding:8px 12px; border-radius:4px; margin-bottom:10px; font-size:13px;'><b>⚠️ Сработает любое из условий (OR):</b><br>{'<br>'.join([f'🔸 <span style=\"color:#b45309; font-family:monospace;\">{esc(r)}</span>' for r in or_rules])}</div>")
+                    if std_rules: rules_html_parts.append("<br>".join([format_smartico_rule_local(r) for r in std_rules]))
                     rules_html = "".join(rules_html_parts)
-                
-                branches_html += f"""
-                <li style='margin-bottom: 12px;'>
-                    <b style='color: #0f172a; font-size: 15px;'>{b_name_esc}</b>
-                    <div style='margin-top: 8px; background: #f8fafc; border: 1px solid #e2e8f0; border-left: 4px solid #3b82f6; padding: 10px; border-radius: 4px; font-family: monospace; font-size: 13px; color: #334155; word-wrap: break-word;'>
-                        {rules_html}
-                    </div>
-                </li>
-                """
-                
+                branches_html += f"<li style='margin-bottom: 12px;'><b style='color: #0f172a; font-size: 15px;'>{esc(b_name)}</b><div style='margin-top: 8px; background: #f8fafc; border: 1px solid #e2e8f0; border-left: 4px solid #3b82f6; padding: 10px; border-radius: 4px; font-family: monospace; font-size: 13px; color: #334155; word-wrap: break-word;'>{rules_html}</div></li>"
             branches_html += "</ul>"
-
-            card_html = f"""
-            <div class='dim-target' style='background: #ffffff; border: 1px solid #cbd5e1; border-left: 5px solid #64748b; border-radius: 8px; padding: 18px; margin-bottom: 20px; box-shadow: 0 1px 3px rgba(0,0,0,0.05); transition: 0.3s;'>
-                <h4 style="margin: 0 0 12px 0; color: #1e293b; font-size: 16px; font-weight: bold; display: flex; align-items: center; gap: 8px;">
-                     🔀 Multi-Check: {node_name_esc}{count_label}
-                </h4>
-                {branches_html}
-                <div style="margin-top: 15px; padding-top: 10px; border-top: 1px dashed #cbd5e1; text-align: right;">
-                    <label style="cursor: pointer; display: inline-flex; align-items: center; gap: 8px; font-size: 13px; font-weight: bold; color: #64748b; background: #f8fafc; padding: 6px 12px; border-radius: 6px; border: 1px solid #e2e8f0; transition: 0.2s;" onmouseover="this.style.background='#e2e8f0'" onmouseout="this.style.background='#f8fafc'">
-                        <input type="checkbox" class="general-cb" style="transform: scale(1.2);"> Проверено
-                    </label>
-                </div>
-            </div>
-            """
-            mc_html_parts.append(card_html)
-
+            mc_html_parts.append(f"<div class='dim-target' style='background: #ffffff; border: 1px solid #cbd5e1; border-left: 5px solid #64748b; border-radius: 8px; padding: 18px; margin-bottom: 20px; box-shadow: 0 1px 3px rgba(0,0,0,0.05); transition: 0.3s;'><h4 style='margin: 0 0 12px 0; color: #1e293b; font-size: 16px; font-weight: bold; display: flex; align-items: center; gap: 8px;'>🔀 Multi-Check: {esc(group['name'])}{count_label}</h4>{branches_html}<div style='margin-top: 15px; padding-top: 10px; border-top: 1px dashed #cbd5e1; text-align: right;'><label style='cursor: pointer; display: inline-flex; align-items: center; gap: 8px; font-size: 13px; font-weight: bold; color: #64748b; background: #f8fafc; padding: 6px 12px; border-radius: 6px; border: 1px solid #e2e8f0; transition: 0.2s;' onmouseover=\"this.style.background='#e2e8f0'\" onmouseout=\"this.style.background='#f8fafc'\"><input type='checkbox' class='general-cb' style='transform: scale(1.2);'> Проверено</label></div></div>")
         mc_html = "".join(mc_html_parts)
-        
-        # --- ГЕНЕРАЦИЯ БЛОКА ПРОВЕРОК ПРОФИЛЯ (Condition Checks) ---
+
         cond_html = ""
         for item in data.get('condition_registry', []) or []:
             c_raw = str(item.get('condition', ''))
-            
-            if not c_raw or c_raw == "No conditions" or c_raw.strip() == "()":
-                parsed_cond = "<i style='color:#94a3b8;'>Нет заданных условий</i>"
-            else:
-                raw_rules = re.split(r'\nAND\s+|\s+AND\s+', c_raw)
-                parsed_cond = "<br>".join([format_smartico_rule_local(r) for r in raw_rules])
-                
-            cond_html += f"""
-            <div class='dim-target' style='background: #f8fafc; border: 1px solid #cbd5e1; border-left: 4px solid #64748b; border-radius: 8px; padding: 16px; margin-bottom: 12px; transition: 0.3s;'>
-                <h4 style="margin: 0 0 10px 0; color: #334155; font-size: 16px; display: flex; align-items: center; gap: 8px;">
-                    🕵️‍♂️ {esc(item['name'])}
-                </h4>
-                <div style="background: #ffffff; padding: 12px; border-radius: 6px; border: 1px solid #e2e8f0; border-left: 3px solid #94a3b8; font-family: monospace; font-size: 13px; color: #334155; word-wrap: break-word;">
-                    {parsed_cond}
-                </div>
-                <div style="margin-top: 15px; padding-top: 10px; border-top: 1px dashed #cbd5e1; text-align: right;">
-                    <label style="cursor: pointer; display: inline-flex; align-items: center; gap: 8px; font-size: 13px; font-weight: bold; color: #64748b; background: #ffffff; padding: 6px 12px; border-radius: 6px; border: 1px solid #e2e8f0; transition: 0.2s;" onmouseover="this.style.background='#f1f5f9'" onmouseout="this.style.background='#ffffff'">
-                        <input type="checkbox" class="general-cb" style="transform: scale(1.2);"> Проверено
-                    </label>
-                </div>
-            </div>
-            """
-        
-        # --- ГЕНЕРАЦИЯ БЛОКА WAIT FOR EVENT ВЫКЛЮЧЕНА ---
-        wait_html = ""
-        wait_block_html = ""
+            if not c_raw or c_raw in ["No conditions", "()"]: parsed_cond = "<i style='color:#94a3b8;'>Нет заданных условий</i>"
+            else: parsed_cond = "<br>".join([format_smartico_rule_local(r) for r in re.split(r'\nAND\s+|\s+AND\s+', c_raw)])
+            cond_html += f"<div class='dim-target' style='background: #f8fafc; border: 1px solid #cbd5e1; border-left: 4px solid #64748b; border-radius: 8px; padding: 16px; margin-bottom: 12px; transition: 0.3s;'><h4 style='margin: 0 0 10px 0; color: #334155; font-size: 16px; display: flex; align-items: center; gap: 8px;'>🕵️‍♂️ {esc(item['name'])}</h4><div style='background: #ffffff; padding: 12px; border-radius: 6px; border: 1px solid #e2e8f0; border-left: 3px solid #94a3b8; font-family: monospace; font-size: 13px; color: #334155; word-wrap: break-word;'>{parsed_cond}</div><div style='margin-top: 15px; padding-top: 10px; border-top: 1px dashed #cbd5e1; text-align: right;'><label style='cursor: pointer; display: inline-flex; align-items: center; gap: 8px; font-size: 13px; font-weight: bold; color: #64748b; background: #ffffff; padding: 6px 12px; border-radius: 6px; border: 1px solid #e2e8f0; transition: 0.2s;' onmouseover=\"this.style.background='#f1f5f9'\" onmouseout=\"this.style.background='#ffffff'\"><input type='checkbox' class='general-cb' style='transform: scale(1.2);'> Проверено</label></div></div>"
+        cond_block_html = f"<div class='card'><h2 class='text-xl font-bold mb-5 flex items-center gap-2 border-b border-slate-100 dark:border-slate-700 pb-3'> 🕵️‍♂️ User Profile Checks</h2><div class='searchable-content flex flex-col gap-2'>{cond_html}</div><div style='margin-top: 20px; padding-top: 15px; border-top: 2px solid #e2e8f0; text-align: right;'><label style='cursor: pointer; display: inline-flex; align-items: center; gap: 8px; font-size: 14px; font-weight: bold; color: #1e293b; background: #f1f5f9; padding: 8px 16px; border-radius: 8px; border: 1px solid #cbd5e1; transition: 0.2s;' onmouseover=\"this.style.background='#e2e8f0'\" onmouseout=\"this.style.background='#f1f5f9'\"><input type='checkbox' class='section-cb' style='transform: scale(1.3);'> Отметить всю секцию</label></div></div>" if cond_html else ""
 
-        cond_block_html = f"""
-        <div class="card">
-            <h2 class="text-xl font-bold mb-5 flex items-center gap-2 border-b border-slate-100 dark:border-slate-700 pb-3"> 🕵️‍♂️ User Profile Checks</h2>
-            <div class="searchable-content flex flex-col gap-2">{cond_html}</div>
-            <div style="margin-top: 20px; padding-top: 15px; border-top: 2px solid #e2e8f0; text-align: right;">
-                <label style="cursor: pointer; display: inline-flex; align-items: center; gap: 8px; font-size: 14px; font-weight: bold; color: #1e293b; background: #f1f5f9; padding: 8px 16px; border-radius: 8px; border: 1px solid #cbd5e1; transition: 0.2s;" onmouseover="this.style.background='#e2e8f0'" onmouseout="this.style.background='#f1f5f9'">
-                    <input type="checkbox" class="section-cb" style="transform: scale(1.3);"> Отметить всю секцию
-                </label>
-            </div>
-        </div>
-        """ if cond_html else ""
-        
         settings_groups = {}
         for item in data.get('settings_registry', []) or []:
             n_type = item.get('type', 'Unknown')
             caps = esc(item.get('caps', 'N/A'))
-            
             if n_type == "Pop-up":
-                opt = "N/A"
-                period_disp = "N/A"
+                opt, period_disp, is_pop = "N/A", "N/A", True
                 dt = esc(item.get('delivery_timeout', 'N/A'))
-                is_pop = True
             else:
                 opt = esc(item.get('optout', 'N/A')).replace("ID: None", "N/A")
                 period_disp = esc(item.get('period_display', 'N/A')).replace("ID: None", "N/A")
-                dt = "N/A"
-                is_pop = False
-                
+                dt, is_pop = "N/A", False
             sig = f"{opt}|{caps}|{period_disp}|{dt}"
-            
-            if sig not in settings_groups:
-                settings_groups[sig] = {
-                    "nodes": [], 
-                    "caps": caps, 
-                    "optout": opt, 
-                    "period_display": period_disp,
-                    "delivery_timeout": dt,
-                    "is_pop": is_pop
-                }
-                
-            node_name = item.get('name', 'Unknown')
-            if node_name not in settings_groups[sig]["nodes"]:
-                settings_groups[sig]["nodes"].append(node_name)
+            if sig not in settings_groups: settings_groups[sig] = {"nodes": [], "caps": caps, "optout": opt, "period_display": period_disp, "delivery_timeout": dt, "is_pop": is_pop}
+            if item.get('name', 'Unknown') not in settings_groups[sig]["nodes"]: settings_groups[sig]["nodes"].append(item.get('name', 'Unknown'))
 
         settings_html = ""
         for sig, group in list(settings_groups.items()):
             nodes_names = " / ".join([esc(n) for n in group.get("nodes", [])])
-            
             li_parts = []
-            if group['period_display'] != "N/A":
-                li_parts.append(f"<li><b>⏱️ Allowed Hours:</b> <span style='color: #444;'>{group['period_display']}</span></li>")
-            if group['delivery_timeout'] != "N/A":
-                li_parts.append(f"<li><b>⏱️ Delivery timeout:</b> <span style='color: #444;'>{group['delivery_timeout']}</span></li>")
-            if group['optout'] != "N/A":
-                li_parts.append(f"<li><b>🚫 Opt-out Status:</b> <span style='color: #444;'>{group['optout']}</span></li>")
-            if group['caps'] != "N/A":
-                li_parts.append(f"<li><b>🛑 Caps Status:</b> <span style='color: #444;'>{group['caps']}</span></li>")
-
+            if group['period_display'] != "N/A": li_parts.append(f"<li><b>⏱️ Allowed Hours:</b> <span style='color: #444;'>{group['period_display']}</span></li>")
+            if group['delivery_timeout'] != "N/A": li_parts.append(f"<li><b>⏱️ Delivery timeout:</b> <span style='color: #444;'>{group['delivery_timeout']}</span></li>")
+            if group['optout'] != "N/A": li_parts.append(f"<li><b>🚫 Opt-out Status:</b> <span style='color: #444;'>{group['optout']}</span></li>")
+            if group['caps'] != "N/A": li_parts.append(f"<li><b>🛑 Caps Status:</b> <span style='color: #444;'>{group['caps']}</span></li>")
             border_color = "#f39c12" if group.get("is_pop") else "#34495e"
+            settings_html += f"<div class='card dim-target' style='border-left-color: {border_color}; transition: 0.3s;'><h3 style='margin-top:0; color: #2c3e50; display: flex; align-items: center; gap: 8px;'>{nodes_names}</h3><ul style='list-style-type: none; padding-left: 0; line-height: 1.6;'>{''.join(li_parts)}</ul><div style='margin-top: 15px; padding-top: 10px; border-top: 1px dashed #cbd5e1; text-align: right;'><label style='cursor: pointer; display: inline-flex; align-items: center; gap: 8px; font-size: 13px; font-weight: bold; color: #64748b; background: #f8fafc; padding: 6px 12px; border-radius: 6px; border: 1px solid #e2e8f0; transition: 0.2s;' onmouseover=\"this.style.background='#e2e8f0'\" onmouseout=\"this.style.background='#f8fafc'\"><input type='checkbox' class='general-cb' style='transform: scale(1.2);'> Проверено</label></div></div>"
+        settings_block_html = f"<div class='card'><h2 class='text-xl font-bold mb-5 flex items-center gap-2 border-b border-slate-100 dark:border-slate-700 pb-3'> ⚙️ Node Settings</h2><div class='searchable-content flex flex-col gap-4'>{settings_html}</div><div style='margin-top: 20px; padding-top: 15px; border-top: 2px solid #e2e8f0; text-align: right;'><label style='cursor: pointer; display: inline-flex; align-items: center; gap: 8px; font-size: 14px; font-weight: bold; color: #1e293b; background: #f1f5f9; padding: 8px 16px; border-radius: 8px; border: 1px solid #cbd5e1; transition: 0.2s;' onmouseover=\"this.style.background='#e2e8f0'\" onmouseout=\"this.style.background='#f1f5f9'\"><input type='checkbox' class='section-cb' style='transform: scale(1.3);'> Отметить всю секцию</label></div></div>" if settings_html else ""
 
-            settings_html += f"""
-            <div class="card dim-target" style="border-left-color: {border_color}; transition: 0.3s;">
-                <h3 style="margin-top:0; color: #2c3e50; display: flex; align-items: center; gap: 8px;">
-                    {nodes_names}
-                </h3>
-                <ul style="list-style-type: none; padding-left: 0; line-height: 1.6;">
-                    {"".join(li_parts)}
-                </ul>
-                <div style="margin-top: 15px; padding-top: 10px; border-top: 1px dashed #cbd5e1; text-align: right;">
-                    <label style="cursor: pointer; display: inline-flex; align-items: center; gap: 8px; font-size: 13px; font-weight: bold; color: #64748b; background: #f8fafc; padding: 6px 12px; border-radius: 6px; border: 1px solid #e2e8f0; transition: 0.2s;" onmouseover="this.style.background='#e2e8f0'" onmouseout="this.style.background='#f8fafc'">
-                        <input type="checkbox" class="general-cb" style="transform: scale(1.2);"> Проверено
-                    </label>
-                </div>
-            </div>
-            """
-
-        settings_block_html = f"""
-        <div class="card">
-            <h2 class="text-xl font-bold mb-5 flex items-center gap-2 border-b border-slate-100 dark:border-slate-700 pb-3"> ⚙️ Node Settings</h2>
-            <div class="searchable-content flex flex-col gap-4">{settings_html}</div>
-            <div style="margin-top: 20px; padding-top: 15px; border-top: 2px solid #e2e8f0; text-align: right;">
-                <label style="cursor: pointer; display: inline-flex; align-items: center; gap: 8px; font-size: 14px; font-weight: bold; color: #1e293b; background: #f1f5f9; padding: 8px 16px; border-radius: 8px; border: 1px solid #cbd5e1; transition: 0.2s;" onmouseover="this.style.background='#e2e8f0'" onmouseout="this.style.background='#f1f5f9'">
-                    <input type="checkbox" class="section-cb" style="transform: scale(1.3);"> Отметить всю секцию
-                </label>
-            </div>
-        </div>
-        """ if settings_html else ""
-
-        print(f"[DEBUG-HTML] ⏳ Базовые блоки (Map, Logic, Cond) собраны за: {time.time() - t_start_html:.2f} сек")
-        t_cross = time.time()
-
-        # 🚨 ОБРАЩЕНИЕ ЧЕРЕЗ SELF
         cross_channel_html, pair_colors = self.generate_push_pwa_comparison(data['deep_analysis'])
-        
-        print(f"[DEBUG-HTML] ⏳ Кросс-канальный анализ (Push vs PWA) занял: {time.time() - t_cross:.2f} сек")
-        t_deep = time.time()
-
-        # 🚨 ФИКС СКОРОСТИ 5: Сквозной кэш для ВСЕХ нод. Снижает кол-во рендеров со 100 000 до 50!
         global_visited_macros = set()
-
-        # 🚨 Изменен порядок вывода: Pop-up теперь в самом конце
         type_order = ["Email", "SMS", "Push", "Push PWA", "WebHook", "Pop-up"]
-        type_color = {
-            "Email": "#9b59b6", "SMS": "#e67e22", "Push": "#e74c3c", 
-            "Push PWA": "#c0392b", "Pop-up": "#f39c12", "WebHook": "#27ae60"
-        }
+        type_color = {"Email": "#9b59b6", "SMS": "#e67e22", "Push": "#e74c3c", "Push PWA": "#c0392b", "Pop-up": "#f39c12", "WebHook": "#27ae60"}
 
         content_groups = {}  
         for item in data['deep_analysis']:
             t = item['type']
-            if t not in content_groups:
-                content_groups[t] = []
+            if t not in content_groups: content_groups[t] = []
             sig = (item.get('body','').strip(), item.get('title_url','').strip(), item.get('link','').strip(), item.get('subject','').strip())
             already = False
             for existing in content_groups[t]:
@@ -2877,103 +2714,59 @@ class SmarticoCore:
                 cross_channel_html = ""  
 
             items = content_groups.get(t, [])
-            if not items:
-                continue
+            if not items: continue
                 
             css_color = type_color.get(t, "#34495e")
             nodes_html += f"<h3 style='margin-top:30px; color:{css_color}; border-bottom: 2px solid {css_color}; padding-bottom:6px;'>{t}</h3>"
             
             for item in items:
-                t_item = time.time()
                 names_display = " / ".join([esc(n) for n in item.get('node_names', [item['name']])])
-                
                 item_sig = (item.get('body','').strip(), item.get('title_url','').strip(), item.get('link','').strip(), item.get('subject','').strip())
                 color = pair_colors.get(item_sig)
+                dots_html = f"<span style='display:inline-block; width:16px; height:16px; border-radius:50%; background:{color}; box-shadow: 0 2px 4px rgba(0,0,0,0.2);' title='Входит в связанную тройку (Cross-Channel)'></span>" if color else ""
                 
-                dots_html = ""
-                if color:
-                    dots_html = f"<span style='display:inline-block; width:16px; height:16px; border-radius:50%; background:{color}; box-shadow: 0 2px 4px rgba(0,0,0,0.2);' title='Входит в связанную тройку (Cross-Channel)'></span>"
-                
-                card_inner = f"""
-                <div style="display: flex; justify-content: space-between; align-items: flex-start; margin-bottom: 10px;">
-                    <h4 style="margin:0; color:{css_color}; display: flex; align-items: center; gap: 8px;">
-                        {names_display}
-                    </h4>
-                    <div style="display:flex; align-items:center; gap:6px;">{dots_html}</div>
-                </div>
-                """
+                card_inner = f"<div style='display: flex; justify-content: space-between; align-items: flex-start; margin-bottom: 10px;'><h4 style='margin:0; color:{css_color}; display: flex; align-items: center; gap: 8px;'>{names_display}</h4><div style='display:flex; align-items:center; gap:6px;'>{dots_html}</div></div>"
                 
                 errs = item.get('syntax_errors', [])
-                comm_crit = []
-                comm_warn = []
-                if isinstance(errs, dict):
-                    comm_crit = errs.get("critical", [])
-                    comm_warn = errs.get("warning", [])
-                elif isinstance(errs, list):
-                    comm_crit = errs
+                comm_crit = errs.get("critical", []) if isinstance(errs, dict) else (errs if isinstance(errs, list) else [])
+                comm_warn = errs.get("warning", []) if isinstance(errs, dict) else []
                     
-                errs_html_lines = []
-                if comm_crit:
-                    errs_html_lines.append(f"<div class='critical-error-flag' style='background: #fef2f2; border: 1px solid #fca5a5; color: #b91c1c; padding: 10px 14px; border-radius: 8px; font-size: 13px; font-weight: bold; margin-bottom: 12px;'>🚨 Критические синтаксические ошибки в тексте (без учета лейблов):<br>" + "<br>".join([f"• {esc(e)}" for e in comm_crit]) + "</div>")
-                if comm_warn:
-                    errs_html_lines.append(f"<div style='background: #fff3cd; border: 1px solid #f39c12; color: #856404; padding: 10px 14px; border-radius: 8px; font-size: 13px; font-weight: bold; margin-bottom: 12px;'>⚠️ Замечания в тексте (без учета лейблов):<br>" + "<br>".join([f"• {esc(e)}" for e in comm_warn]) + "</div>")
-                
-                card_inner += "".join(errs_html_lines)
+                if comm_crit: card_inner += f"<div class='critical-error-flag' style='background: #fef2f2; border: 1px solid #fca5a5; color: #b91c1c; padding: 10px 14px; border-radius: 8px; font-size: 13px; font-weight: bold; margin-bottom: 12px;'>🚨 Критические синтаксические ошибки в тексте (без учета лейблов):<br>{'<br>'.join([f'• {esc(e)}' for e in comm_crit])}</div>"
+                if comm_warn: card_inner += f"<div style='background: #fff3cd; border: 1px solid #f39c12; color: #856404; padding: 10px 14px; border-radius: 8px; font-size: 13px; font-weight: bold; margin-bottom: 12px;'>⚠️ Замечания в тексте (без учета лейблов):<br>{'<br>'.join([f'• {esc(e)}' for e in comm_warn])}</div>"
                 
                 if t == "Email":
-                    if item.get('resource_name'):
-                        email_url = item.get('email_url', '#')
-                        card_inner += f"<p style='margin:4px 0;'><b>Name:</b> <a href='{esc(email_url)}' target='_blank' style='color:#2980b9; text-decoration:none; border-bottom:1px dashed;'>{esc(item['resource_name'])}</a></p>"
+                    if item.get('resource_name'): card_inner += f"<p style='margin:4px 0;'><b>Name:</b> <a href='{esc(item.get('email_url', '#'))}' target='_blank' style='color:#2980b9; text-decoration:none; border-bottom:1px dashed;'>{esc(item['resource_name'])}</a></p>"
                     if item.get('subject'): card_inner += f"<p style='margin:4px 0;'><b>Subject:</b> {esc(item['subject'])}</p>"
                     if item.get('status_name'): card_inner += f"<p style='margin:4px 0;'><b>Status:</b> {esc(item['status_name'])}</p>"
-                    
                     b_val = item.get('body', '')
                     subj_val = item.get('subject', '')
                     card_inner += f"<details style='margin-top:10px;'><summary style='cursor:pointer; font-weight:bold; color:{css_color};'>📧 Show email body</summary><div class='pre-text' style='margin-top:8px;'>{esc(b_val if b_val else 'N/A')}</div></details>"
                     
-                    # ⚡ ВНЕДРЯЕМ СВЕРКУ ВАРИАЦИЙ КОНТЕНТА
                     email_variations = item.get("variations", [])
                     if email_variations:
                         baseline_labels = [l for l in re.findall(r'\{\{label\.[^\s\}]+\}\}', b_val + " " + subj_val) if not self.is_ignored_label(l)]
                         baseline_counts = Counter(baseline_labels)
-                        
-                        var_html = "<div style='margin-top:15px; padding-top:10px; border-top:1px dashed #cbd5e1;'>"
-                        var_html += f"<b style='color:#8e44ad; font-size:13px;'>🔄 Сверка макросов в вариациях ({len(email_variations)} шт.):</b>"
-                        var_html += "<div style='display:flex; flex-direction:column; gap:6px; margin-top:8px;'>"
-                        
+                        var_html = f"<div style='margin-top:15px; padding-top:10px; border-top:1px dashed #cbd5e1;'><b style='color:#8e44ad; font-size:13px;'>🔄 Сверка макросов в вариациях ({len(email_variations)} шт.):</b><div style='display:flex; flex-direction:column; gap:6px; margin-top:8px;'>"
                         for var in email_variations:
-                            # Достаем условие, заменяем языковые коды на эмодзи флагов
                             var_cond = self.inject_flags(var.get("variation_condition_readable") or var.get("conditions_readable") or "Unknown")
                             var_text = str(var.get("body", "")) + " " + str(var.get("subject", ""))
-                            
-                            var_labels = [l for l in re.findall(r'\{\{label\.[^\s\}]+\}\}', var_text) if not self.is_ignored_label(l)]
-                            var_counts = Counter(var_labels)
-                            
-                            if var_counts == baseline_counts:
-                                var_html += f"<div style='background:#f8fafc; border:1px solid #cbd5e1; border-left:4px solid #10b981; padding:8px 12px; border-radius:4px; font-size:12px;'><b style='color:#334155;'>{esc(var_cond)}</b>: <span style='color:#15803d; margin-left:6px;'>✅ Макросы идентичны Default-версии</span></div>"
+                            var_counts = Counter([l for l in re.findall(r'\{\{label\.[^\s\}]+\}\}', var_text) if not self.is_ignored_label(l)])
+                            if var_counts == baseline_counts: var_html += f"<div style='background:#f8fafc; border:1px solid #cbd5e1; border-left:4px solid #10b981; padding:8px 12px; border-radius:4px; font-size:12px;'><b style='color:#334155;'>{esc(var_cond)}</b>: <span style='color:#15803d; margin-left:6px;'>✅ Макросы идентичны Default-версии</span></div>"
                             else:
-                                missing = baseline_counts - var_counts
-                                extra = var_counts - baseline_counts
+                                missing, extra = baseline_counts - var_counts, var_counts - baseline_counts
                                 errs = []
                                 if missing: errs.append(f"<b>Отсутствуют:</b> {', '.join([f'{esc(k)}' for k in missing])}")
                                 if extra: errs.append(f"<b>Лишние:</b> {', '.join([f'{esc(k)}' for k in extra])}")
-                                
                                 var_html += f"<div style='background:#fef2f2; border:1px solid #fca5a5; border-left:4px solid #ef4444; padding:8px 12px; border-radius:4px; font-size:12px;'><b style='color:#991b1b;'>{esc(var_cond)}</b>: <span style='color:#b91c1c; margin-left:6px;'>❌ Расхождение макросов!</span><div style='margin-top:4px; color:#7f1d1d;'>{'<br>'.join(errs)}</div></div>"
-                                
                         var_html += "</div></div>"
                         card_inner += var_html
-                    # ⚡ КОНЕЦ СВЕРКИ
                     
-                    raw_lbls = re.findall(r'\{\{label\.[^\s\}]+\}\}', b_val + " " + subj_val)
                     f_lbls = []
-                    for l in raw_lbls:
+                    for l in re.findall(r'\{\{label\.[^\s\}]+\}\}', b_val + " " + subj_val):
                         if l not in f_lbls: f_lbls.append(l)
-                    
                     b_l, t_l, u_l, s_l, d_l, o_l = [], [], [], [], [], []
-                    
                     for lbl in f_lbls:
                         low_lbl = lbl.lower()
-                        # 🚨 ОБРАЩЕНИЕ ЧЕРЕЗ SELF
                         if self.is_ignored_label(lbl): continue
                         elif 'subitem' in low_lbl: s_l.append(lbl)
                         elif 'utm' in low_lbl: u_l.append(lbl)
@@ -2984,12 +2777,8 @@ class SmarticoCore:
                         
                     labels_store = data.get("labels_data", {})
                     fmt = lambda lst: "<br>".join(lst) if lst else "Пусто"
-                    
-                    c_main = data.get('general_main', {}).get('Name', '')
-                    c_pop = data.get('general_pop', {}).get('Name', '')
-                    camp_name = (c_main or c_pop or 'Campaign').strip()
+                    camp_name = (data.get('general_main', {}).get('Name', '') or data.get('general_pop', {}).get('Name', '') or 'Campaign').strip()
 
-                    # 🚨 ОБРАЩЕНИЕ ЧЕРЕЗ SELF
                     def get_labels_ui(lst, check_utm=False): 
                         return "".join([self.render_audited_label_html(l, labels_store.get(l), brand_id, labels_store, visited=global_visited_macros, target_utm=(camp_name if check_utm else None), node_type=t, full_node_text=b_val, expected_data=expected_data) for l in lst]) if lst else "Пусто"
                     
@@ -2999,17 +2788,14 @@ class SmarticoCore:
                         for i, l in enumerate(lst):
                             cb = "<span style='background:#DBEAFE; color:#1E3A8A; padding:2px 8px; border-radius:12px; font-size:11px; font-weight:bold;'>🖼️ Банер</span>" if i == 0 else "<span style='background:#FEF3C7; color:#92400E; padding:2px 8px; border-radius:12px; font-size:11px; font-weight:bold;'>👆 Кнопка</span>" if i == 1 else ""
                             ccls = "utm-banner" if i == 0 else "utm-button" if i == 1 else ""
-                            # 🚨 ОБРАЩЕНИЕ ЧЕРЕЗ SELF
                             html_out += self.render_audited_label_html(l, labels_store.get(l), brand_id, labels_store, visited=global_visited_macros, target_utm=target_name, custom_badge=cb, custom_class=ccls, node_type=t, full_node_text=b_val, expected_data=expected_data)
                         return html_out
 
                     card_inner += f"<details style='margin-top:5px;'><summary style='cursor:pointer; font-weight:bold; color:#8e44ad;'>📁 All labels ({len(f_lbls)})</summary><div class='pre-text' style='font-size:12px;'>{fmt(f_lbls)}</div></details>"
-                    
                     card_inner += f"<details style='margin-top:5px;'><summary style='cursor:pointer; font-weight:bold; color:#e67e22;'>🖼️ Banner ({len(b_l)})</summary><div style='margin-top:8px;'>{get_labels_ui(b_l)}</div></details>"
                     card_inner += f"<details style='margin-top:5px;'><summary style='cursor:pointer; font-weight:bold; color:#2980b9;'>📜 Terms and Conditions ({len(t_l)})</summary><div style='margin-top:8px;'>{get_labels_ui(t_l)}</div></details>"
                     card_inner += f"<details style='margin-top:5px;'><summary style='cursor:pointer; font-weight:bold; color:#2c3e50;'>📝 Dynamic content ({len(d_l)})</summary><div style='margin-top:8px;'>{get_labels_ui(d_l)}</div></details>"
                     card_inner += f"<details style='margin-top:5px;'><summary style='cursor:pointer; font-weight:bold; color:#16a085;'>🔗 UTM ({len(u_l)})</summary><div style='margin-top:8px;'>{get_utm_ui(u_l, camp_name)}</div></details>"
-                    
                     if s_l: card_inner += f"<details style='margin-top:5px;'><summary style='cursor:pointer; font-weight:bold; color:#3498db;'>🧩 Subitem ({len(s_l)})</summary><div style='margin-top:8px;'>{get_labels_ui(s_l)}</div></details>"
                     if o_l: card_inner += f"<details style='margin-top:5px;'><summary style='cursor:pointer; font-weight:bold; color:#7f8c8d;'>📦 Unique labels ({len(o_l)})</summary><div style='margin-top:8px;'>{get_labels_ui(o_l)}</div></details>"
                 
@@ -3017,66 +2803,44 @@ class SmarticoCore:
                     if previews:
                         preview_html = "<div><div style='display:flex; flex-wrap:nowrap; gap:20px; overflow-x:auto; padding:5px 5px 15px 5px;'>"
                         for prev in previews:
-                            # Добавляем красивые бейджи в зависимости от персоны
                             tier_badge = "<span style='background:#fef08a; color:#854d0e; padding:2px 8px; border-radius:12px; font-size:11px; margin-left:8px; font-weight:bold;'>👑 VIP</span>" if "VIP" in prev['desc'] else f"<span style='background:#e2e8f0; color:#334155; padding:2px 8px; border-radius:12px; font-size:11px; margin-left:8px; font-weight:bold;'>🏷️ {esc(prev['desc'])}</span>"
-                            
-                            preview_html += f"""
-                            <div style='flex: 0 0 auto; text-align:center; border: 1px solid #D1D5DB; padding: 15px; border-radius: 8px; background: #FFFFFF; width: 414px; box-shadow: 0 4px 12px rgba(0,0,0,0.05);'>
-                                <div style='display:flex; justify-content:center; align-items:center; margin-bottom:12px;'>
-                                    <strong style='color:#111827; font-size:15px;'>👤 User ID: {esc(prev['uid'])}</strong> {tier_badge}
-                                </div>
-                                <img src='data:image/jpeg;base64,{prev['b64']}' style='width: 100%; height: auto; border: 1px solid #E5E7EB; border-radius: 6px;' loading='lazy' alt='Preview'>
-                            </div>
-                            """
+                            preview_html += f"<div style='flex: 0 0 auto; text-align:center; border: 1px solid #D1D5DB; padding: 15px; border-radius: 8px; background: #FFFFFF; width: 414px; box-shadow: 0 4px 12px rgba(0,0,0,0.05);'><div style='display:flex; justify-content:center; align-items:center; margin-bottom:12px;'><strong style='color:#111827; font-size:15px;'>👤 User ID: {esc(prev['uid'])}</strong> {tier_badge}</div><img src='data:image/jpeg;base64,{prev['b64']}' style='width: 100%; height: auto; border: 1px solid #E5E7EB; border-radius: 6px;' loading='lazy' alt='Preview'></div>"
                         preview_html += "</div></div>"
                         card_inner += f"<details style='margin-top:15px;'><summary style='cursor:pointer; font-weight:bold; color:#0A58CA; font-size: 15px;'>📸 Симуляция на реальных профилях ({len(previews)})</summary>{preview_html}</details>"
                     
                 elif t in ["Push", "Push PWA"]:
                     res_name = item.get('resource_name') or f'Unnamed {t} Resource'
-                    push_url = item.get('email_url', '#')
-                    card_inner += f"<p style='margin:4px 0;'><b>Name:</b> <a href='{esc(push_url)}' target='_blank' style='color:{css_color}; text-decoration:none; border-bottom:1px dashed;'>{esc(res_name)}</a></p>"
+                    card_inner += f"<p style='margin:4px 0;'><b>Name:</b> <a href='{esc(item.get('email_url', '#'))}' target='_blank' style='color:{css_color}; text-decoration:none; border-bottom:1px dashed;'>{esc(res_name)}</a></p>"
                     if item.get('status_name'): card_inner += f"<p style='margin:4px 0;'><b>Status:</b> {esc(item['status_name'])}</p>"
                     if item.get('title_url'): card_inner += f"<p style='margin:4px 0;'><b>Title:</b> {esc(item['title_url'])}</p>"
-                    
                     body_val = item.get('body', 'N/A')
                     card_inner += f"<p style='margin:4px 0; margin-top:10px;'><b>Text:</b></p><div class='pre-text' style='margin-top:4px;'>{esc(body_val)}</div>"
-                    
                     for label, key in [("Icon", "icon_url"), ("Attached image", "image_url")]:
                         if item.get(key): card_inner += f"<p style='margin:4px 0;'><b>{label}:</b> <span style='font-family: monospace; color: #34495e; background: #ecf0f1; padding: 2px 4px; border-radius: 3px;'>{esc(item[key])}</span></p>"
-                    
                     if item.get('button1'): card_inner += f"<p style='margin:4px 0;'><b>Button:</b> {esc(item['button1'])}</p>"
                     if item.get('link'): card_inner += f"<p style='margin:4px 0;'><b>Deep Link:</b> {esc(item['link'])}</p>"
 
                     p_title = str(item.get('title_url', ''))
                     link_text = str(item.get('link', ''))
                     labels_store = data.get("labels_data", {})
-                    
-                    # 🚨 ФИКС: Упаковываем в JSON, чтобы симулятор макроса смог понять, где именно находится макрос
                     json_context = json.dumps({"title": p_title, "body": body_val})
                     
-                    # 🚨 ОБРАЩЕНИЕ ЧЕРЕЗ SELF
                     def get_labels_ui(lst): return "".join([self.render_audited_label_html(l, labels_store.get(l), brand_id, labels_store, node_type=t, full_node_text=json_context, expected_data=expected_data) for l in lst]) if lst else "Пусто"
 
                     p_raw = set(re.findall(r'\{\{label\.[^\s\}]+\}\}', f"{p_title} {body_val} {link_text} {item.get('button1', '')} {item.get('image_url', '')} {item.get('icon_url', '')}"))
-                    # 🚨 ОБРАЩЕНИЕ ЧЕРЕЗ SELF
                     p_lbls = sorted([l for l in p_raw if not self.is_ignored_label(l)])
                     if p_lbls: card_inner += f"<details style='margin-top:10px;'><summary style='cursor:pointer; font-weight:bold; color:#d35400;'>📁 Labels ({len(p_lbls)})</summary><div style='margin-top:8px;'>{get_labels_ui(p_lbls)}</div></details>"
                 
                 elif t == "Pop-up":
                     res_name = item.get('resource_name') or 'Unnamed Pop-up Resource'
-                    inapp_url = item.get('email_url', '#')
-                    card_inner += f"<p style='margin:4px 0;'><b>Name:</b> <a href='{esc(inapp_url)}' target='_blank' style='color:{css_color}; text-decoration:none; border-bottom:1px dashed;'>{esc(res_name)}</a></p>"
+                    card_inner += f"<p style='margin:4px 0;'><b>Name:</b> <a href='{esc(item.get('email_url', '#'))}' target='_blank' style='color:{css_color}; text-decoration:none; border-bottom:1px dashed;'>{esc(res_name)}</a></p>"
                     if item.get('status_name'): card_inner += f"<p style='margin:4px 0;'><b>Status:</b> {esc(item['status_name'])}</p>"
                     if item.get('title_url'): card_inner += f"<p style='margin:4px 0;'><b>Title:</b> {esc(item['title_url'])}</p>"
-                    
                     body_val = item.get('body', 'N/A')
                     card_inner += f"<p style='margin:4px 0; margin-top:10px;'><b>Text (sub_title):</b></p><div class='pre-text' style='margin-top:4px;'>{esc(body_val)}</div>"
-                    
                     if item.get('image_url'): card_inner += f"<p style='margin:4px 0;'><b>Image:</b> <span style='font-family: monospace; color: #34495e; background: #ecf0f1; padding: 2px 4px; border-radius: 3px;'>{esc(item['image_url'])}</span></p>"
-                    
                     if item.get('button1') or item.get('link'):
-                        card_inner += f"<div style='margin-top:10px; padding:10px; border:1px solid #f39c12; border-radius:4px; background:#fffaf0;'>"
-                        card_inner += f"<strong style='color:#d35400;'>🔘 Button</strong>"
+                        card_inner += f"<div style='margin-top:10px; padding:10px; border:1px solid #f39c12; border-radius:4px; background:#fffaf0;'><strong style='color:#d35400;'>🔘 Button</strong>"
                         if item.get('button1'): card_inner += f"<p style='margin:4px 0 0 0;'><b>Text:</b> {esc(item['button1'])}</p>"
                         if item.get('link'): card_inner += f"<p style='margin:4px 0 0 0;'><b>URL:</b> {esc(item['link'])}</p>"
                         card_inner += "</div>"
@@ -3084,121 +2848,49 @@ class SmarticoCore:
                     p_title = str(item.get('title_url', ''))
                     link_text = str(item.get('link', ''))
                     labels_store = data.get("labels_data", {})
-                    
-                    # 🚨 ФИКС: Упаковываем в JSON, чтобы симулятор макроса смог понять, где именно находится макрос
                     json_context = json.dumps({"title": p_title, "body": body_val})
                     
-                    # 🚨 ОБРАЩЕНИЕ ЧЕРЕЗ SELF
                     def get_labels_ui(lst): return "".join([self.render_audited_label_html(l, labels_store.get(l), brand_id, labels_store, node_type=t, full_node_text=json_context, expected_data=expected_data) for l in lst]) if lst else "Пусто"
 
                     p_raw = set(re.findall(r'\{\{label\.[^\s\}]+\}\}', f"{p_title} {body_val} {link_text} {item.get('button1', '')} {item.get('image_url', '')}"))
-                    # 🚨 ОБРАЩЕНИЕ ЧЕРЕЗ SELF
                     p_lbls = sorted([l for l in p_raw if not self.is_ignored_label(l)])
                     if p_lbls: card_inner += f"<details style='margin-top:10px;'><summary style='cursor:pointer; font-weight:bold; color:#d35400;'>📁 Labels ({len(p_lbls)})</summary><div style='margin-top:8px;'>{get_labels_ui(p_lbls)}</div></details>"
                 
                 elif t == "SMS":
                     if item.get('resource_name'):
-                        sms_url = item.get('email_url', '#')
-                        card_inner += f"<p style='margin:4px 0;'><b>Name:</b> <a href='{esc(sms_url)}' target='_blank' style='color:#f39c12; text-decoration:none; border-bottom:1px dashed;'>{esc(item['resource_name'])}</a></p>"
+                        card_inner += f"<p style='margin:4px 0;'><b>Name:</b> <a href='{esc(item.get('email_url', '#'))}' target='_blank' style='color:#f39c12; text-decoration:none; border-bottom:1px dashed;'>{esc(item['resource_name'])}</a></p>"
                     if item.get('status_name'): card_inner += f"<p style='margin:4px 0;'><b>Status:</b> {esc(item['status_name'])}</p>"
-                    
                     b_val = item.get('body', '')
                     card_inner += f"<p style='margin:4px 0; margin-top:10px;'><b>Message:</b></p><div class='pre-text' style='margin-top:4px;'>{esc(b_val if b_val else 'N/A')}</div>"
                     
                     labels_store = data.get("labels_data", {})
+                    camp_name_sms = (data.get('general_main', {}).get('Name', '') or data.get('general_pop', {}).get('Name', '') or 'Campaign').strip()
                     
-                    # ⚡ ФИКС: Вычисляем camp_name для проверки UTM в SMS
-                    c_main = data.get('general_main', {}).get('Name', '')
-                    c_pop = data.get('general_pop', {}).get('Name', '')
-                    camp_name_sms = (c_main or c_pop or 'Campaign').strip()
-                    
-                    # 🚨 ОБРАЩЕНИЕ ЧЕРЕЗ SELF (Передаем target_utm ТОЛЬКО если в названии лейбла есть 'utm')
                     def get_labels_ui(lst): return "".join([self.render_audited_label_html(l, labels_store.get(l), brand_id, labels_store, visited=global_visited_macros, target_utm=(camp_name_sms if "utm" in l.lower() else None), node_type=t, full_node_text=b_val, expected_data=expected_data) for l in lst]) if lst else "Пусто"
 
                     s_raw = set(re.findall(r'\{\{label\.[^\s\}]+\}\}', b_val))
-                    # 🚨 ОБРАЩЕНИЕ ЧЕРЕЗ SELF
                     s_lbls = sorted([l for l in s_raw if not self.is_ignored_label(l)])
                     if s_lbls: card_inner += f"<details style='margin-top:10px;'><summary style='cursor:pointer; font-weight:bold; color:#d35400;'>📁 Labels ({len(s_lbls)})</summary><div style='margin-top:8px;'>{get_labels_ui(s_lbls)}</div></details>"        
 
                 elif t == "WebHook":
                     if item.get('title_url'): card_inner += f"<p style='margin:4px 0;'><b>URL:</b> {esc(item['title_url'])}</p>"
-                    
                     webhook_body = item.get('body', '')
-                    
-                    if ' ' in webhook_body:
-                        space_badge = "<span style='background:#fadbd8; color:#900c3f; padding:3px 8px; border-radius:12px; font-size:11px; font-weight:bold;'>❌ Есть пробелы</span>"
-                    else:
-                        space_badge = "<span style='background:#d4edda; color:#155724; padding:3px 8px; border-radius:12px; font-size:11px; font-weight:bold;'>✅ Нет пробелов</span>"
-                    
-                    card_inner += f"<p style='margin:10px 0 4px 0; display:flex; align-items:center; gap:8px;'><b>Data:</b> {space_badge}</p>"
-                    card_inner += f"<div class='pre-text' style='margin-top:4px;'>{esc(webhook_body if webhook_body else 'N/A')}</div>"
+                    space_badge = "<span style='background:#fadbd8; color:#900c3f; padding:3px 8px; border-radius:12px; font-size:11px; font-weight:bold;'>❌ Есть пробелы</span>" if ' ' in webhook_body else "<span style='background:#d4edda; color:#155724; padding:3px 8px; border-radius:12px; font-size:11px; font-weight:bold;'>✅ Нет пробелов</span>"
+                    card_inner += f"<p style='margin:10px 0 4px 0; display:flex; align-items:center; gap:8px;'><b>Data:</b> {space_badge}</p><div class='pre-text' style='margin-top:4px;'>{esc(webhook_body if webhook_body else 'N/A')}</div>"
                     
                     labels_store = data.get("labels_data", {})
-                    # 🚨 ОБРАЩЕНИЕ ЧЕРЕЗ SELF
                     def get_labels_ui(lst): return "".join([self.render_audited_label_html(l, labels_store.get(l), brand_id, labels_store, visited=global_visited_macros, node_type=t, full_node_text=f"{item.get('title_url','')} {webhook_body}", expected_data=expected_data) for l in lst]) if lst else "Пусто"
 
                     w_raw = set(re.findall(r'\{\{label\.[^\s\}]+\}\}', f"{item.get('title_url','')} {webhook_body}"))
-                    # 🚨 ОБРАЩЕНИЕ ЧЕРЕЗ SELF
                     w_lbls = sorted([l for l in w_raw if not self.is_ignored_label(l)])
                     if w_lbls: card_inner += f"<details style='margin-top:10px;'><summary style='cursor:pointer; font-weight:bold; color:#27ae60;'>📁 Labels ({len(w_lbls)})</summary><div style='margin-top:8px;'>{get_labels_ui(w_lbls)}</div></details>"
                     
                 else:
                     card_inner += f"<div class='pre-text' style='margin-top:8px;'>{esc(item.get('body','N/A'))}</div>"
                 
-                # ⚡ УНИВЕРСАЛЬНАЯ СВЕРКА ВАРИАЦИЙ (АВТОНОМНЫЙ ЖИВОЙ ПОДЗАПРОС ИЗ API)
-                res_id = item.get('resource_id') or item.get('id')
-                if not res_id and item.get('email_url'):
-                    # Выкусываем ID ресурса из ссылки вида https://drive.smartico.ai/2828#/templated_mail/208555
-                    m_id = re.search(r'/(\d+)/?$', str(item['email_url']))
-                    if not m_id:
-                        m_id = re.search(r'/(\d+)', str(item['email_url']))
-                    if m_id:
-                        res_id = int(m_id.group(1))
+                # 🚨 ФИКС 2: Достаем вариации напрямую из item (ведь мы прокинули их в main.py!)
+                variations = item.get("variations", [])
 
-                endpoint_map = {
-                    "Email": "templated_mail_variation",
-                    "SMS": "resource_sms_variation",
-                    "Push": "resource_push_variation",
-                    "Push PWA": "resource_push_variation",
-                    "WebHook": "resource_push_variation",
-                    "Pop-up": "resource_inapp_variation"
-                }
-                endpoint = endpoint_map.get(t)
-                
-                variations = []
-                actual_ui_route = endpoint
-                if res_id and endpoint:
-                    try:
-                        v_url = f"https://{self.boapi_host}/api/{endpoint}"
-                        # ⚡ ФИКС: Убрали жесткий фильтр "status", чтобы скачивать и активные вариации!
-                        v_params = {
-                            "filter": json.dumps({"resource_id": int(res_id)}),
-                            "range": "[0,499]",
-                            "sort": '["variation_priority","DESC"]',
-                            "lbl": self.brand_id
-                        }
-                        v_res = requests.get(v_url, params=v_params, headers=self.headers, timeout=5)
-                        if v_res.ok:
-                            v_data = v_res.json()
-                            variations = v_data.get("result", v_data) if isinstance(v_data, dict) else v_data
-                            if not isinstance(variations, list): variations = []
-                        
-                        if t == "Pop-up" and not variations:
-                            v_url_fb = f"https://{self.boapi_host}/api/templated_popup_variation"
-                            v_res_fb = requests.get(v_url_fb, params=v_params, headers=self.headers, timeout=5)
-                            if v_res_fb.ok:
-                                v_data_fb = v_res_fb.json()
-                                variations = v_data_fb.get("result", v_data_fb) if isinstance(v_data_fb, dict) else v_data_fb
-                                if not isinstance(variations, list): variations = []
-                                actual_ui_route = "templated_popup_variation"
-                    except Exception as e:
-                        print(f"[DEBUG-VAR-LIVE-ERR] Ошибка загрузки вариаций для {t} #{res_id}: {e}")
-
-                # ⚡ ФИКС: Отсекаем фейковые вариации (если создана всего 1 вариация для "All users")
-                if len(variations) <= 1:
-                    variations = []
-
-                # ⚡ Смарт-функция для резолва макросов (с учетом языка вариации)
                 labels_store = data.get("labels_data", {})
                 def resolve_macro_smart(mac, target_lang="EN"):
                     if self.is_ignored_label(mac): return ""
@@ -3207,89 +2899,66 @@ class SmarticoCore:
                         fetched = self.get_label_data_with_variations(clean)
                         if fetched: labels_store[clean] = fetched
                         else: return "5000"
-                        
                     m_data = labels_store.get(clean)
                     if not m_data: return "5000"
-                    
                     m_def = str(m_data.get("default", ""))
                     m_vars = m_data.get("variations", [])
-                    
-                    # Если внутри JS функция (ищем case 'EN': или 'EN':)
                     if "function" in m_def or "Java.type" in m_def:
                         dp = re.compile(r'(?:["\']([A-Z]{2}(?:-[A-Za-z]{2})?)["\']|([A-Z]{2}(?:-[A-Za-z]{2})?))\s*:\s*(["\'`])(.*?)(?<!\\)\3', re.IGNORECASE | re.DOTALL)
                         for m in dp.finditer(m_def):
                             lng = (m.group(1) or m.group(2)).upper()
                             if lng == target_lang.upper(): return re.sub(r'<[^>]+>', '', m.group(4))
-                        # Фолбэк на EN
                         for m in dp.finditer(m_def):
                             lng = (m.group(1) or m.group(2)).upper()
                             if lng == "EN": return re.sub(r'<[^>]+>', '', m.group(4))
-                    
-                    # Проверяем вариации макроса
                     matched_val = None
                     for v in m_vars:
                         cond = str(v.get("conditions_readable", "")).upper()
                         if f"({target_lang.upper()})" in cond or f" {target_lang.upper()} " in cond or cond.endswith(target_lang.upper()) or f"_{target_lang.upper()}" in cond:
                             matched_val = str(v.get("tag_value", ""))
                             break
-                            
-                    if matched_val is None and m_def.strip() and not ("function" in m_def or "Java.type" in m_def): 
-                        matched_val = m_def
-                    if matched_val is None and m_vars: 
-                        matched_val = str(m_vars[0].get("tag_value", ""))
-                    
+                    if matched_val is None and m_def.strip() and not ("function" in m_def or "Java.type" in m_def): matched_val = m_def
+                    if matched_val is None and m_vars: matched_val = str(m_vars[0].get("tag_value", ""))
                     res_val = str(matched_val) if matched_val is not None else "5000"
                     return re.sub(r'<[^>]+>', '', res_val).strip() or "5000"
 
-                # ⚡ ФУНКЦИЯ ДЛЯ СИМУЛЯЦИИ SMS
                 def simulate_sms(sim_body, target_lang="EN"):
                     is_js = "function(" in sim_body.replace(" ", "") or "Java.type" in sim_body
                     if is_js:
                         text_preview = f"<div style='margin-top:6px; padding:6px 8px; background:rgba(0,0,0,0.04); border-radius:4px; font-family:monospace; font-size:11px; color:#475569; word-break:break-word; border:1px solid rgba(0,0,0,0.05); max-height:150px; overflow-y:auto;'>{esc(sim_body)}</div>"
                         return f"<div style='margin-top:6px; background:#f8fafc; border:1px solid #cbd5e1; padding:8px 12px; border-radius:4px; font-size:12px; color:#475569;'>⚙️ <b>JS Function:</b> Длина не симулируется{text_preview}</div>"
-                    
                     max_depth = 3
                     while max_depth > 0:
                         found_macros = set(re.findall(r'\{\{[^\}]+\}\}', sim_body))
                         if not found_macros: break
-                        for mac in found_macros:
-                            sim_body = sim_body.replace(mac, resolve_macro_smart(mac, target_lang))
+                        for mac in found_macros: sim_body = sim_body.replace(mac, resolve_macro_smart(mac, target_lang))
                         max_depth -= 1
-                        
-                    sim_body = sim_body.replace('&nbsp;', ' ').strip()
-                    sim_body = re.sub(r'<[^>]+>', '', sim_body)
+                    sim_body = re.sub(r'<[^>]+>', '', sim_body.replace('&nbsp;', ' ').strip())
                     sim_len = len(sim_body)
-                    
                     gsm7_chars = set("@£$¥èéùìòÇ\nØø\rÅåΔ_ΦΓΛΩΠΨΣΘΞÆæßÉ !\"#¤%&'()*+,-./0123456789:;<=>?¡ABCDEFGHIJKLMNOPQRSTUVWXYZÄÖÑÜ§¿abcdefghijklmnopqrstuvwxyzäöñüà^{}\\[~]|€")
                     non_gsm7 = set(c for c in sim_body if c not in gsm7_chars)
                     encoding = "UCS-2" if non_gsm7 else "GSM-7"
                     parts = (sim_len // 153) + (1 if sim_len % 153 else 0) if encoding == "GSM-7" else (sim_len // 67) + (1 if sim_len % 67 else 0)
                     if parts == 0: parts = 1
                     limit = 160 if encoding == "GSM-7" else 70
-                    
                     text_preview = f"<div style='margin-top:6px; padding:6px 8px; background:rgba(0,0,0,0.04); border-radius:4px; font-family:monospace; font-size:11px; color:#475569; word-break:break-word; border:1px solid rgba(0,0,0,0.05);'>{esc(sim_body)}</div>"
-                    
-                    if parts > 1:
-                        return f"<div style='margin-top:6px; background:#fef2f2; border:1px solid #fca5a5; padding:8px 12px; border-radius:4px; font-size:12px; color:#991b1b;'>📱 <b>SMS Симуляция:</b> ~{sim_len} симв. | {encoding} | <b>{parts} SMS</b> (макс. {limit} на 1 смс) 🚨 Двойная тарификация!{text_preview}</div>"
-                    else:
-                        return f"<div style='margin-top:6px; background:#f0fdf4; border:1px solid #86efac; padding:8px 12px; border-radius:4px; font-size:12px; color:#166534;'>📱 <b>SMS Симуляция:</b> ~{sim_len} симв. | {encoding} | <b>{parts} SMS</b>{text_preview}</div>"
+                    if parts > 1: return f"<div style='margin-top:6px; background:#fef2f2; border:1px solid #fca5a5; padding:8px 12px; border-radius:4px; font-size:12px; color:#991b1b;'>📱 <b>SMS Симуляция:</b> ~{sim_len} симв. | {encoding} | <b>{parts} SMS</b> (макс. {limit} на 1 смс) 🚨 Двойная тарификация!{text_preview}</div>"
+                    else: return f"<div style='margin-top:6px; background:#f0fdf4; border:1px solid #86efac; padding:8px 12px; border-radius:4px; font-size:12px; color:#166534;'>📱 <b>SMS Симуляция:</b> ~{sim_len} симв. | {encoding} | <b>{parts} SMS</b>{text_preview}</div>"
 
                 if variations:
                     baseline_all_text = " ".join([str(val) for val in item.values() if isinstance(val, (str, int, float))])
                     baseline_labels = [l for l in re.findall(r'\{\{label\.[^\s\}]+\}\}', baseline_all_text) if not self.is_ignored_label(l)]
                     baseline_counts = Counter(baseline_labels)
-                    
-                    var_html = f"<details style='margin-top:15px;'><summary style='cursor:pointer; font-weight:bold; color:#8e44ad;'>🔄 Сверка макросов в вариациях ({len(variations)} шт.)</summary>"
-                    var_html += "<div style='display:flex; flex-direction:column; gap:6px; margin-top:8px;'>"
-                    
+                    var_html = f"<details style='margin-top:15px;'><summary style='cursor:pointer; font-weight:bold; color:#8e44ad;'>🔄 Сверка макросов в вариациях ({len(variations)} шт.)</summary><div style='display:flex; flex-direction:column; gap:6px; margin-top:8px;'>"
                     for var in variations:
                         raw_cond = str(var.get("variation_condition_readable") or var.get("conditions_readable") or "Unknown")
                         var_cond = self.inject_flags(raw_cond)
-                        
                         lang_match = re.search(r'\b([A-Z]{2})\b', raw_cond.upper())
                         target_lang = lang_match.group(1) if lang_match else "EN"
-                        
                         var_id = var.get("id", "")
+                        
+                        endpoint_map = {"SMS": "resource_sms_variation", "Push": "resource_push_variation", "Push PWA": "resource_push_variation", "WebHook": "resource_push_variation", "Pop-up": "resource_inapp_variation"}
+                        actual_ui_route = endpoint_map.get(t, "")
                         var_url = f"https://{self.drive_host}/{self.brand_id}#/{actual_ui_route}/{var_id}" if self.drive_host and self.brand_id and actual_ui_route else "#"
                         var_link_html = f"<a href='{var_url}' target='_blank' style='color:#3b82f6; text-decoration:none; border-bottom:1px dashed #93c5fd; transition:0.2s;' onmouseover=\"this.style.color='#2563eb'\" onmouseout=\"this.style.color='#3b82f6'\">{esc(var_cond)}</a> <span style='color:#94a3b8; font-size:10px; font-weight:normal;'>(ID: {var_id})</span>"
                         
@@ -3297,16 +2966,12 @@ class SmarticoCore:
                         var_labels = [l for l in re.findall(r'\{\{label\.[^\s\}]+\}\}', var_all_text) if not self.is_ignored_label(l)]
                         var_counts = Counter(var_labels)
                         
-                        node_sim_html = ""
-                        # ⚡ Оставляем симуляцию ТОЛЬКО для SMS
-                        if t == "SMS":
-                            node_sim_html = simulate_sms(str(var.get('body', '')), target_lang)
+                        node_sim_html = simulate_sms(str(var.get('body', '')), target_lang) if t == "SMS" else ""
 
                         if var_counts == baseline_counts:
                             var_html += f"<div style='background:#f8fafc; border:1px solid #cbd5e1; border-left:4px solid #10b981; padding:8px 12px; border-radius:4px; font-size:12px;'><b style='color:#334155;'>{var_link_html}</b>: <span style='color:#15803d; margin-left:6px;'>✅ Макросы идентичны</span>{node_sim_html}</div>"
                         else:
-                            missing = baseline_counts - var_counts
-                            extra = var_counts - baseline_counts
+                            missing, extra = baseline_counts - var_counts, var_counts - baseline_counts
                             errs = []
                             if missing: errs.append(f"<b>Отсутствуют:</b> {', '.join([f'{esc(k)}' for k in missing])}")
                             if extra: errs.append(f"<b>Лишние:</b> {', '.join([f'{esc(k)}' for k in extra])}")
@@ -3315,18 +2980,10 @@ class SmarticoCore:
                     var_html += "</div></details>"
                     card_inner += var_html
                 else:
-                    # ⚡ Если вариаций ноды нет, просто выводим заглушку.
-                    # Старый сценарий сам разберет JS-макросы внутри текста и отрисует цветные таблетки по языкам!
                     card_inner += "<div style='margin-top:15px; padding:10px 14px; background:#f8fafc; border:1px solid #e2e8f0; border-radius:8px; font-size:13px; color:#64748b; font-weight:bold; display:flex; align-items:center; gap:8px;'>ℹ️ Вариации контента отсутствуют</div>"
 
-                # --- ЛОГИКА ГЛОБАЛЬНОГО АЛЕРТА ---
                 has_critical_error = "critical-error-flag" in card_inner or "🚨" in card_inner
-                
                 global_warning_html = ""
-                # ВРЕМЕННО ОТКЛЮЧЕНО ПО ПРОСЬБЕ:
-                # if has_critical_error:
-                #     global_warning_html = f"<div style='background: #fee2e2; border: 1px solid #ef4444; color: #b91c1c; padding: 12px 16px; border-radius: 8px; font-weight: bold; font-size: 14px; margin-bottom: 15px; display: flex; align-items: center; gap: 10px; box-shadow: 0 4px 6px -1px rgba(239, 68, 68, 0.2);'>🛑 ВНИМАНИЕ! В этой коммуникации (или её макросах) найдена КРИТИЧЕСКАЯ ошибка! Срочно проверьте детали ниже.</div>"
-                
                 card_inner += f"""
                 <div style="margin-top: 15px; padding-top: 10px; border-top: 1px dashed #cbd5e1; text-align: right;">
                     <label style="cursor: pointer; display: inline-flex; align-items: center; gap: 8px; font-size: 13px; font-weight: bold; color: #64748b; background: #ffffff; padding: 6px 12px; border-radius: 6px; border: 1px solid #e2e8f0; transition: 0.2s;" onmouseover="this.style.background='#f1f5f9'" onmouseout="this.style.background='#ffffff'">
@@ -3335,180 +2992,53 @@ class SmarticoCore:
                 </div>
                 """
                 nodes_html += f"<div class='card dim-target' style='border-left-color:{css_color};'>{global_warning_html}{card_inner}</div>"
-                
-                t_item_end = time.time()
-                if (t_item_end - t_item) > 0.5:
-                    print(f"[DEBUG-HTML] 🐢 ДОЛГАЯ НОДА: '{names_display}' -> {t_item_end - t_item:.2f} сек")
-                else:
-                    print(f"[DEBUG-HTML] ⚡ Отрисована нода '{names_display[:30]}...' -> {t_item_end - t_item:.2f} сек")
 
-        camp_main = data.get('general_main', {}).get('Name')
-        camp_pop = data.get('general_pop', {}).get('Name')
-        campaign_name_title = esc(camp_main or camp_pop or 'Campaign Audit')
-        
-        flows = data.get("flow_links", [])
-        smart_labels = {"impression": "Показано", "delivered": "Доставлено", "Executed": "Отправлено", "Timeout": "Таймаут", "When happened": "Событие"}
+        html_blocks = f"""
+        <div class="flex flex-col gap-12">
+            <section id="sec-general" class="scroll-mt-32">
+                {links_block_html}
+            </section>
 
-        links_from = defaultdict(list)
-        links_to = defaultdict(list)
-        for l in flows:
-            links_from[l['source']].append(l)
-            links_to[l['target']].append(l)
-
-        end_nodes = set(l['target'] for l in flows if l['target'] not in links_from)
-        start_nodes = set(l['source'] for l in flows if l['source'] not in links_to)
-        if not start_nodes and flows: start_nodes = {flows[0]['source']}
-
-        lanes = []
-        MAX_LANES_LIMIT = 50  # 🚨 Жесткий лимит на количество сценариев (защита от зависаний)
-        limit_reached = [False] # Используем список для возможности изменения флага внутри вложенной функции
-
-        def explore(node, current_lane, visited):
-            # Если лимит уже достигнут, мгновенно прерываем рекурсию во всех ветках
-            if len(lanes) >= MAX_LANES_LIMIT:
-                limit_reached[0] = True
-                return
-
-            if node in visited:
-                lanes.append(current_lane)
-                return
-            
-            visited.add(node)
-            outgoing = links_from.get(node, [])
-            
-            if not outgoing:
-                lanes.append(current_lane)
-                return
-                
-            is_terminal_split = all(out['target'] in end_nodes for out in outgoing)
-            
-            if len(outgoing) > 1 and is_terminal_split:
-                bundle_step = {
-                    "type": "Outcomes",
-                    "outcomes": outgoing
-                }
-                current_lane.append(bundle_step)
-                lanes.append(current_lane)
-            elif len(outgoing) > 1:
-                for out in outgoing:
-                    if len(lanes) >= MAX_LANES_LIMIT: break # Дополнительная проверка перед ветвлением
-                    new_lane = current_lane.copy()
-                    new_lane.append({"type": "Link", "data": out})
-                    explore(out['target'], new_lane, visited.copy())
-            else:
-                out = outgoing[0]
-                current_lane.append({"type": "Link", "data": out})
-                explore(out['target'], current_lane, visited.copy())
-
-        for start in start_nodes:
-            if len(lanes) >= MAX_LANES_LIMIT: break
-            explore(start, [{"type": "Start", "name": start}], set())
-
-        journey_html = ""
-        
-        # 🚨 Если сработал лимит, выводим предупреждение в интерфейс
-        if limit_reached[0]:
-            journey_html += f"""
-            <div style="margin-bottom: 16px; padding: 12px 16px; background: #fffbeb; color: #b45309; border: 1px solid #fde68a; border-left: 4px solid #f59e0b; border-radius: 6px; font-size: 13px; font-weight: bold; box-shadow: 0 1px 2px rgba(0,0,0,0.05);">
-                ⚠️ Кампания имеет слишком сложную структуру ветвлений. Чтобы избежать зависания отчета, показаны только первые {MAX_LANES_LIMIT} сценариев из возможных.
-            </div>
-            """
-
-        for idx, lane in enumerate(lanes):
-            path_label = f"Сценарий #{idx+1}"
-            
-            for step in lane:
-                if step["type"] == "Link":
-                    src = step["data"]["source"]
-                    if len(links_from.get(src, [])) > 1:
-                        lbl = step["data"]["label"]
-                        path_label = f"Ветка: <b>{esc(lbl.replace('(MATCHING) ', ''))}</b>"
-                        break
-
-            path_steps_html = ""
-            
-            def get_node_html(name, link_data=None):
-                clean_name = re.sub(r'<[^>]+>', '', name).strip()
-                n_lower = clean_name.lower()
-                
-                step_class = "journey-node-other"
-                if "convert" in n_lower: step_class = "journey-node-convert"
-                elif "stop" in n_lower: step_class = "journey-node-stop"
-                elif "wait" in n_lower: step_class = "journey-node-wait"
-                elif link_data and link_data.get('target_url'): step_class = "journey-node-com"
-                else: step_class = "journey-node-split"
-                
-                pwa_badge = ""
-                url_wrap_start, url_wrap_end = "", ""
-                
-                if link_data:
-                    if link_data.get('is_pwa'):
-                        pwa_badge = "<span style='color:#e74c3c; background:#fef2f2; border:1px solid #f87171; border-radius:3px; padding:1px 3px; font-size:9px; margin-left:4px;'>PWA</span>"
-                    if link_data.get('target_url'):
-                        url_wrap_start = f"<a href='{link_data['target_url']}' target='_blank' style='text-decoration:none; color:inherit; display:flex; align-items:center; width:100%; justify-content:center;'>"
-                        url_wrap_end = "</a>"
-                
-                return f'''
-                <div class="journey-node-box {step_class}">
-                    {url_wrap_start}
-                    <div class="journey-node-name" title="{esc(clean_name)}">{esc(clean_name)}</div>{pwa_badge}
-                    {url_wrap_end}
+            {f'''<section id="sec-map" class="scroll-mt-32">
+                <div class="card !mb-0 !p-0 overflow-hidden">
+                    <div class="px-6 py-4 bg-slate-50 dark:bg-slate-800 border-b border-slate-200 dark:border-slate-700 font-bold text-lg text-slate-800 dark:text-white flex justify-between items-center">
+                        📸 Интерактивная карта
+                    </div>
+                    <div class="p-6">
+                        {flow_html}
+                    </div>
                 </div>
-                '''
-                
-            def get_arrow_html(label):
-                smart_lbl = smart_labels.get(label, label.replace('(MATCHING) ', ''))
-                return f'''
-                <div class="journey-arrow">
-                    <span style="font-size:10px; color:#64748b; margin-bottom:2px; white-space:nowrap;">{esc(smart_lbl)}</span>
-                    <span style="color:#cbd5e1;">&rarr;</span>
+            </section>''' if flow_html else ''}
+
+            {f'''<section id="sec-logic" class="scroll-mt-32">
+                <h2 class="text-2xl font-bold mb-6 text-slate-800 dark:text-slate-100 border-b border-slate-200 dark:border-slate-700 pb-2">🔀 Multi-Check Logic</h2>
+                <div class="searchable-content flex flex-col">{mc_html}</div>
+            </section>''' if mc_html else ''}
+            
+            {f'''<section id="sec-profile" class="scroll-mt-32">
+                {cond_block_html}
+            </section>''' if cond_block_html else ''}
+
+            {f'''<section id="sec-settings" class="scroll-mt-32">
+                {settings_block_html}
+            </section>''' if settings_block_html else ''}
+            
+            <section id="sec-content" class="scroll-mt-32">
+                <div class="flex flex-col sm:flex-row sm:items-center justify-between border-b border-slate-200 dark:border-slate-700 pb-2 mb-6 gap-4">
+                    <h2 class="text-2xl font-bold m-0 text-slate-800 dark:text-slate-100">🔬 Content Analysis</h2>
+                    <label class="cursor-pointer flex items-center gap-2 text-sm font-semibold text-slate-700 dark:text-slate-300 bg-white dark:bg-slate-800 border border-slate-300 dark:border-slate-600 px-4 py-2 rounded-lg hover:bg-slate-50 dark:hover:bg-slate-700 transition-colors shadow-sm select-none">
+                        <input type="checkbox" id="toggleAllPills" class="accent-blue-600 w-4 h-4 cursor-pointer">
+                        <span>Показать корректные вариации</span>
+                    </label>
                 </div>
-                '''
+                <div class="searchable-content flex flex-col">{nodes_html}</div>
+            </section>
+        </div>
+        """
 
-            for i, step in enumerate(lane):
-                if step["type"] == "Start":
-                    path_steps_html += get_node_html(step["name"])
-                elif step["type"] == "Link":
-                    link = step["data"]
-                    path_steps_html += get_arrow_html(link["label"])
-                    path_steps_html += get_node_html(link["target"], link)
-                elif step["type"] == "Outcomes":
-                    path_steps_html += get_arrow_html("Исходы")
-                    
-                    out_html = ""
-                    for out in step["outcomes"]:
-                        tgt = re.sub(r'<[^>]+>', '', out['target']).strip()
-                        lbl = out['label']
-                        smart_lbl = smart_labels.get(lbl, lbl)
-                        
-                        if "convert" in tgt.lower(): badge = f"<span style='color:#15803d; font-weight:bold;'>🏆 {esc(tgt)}</span>"
-                        elif "stop" in tgt.lower(): badge = f"<span style='color:#b91c1c; font-weight:bold;'>🛑 {esc(tgt)}</span>"
-                        else: badge = f"<b>{esc(tgt)}</b>"
-                        
-                        out_html += f"<div style='margin:4px 0; font-size:11px; display:flex; justify-content:space-between; align-items:center; gap:10px; border-bottom:1px solid #f1f5f9; padding-bottom:4px;'><i style='color:#64748b;'>{esc(smart_lbl)}</i> {badge}</div>"
-                    
-                    path_steps_html += f"<div class='journey-node-box journey-node-outcomes' style='flex-direction:column; align-items:stretch; text-align:left; min-width:180px;'>{out_html}</div>"
-
-            journey_html += f"""
-            <div style="background:#f8fafc; border:1px solid #e2e8f0; border-radius:8px; padding:16px; margin-bottom:16px; box-shadow:0 1px 2px rgba(0,0,0,0.05);">
-                <h4 style="margin: 0 0 12px 0; color:#334155; font-size:14px; border-bottom:1px solid #e2e8f0; padding-bottom:6px;">🔀 {path_label}</h4>
-                <div style="display:flex; align-items:center; overflow-x:auto; padding-bottom:8px;">
-                    {path_steps_html}
-                </div>
-            </div>
-            """
-
-        links_block_html = f"""
-        <div class="flex flex-col gap-8 mb-8">
-                <div class="card !mb-0">
-                    <h2 class="text-xl font-bold mb-5 flex items-center gap-2 border-b border-slate-100 dark:border-slate-700 pb-3">
-                         📍 General & Segments
-                    </h2>
-                    {general_and_segment_html}
-                    <div class="mt-4">{context_html}</div>
-                </div>
-        """ if flows else ""
-
+        if is_mass_audit:
+            return html_blocks
+            
         html_content = f"""
         <!DOCTYPE html>
         <html lang="en" class="light" style="scroll-behavior: smooth;">
@@ -3518,74 +3048,33 @@ class SmarticoCore:
             <title>Audit: {campaign_name_title}</title>
             <script src="https://cdn.tailwindcss.com"></script>
             <script>
-                tailwind.config = {{
-                    darkMode: 'class',
-                    theme: {{ extend: {{ colors: {{ primary: '#3b82f6', darkbg: '#0f172a', darkcard: '#1e293b' }} }} }}
-                }}
+                tailwind.config = {{ darkMode: 'class', theme: {{ extend: {{ colors: {{ primary: '#3b82f6', darkbg: '#0f172a', darkcard: '#1e293b' }} }} }} }}
             </script>
             <style>
-                /* Глобальные настройки */
                 body {{ background: #F8FAFC !important; color: #1E293B; font-family: system-ui, -apple-system, sans-serif; margin: 0; padding: 0; }}
-                
-                /* Карточки (Плоский дизайн) */
-                .card, .dim-target {{ 
-                    background: #FFFFFF !important; 
-                    border: 1px solid #E2E8F0 !important; 
-                    border-radius: 12px !important; 
-                    padding: 20px !important; 
-                    box-shadow: 0 2px 4px rgba(0,0,0,0.02) !important; 
-                    margin-bottom: 20px !important;
-                }}
-                
-                /* Таблицы */
+                .card, .dim-target {{ background: #FFFFFF !important; border: 1px solid #E2E8F0 !important; border-radius: 12px !important; padding: 20px !important; box-shadow: 0 2px 4px rgba(0,0,0,0.02) !important; margin-bottom: 20px !important; }}
                 table {{ width: 100%; border-collapse: collapse; text-align: left !important; }}
                 th, td {{ padding: 12px 16px !important; border-bottom: 1px solid #E2E8F0 !important; color: inherit !important; }}
                 th {{ cursor: pointer; background: #F8FAFC !important; font-weight: 600 !important; color: #475569 !important; font-size: 13px; text-transform: uppercase; }}
                 th:hover {{ background: #F1F5F9 !important; }}
-
-                /* БАЗОВЫЕ СПОЙЛЕРЫ (Уровень 1) */
                 details {{ background: #FFFFFF !important; border: 1px solid #E2E8F0 !important; border-radius: 8px !important; margin-top: 12px !important; margin-bottom: 12px !important; box-shadow: 0 1px 2px rgba(0,0,0,0.01) !important; }}
                 summary {{ padding: 12px 16px !important; font-weight: 600 !important; cursor: pointer !important; background: #F8FAFC !important; color: #334155 !important; display: flex !important; align-items: center !important; gap: 10px !important; border-radius: 8px; transition: 0.2s; list-style: none; outline: none; }}
                 details[open] summary {{ border-bottom-left-radius: 0; border-bottom-right-radius: 0; border-bottom: 1px solid #E2E8F0 !important; background: #F1F5F9 !important; color: #0F172A !important; }}
                 summary:hover {{ background: #E2E8F0 !important; }}
                 details > div {{ padding: 16px !important; background: #FFFFFF !important; border-radius: 0 0 8px 8px; }}
-
-                /* 🚨 АНТИ-КАША: ПЛОСКИЕ ВЛОЖЕННЫЕ СПОЙЛЕРЫ (Уровень 2+) */
-                details details {{ 
-                    margin: 8px 0 8px 16px !important; 
-                    border: none !important; 
-                    border-left: 2px solid #CBD5E1 !important; 
-                    border-radius: 0 !important; 
-                    box-shadow: none !important; 
-                }}
-                details details > summary {{ 
-                    background: transparent !important; 
-                    padding: 6px 12px !important; 
-                    font-size: 13px !important; 
-                    color: #475569 !important; 
-                }}
+                details details {{ margin: 8px 0 8px 16px !important; border: none !important; border-left: 2px solid #CBD5E1 !important; border-radius: 0 !important; box-shadow: none !important; }}
+                details details > summary {{ background: transparent !important; padding: 6px 12px !important; font-size: 13px !important; color: #475569 !important; }}
                 details details[open] > summary {{ font-weight: 700 !important; color: #0F172A !important; border-bottom: none !important; }}
                 details details > summary:hover {{ background: #F1F5F9 !important; border-radius: 4px; }}
-                details details > div {{ 
-                    background: transparent !important; 
-                    padding: 8px 12px 8px 24px !important; 
-                    border: none !important; 
-                }}
-
-                /* Текстовые блоки (Pre-text) */
+                details details > div {{ background: transparent !important; padding: 8px 12px 8px 24px !important; border: none !important; }}
                 .pre-text {{ background: #F8FAFC !important; color: #334155 !important; padding: 12px 16px !important; border-radius: 6px !important; font-family: ui-monospace, monospace; white-space: pre-wrap; font-size: 13px; margin-top: 8px !important; border: 1px solid #E2E8F0 !important; box-shadow: inset 0 1px 2px rgba(0,0,0,0.01) !important; line-height: 1.5; }}
-                
-                /* Прочие UI элементы */
                 ul {{ padding-left: 24px !important; margin-top: 8px !important; margin-bottom: 8px !important; }}
                 li {{ margin-bottom: 6px !important; }}
                 a {{ color: #2563EB !important; font-weight: 600 !important; text-decoration: none !important; border-bottom: 1px dashed rgba(37, 99, 235, 0.4) !important; transition: 0.2s; }}
                 a:hover {{ border-bottom: 1px solid #2563EB !important; color: #1D4ED8 !important; }}
-                
                 .general-cb, .sync-cb, .section-cb {{ accent-color: #2563EB !important; cursor: pointer; }}
                 .dimmed-done {{ opacity: 0.5 !important; filter: grayscale(80%) !important; transition: 0.3s; }}
                 .dimmed-done:hover {{ opacity: 0.8 !important; filter: grayscale(40%) !important; }}
-                
-                /* Dark Mode (Оптимизированный) */
                 .dark body {{ background: #0B1120 !important; color: #E2E8F0; }}
                 .dark .card, .dark .dim-target {{ background: #1E293B !important; border-color: #334155 !important; box-shadow: none !important; }}
                 .dark details {{ background: #0F172A !important; border-color: #334155 !important; }}
@@ -3595,21 +3084,6 @@ class SmarticoCore:
                 .dark .pre-text {{ background: #020617 !important; color: #94A3B8 !important; border-color: #334155 !important; }}
                 .dark th {{ background: #0F172A !important; color: #94A3B8 !important; border-color: #334155 !important; }}
                 .dark td {{ border-color: #334155 !important; }}
-                
-                /* Journey Map Styles (Оставлены без изменений) */
-                .journey-node-box {{min-width: 140px; max-width: 160px; padding: 10px; border-radius: 6px; border: 1px solid #cbd5e1; font-size: 12px; font-weight: bold; text-align: center; box-shadow: 0 1px 3px rgba(0,0,0,0.05); flex-shrink: 0; display:flex; align-items:center; justify-content:center; background:#fff; }}
-                .journey-node-outcomes {{ max-width: 250px; background: #fdfefe; border-color: #94a3b8; border-style: dashed; }}
-                .journey-node-start {{ background: #f1f5f9; color: #475569; border-style: dashed; }}
-                .journey-node-split {{ background: #fffbeb; border-color: #fcd34d; color: #b45309; }}
-                .journey-node-com {{ background: #eff6ff; border-color: #bfdbfe; color: #1d4ed8; cursor: pointer; transition: 0.2s; }}
-                .journey-node-com:hover {{ background: #dbeafe; transform: translateY(-2px); box-shadow: 0 4px 6px rgba(0,0,0,0.1); }}
-                .journey-node-wait {{ background: #f3e8ff; border-color: #e9d5ff; color: #7e22ce; }}
-                .journey-node-convert {{background: #dcfce7; border-color: #86efac; color: #15803d; }}
-                .journey-node-stop {{ background: #fee2e2; border-color: #fca5a5; color: #b91c1c; }}
-                .journey-arrow {{ display: flex; flex-direction: column; align-items: center; justify-content: center; min-width: 60px; padding: 0 10px; flex-shrink: 0; }}
-                .journey-node-name {{ overflow: hidden; text-overflow: ellipsis; white-space: nowrap; width: 100%; }}
-
-                /* Pill UI for labels (С жесткими !important для перекрытия глобальных стилей) */
                 details.sim-pill {{ position: relative !important; display: inline-block !important; margin: 2px 2px 4px 0 !important; vertical-align: top !important; background: transparent !important; border: none !important; box-shadow: none !important; }}
                 details.sim-pill[open] {{ display: block !important; margin: 6px 0 !important; background: #fff !important; border: 1px solid #cbd5e1 !important; border-radius: 6px !important; padding: 10px !important; box-shadow: 0 4px 6px -1px rgba(0,0,0,0.1) !important; width: 100% !important; box-sizing: border-box !important; animation: fadeIn 0.2s ease-out !important; z-index: 10 !important; }}
                 details.sim-pill > summary {{ width: auto !important; position: relative !important; display: inline-flex !important; align-items: center !important; gap: 4px !important; padding: 2px 8px !important; border-radius: 12px !important; font-size: 11px !important; cursor: pointer !important; user-select: none !important; transition: 0.2s !important; outline: none !important; list-style: none !important; font-family: sans-serif !important; margin: 0 !important; border-bottom: none !important; }}
@@ -3617,13 +3091,9 @@ class SmarticoCore:
                 details.sim-pill[open] > summary {{ border-radius: 6px !important; margin-bottom: 8px !important; box-shadow: none !important; border-bottom: 1px solid #cbd5e1 !important; background: #f8fafc !important; color: #0f172a !important; }}
                 details.sim-pill > div {{ padding: 0 !important; margin: 0 !important; background: transparent !important; border: none !important; }}
                 .sim-pill-content {{ font-family: monospace !important; font-size: 12px !important; white-space: pre-wrap !important; word-break: break-all !important; color: #475569 !important; }}
-
-                /* 🚨 ФИКС ТУЛТИПА ПРИ НАВЕДЕНИИ */
                 .custom-tooltip {{ display: none; position: absolute !important; bottom: 100% !important; left: 50% !important; transform: translateX(-50%) !important; background: #1e293b !important; color: #fff !important; padding: 6px 10px !important; border-radius: 6px !important; font-size: 11px !important; white-space: pre-wrap !important; word-break: break-word !important; width: max-content !important; max-width: 350px !important; z-index: 1000 !important; margin-bottom: 6px !important; box-shadow: 0 4px 6px rgba(0,0,0,0.1) !important; pointer-events: none !important; text-align: left !important; font-family: monospace !important; font-weight: normal !important; line-height: 1.4 !important; }}
                 .custom-tooltip::after {{ content: '' !important; position: absolute !important; top: 100% !important; left: 50% !important; margin-left: -5px !important; border-width: 5px !important; border-style: solid !important; border-color: #1e293b transparent transparent transparent !important; }}
                 details.sim-pill:not([open]) > summary:hover .custom-tooltip {{ display: block !important; }}
-
-                /* 🚨 ФИКС ЦВЕТОВ (Полная заливка, а не только текст) */
                 details.pill-green > summary {{ background: #e6ffed !important; color: #147b36 !important; border: 1px solid #79f29c !important; }}
                 details.pill-green > summary:hover {{ background: #dcfce7 !important; }}
                 details.pill-gray > summary {{ background: #f8fafc !important; color: #475569 !important; border: 1px solid #cbd5e1 !important; }}
@@ -3632,12 +3102,9 @@ class SmarticoCore:
                 details.pill-yellow > summary:hover {{ background: #fef3c7 !important; }}
                 details.pill-red > summary {{ background: #fef2f2 !important; color: #991b1b !important; border: 1px solid #fca5a5 !important; }}
                 details.pill-red > summary:hover {{ background: #fee2e2 !important; }}
-                
-                /* 🚨 ФИЛЬТР ТАБЛЕТОК (По умолчанию прячем успешные) */
                 body:not(.show-all-pills) .brand-perfect {{ display: none !important; }}
                 body:not(.show-all-pills) details.pill-green {{ display: none !important; }}
                 body:not(.show-all-pills) details.pill-gray {{ display: none !important; }}
-                
                 @keyframes fadeIn {{ from {{ opacity: 0; transform: translateY(-2px); }} to {{ opacity: 1; transform: translateY(0); }} }}
             </style>
         </head>
@@ -3648,238 +3115,26 @@ class SmarticoCore:
                 </div>
                 <nav class="flex-1 overflow-y-auto p-4 space-y-1">
                     <div class="text-xs font-bold text-slate-400 uppercase tracking-wider mb-3 ml-2">Навигация</div>
-                    {'<a href="#sec-general" class="block px-3 py-2 rounded-lg text-sm font-semibold text-slate-600 dark:text-slate-400 hover:bg-slate-100 dark:hover:bg-slate-800 transition-colors">📍 General & Segments</a>' if links_block_html else ''}
+                    <a href="#sec-general" class="block px-3 py-2 rounded-lg text-sm font-semibold text-slate-600 dark:text-slate-400 hover:bg-slate-100 dark:hover:bg-slate-800 transition-colors">📍 General & Segments</a>
                     {'<a href="#sec-map" class="block px-3 py-2 rounded-lg text-sm font-semibold text-slate-600 dark:text-slate-400 hover:bg-slate-100 dark:hover:bg-slate-800 transition-colors">📸 Flow Map</a>' if flow_html else ''}
                     {'<a href="#sec-logic" class="block px-3 py-2 rounded-lg text-sm font-semibold text-slate-600 dark:text-slate-400 hover:bg-slate-100 dark:hover:bg-slate-800 transition-colors">🔀 Multi-Check Logic</a>' if mc_html else ''}
-                    {'<a href="#sec-profile" class="block px-3 py-2 rounded-lg text-sm font-semibold text-slate-600 dark:text-slate-400 hover:bg-slate-100 dark:hover:bg-slate-800 transition-colors">🕵️‍♂️ Profile Checks</a>' if cond_block_html else ''}
-                    {'<a href="#sec-funnel" class="block px-3 py-2 rounded-lg text-sm font-semibold text-slate-600 dark:text-slate-400 hover:bg-slate-100 dark:hover:bg-slate-800 transition-colors">⏳ Wait For Events</a>' if wait_block_html else ''}
-                    {'<a href="#sec-settings" class="block px-3 py-2 rounded-lg text-sm font-semibold text-slate-600 dark:text-slate-400 hover:bg-slate-100 dark:hover:bg-slate-800 transition-colors">⚙️ Node Settings</a>' if settings_block_html else ''}
+                    <a href="#sec-profile" class="block px-3 py-2 rounded-lg text-sm font-semibold text-slate-600 dark:text-slate-400 hover:bg-slate-100 dark:hover:bg-slate-800 transition-colors">🕵️‍♂️ Profile Checks</a>
+                    <a href="#sec-settings" class="block px-3 py-2 rounded-lg text-sm font-semibold text-slate-600 dark:text-slate-400 hover:bg-slate-100 dark:hover:bg-slate-800 transition-colors">⚙️ Node Settings</a>
                     <a href="#sec-content" class="block px-3 py-2 rounded-lg text-sm font-semibold text-slate-600 dark:text-slate-400 hover:bg-slate-100 dark:hover:bg-slate-800 transition-colors">🔬 Content Analysis</a>
                 </nav>
-                <div class="p-4 bg-slate-50 dark:bg-slate-800/50 border-t border-slate-200 dark:border-slate-800 space-y-2">
-                    <button id="copyErrorsBtn" class="w-full text-left px-3 py-2.5 bg-amber-100 dark:bg-amber-900/30 text-amber-700 dark:text-amber-400 hover:bg-amber-200 dark:hover:bg-amber-900/50 rounded-lg text-sm font-bold transition-colors">📋 Copy Errors (TSV)</button>
-                    <button id="exportCsv" class="w-full text-left px-3 py-2.5 bg-emerald-100 dark:bg-emerald-900/30 text-emerald-700 dark:text-emerald-400 hover:bg-emerald-200 dark:hover:bg-emerald-900/50 rounded-lg text-sm font-bold transition-colors">📥 Export CSV</button>
-                    <button id="themeToggle" class="w-full text-left px-3 py-2.5 bg-slate-200 dark:bg-slate-700 text-slate-700 dark:text-slate-200 hover:bg-slate-300 dark:hover:bg-slate-600 rounded-lg text-sm font-bold transition-colors">🌓 Toggle Theme</button>
-                </div>
             </aside>
-
             <main class="ml-72 flex-1 p-8 lg:p-12 xl:pr-24 max-w-[1400px]">
-                
                 <header class="sticky top-0 bg-[#F8FAFC]/95 dark:bg-[#0f172a]/95 backdrop-blur-md pt-4 pb-4 mb-10 z-40 border-b border-slate-200 dark:border-slate-800 flex justify-between items-end">
                     <div>
                         <h2 class="text-3xl font-extrabold text-slate-900 dark:text-white truncate max-w-3xl" title="{campaign_name_title}">{campaign_name_title}</h2>
                         <div class="text-sm text-blue-600 dark:text-blue-400 font-bold mt-1">📅 Flow Map Period: {audit_period}</div>
                     </div>
-                    <input type="text" id="globalSearch" placeholder="🔍 Быстрый поиск..." class="px-4 py-2 w-72 rounded-lg border border-slate-300 dark:border-slate-600 bg-white dark:bg-slate-800 text-sm shadow-sm focus:ring-2 focus:ring-blue-500 outline-none transition-all">
                 </header>
-
-                <div class="flex flex-col gap-12">
-                    
-                    {f'''<section id="sec-general" class="scroll-mt-32">
-                        <h2 class="text-2xl font-bold mb-6 text-slate-800 dark:text-slate-100 border-b border-slate-200 dark:border-slate-700 pb-2">📍 General & Segments</h2>
-                        {links_block_html.replace('<div class="card !mb-0">', '<div>').replace('<h2 class="text-xl font-bold mb-5 flex items-center gap-2 border-b border-slate-100 dark:border-slate-700 pb-3">📍 General & Segments</h2>', '')}
-                    </section>''' if links_block_html else ''}
-
-                    {f'''<section id="sec-map" class="scroll-mt-32">
-                        <div class="card !mb-0 !p-0 overflow-hidden">
-                            <div class="px-6 py-4 bg-slate-50 dark:bg-slate-800 border-b border-slate-200 dark:border-slate-700 font-bold text-lg text-slate-800 dark:text-white flex justify-between items-center">
-                                📸 Интерактивная карта
-                            </div>
-                            <div class="p-6">
-                                {flow_html}
-                            </div>
-                        </div>
-                    </section>''' if flow_html else ''}
-
-                    {f'''<section id="sec-logic" class="scroll-mt-32">
-                        <h2 class="text-2xl font-bold mb-6 text-slate-800 dark:text-slate-100 border-b border-slate-200 dark:border-slate-700 pb-2">🔀 Multi-Check Logic</h2>
-                        <div class="searchable-content flex flex-col">{mc_html}</div>
-                    </section>''' if mc_html else ''}
-                    
-                    {f'''<section id="sec-profile" class="scroll-mt-32">
-                        {cond_block_html}
-                    </section>''' if cond_block_html else ''}
-
-                    {f'''<section id="sec-funnel" class="scroll-mt-32">
-                        {wait_block_html}
-                    </section>''' if wait_block_html else ''}
-
-                    {f'''<section id="sec-settings" class="scroll-mt-32">
-                        {settings_block_html}
-                    </section>''' if settings_block_html else ''}
-                    
-                    <section id="sec-content" class="scroll-mt-32">
-                        <div class="flex flex-col sm:flex-row sm:items-center justify-between border-b border-slate-200 dark:border-slate-700 pb-2 mb-6 gap-4">
-                            <h2 class="text-2xl font-bold m-0 text-slate-800 dark:text-slate-100">🔬 Content Analysis</h2>
-                            <label class="cursor-pointer flex items-center gap-2 text-sm font-semibold text-slate-700 dark:text-slate-300 bg-white dark:bg-slate-800 border border-slate-300 dark:border-slate-600 px-4 py-2 rounded-lg hover:bg-slate-50 dark:hover:bg-slate-700 transition-colors shadow-sm select-none">
-                                <input type="checkbox" id="toggleAllPills" class="accent-blue-600 w-4 h-4 cursor-pointer">
-                                <span>Показать зеленые переводы</span>
-                            </label>
-                        </div>
-                        <div class="searchable-content flex flex-col">{nodes_html}</div>
-                    </section>
-                </div>
+                {html_blocks}
             </main>
-            
-            <button id="back-to-top" class="fixed bottom-8 right-8 bg-blue-600 text-white w-12 h-12 rounded-full shadow-lg hidden hover:bg-blue-700 transition-all z-50 text-xl font-bold flex items-center justify-center">↑</button>
-
-            <script>
-                document.addEventListener('DOMContentLoaded', () => {{
-                    // Theme Toggle
-                    const html = document.documentElement;
-                    const toggleTheme = (isDark) => {{
-                        html.classList.toggle('dark', isDark);
-                        localStorage.setItem('audit-theme', isDark ? 'dark' : 'light');
-                    }};
-                    document.getElementById('themeToggle').addEventListener('click', () => toggleTheme(!html.classList.contains('dark')));
-                    if (localStorage.getItem('audit-theme') === 'dark' || (!localStorage.getItem('audit-theme') && window.matchMedia('(prefers-color-scheme: dark)').matches)) {{
-                        toggleTheme(true);
-                    }}
-
-                    // Toggle All Pills
-                    document.getElementById('toggleAllPills')?.addEventListener('change', (e) => {{
-                        document.body.classList.toggle('show-all-pills', e.target.checked);
-                    }});
-
-                    // Global Search
-                    document.getElementById('globalSearch').addEventListener('input', (e) => {{
-                        const term = e.target.value.toLowerCase();
-                        document.querySelectorAll('.dim-target').forEach(el => {{
-                            el.style.display = el.innerText.toLowerCase().includes(term) ? '' : 'none';
-                        }});
-                    }});
-
-                    // Section Master Checkboxes
-                    document.addEventListener('change', e => {{
-                        if (e.target.matches('.section-cb')) {{
-                            const isChecked = e.target.checked;
-                            const card = e.target.closest('section, .card');
-                            if (card) {{
-                                card.querySelectorAll('.general-cb, .sync-cb').forEach(cb => {{
-                                    cb.checked = isChecked;
-                                    const dimTarget = cb.closest('.dim-target');
-                                    if (dimTarget) dimTarget.classList.toggle('dimmed-done', isChecked);
-                                }});
-                            }}
-                        }}
-                    }});
-
-                    // Sync Checkboxes
-                    document.addEventListener('change', e => {{
-                        if (e.target.matches('.general-cb, .sync-cb')) {{
-                            const isChecked = e.target.checked;
-                            e.target.closest('.dim-target').classList.toggle('dimmed-done', isChecked);
-                            
-                            const lbl = e.target.getAttribute('data-label');
-                            if (lbl) {{
-                                document.querySelectorAll(`.sync-cb[data-label="${{lbl}}"]`).forEach(s => {{
-                                    s.checked = isChecked;
-                                    s.closest('.dim-target').classList.toggle('dimmed-done', isChecked);
-                                }});
-                            }}
-                        }}
-                    }});
-
-                    // Sortable Tables
-                    document.querySelectorAll('.data-table th').forEach((th, i) => {{
-                        th.addEventListener('click', () => {{
-                            const table = th.closest('table');
-                            const tbody = table.querySelector('tbody') || table;
-                            const rows = Array.from(tbody.querySelectorAll('tr:not(:first-child)')); 
-                            const asc = th.classList.toggle('asc');
-                            rows.sort((a, b) => {{
-                                const valA = a.cells[i]?.innerText || '';
-                                const valB = b.cells[i]?.innerText || '';
-                                return asc ? valA.localeCompare(valB) : valB.localeCompare(valA);
-                            }}).forEach(row => tbody.appendChild(row));
-                        }});
-                    }});
-                    
-                    // Copy Errors
-                    document.getElementById('copyErrorsBtn').addEventListener('click', () => {{
-                        const errorBlocks = document.querySelectorAll('.copyable-error');
-                        if (errorBlocks.length === 0) {{ alert('Ошибок не найдено!'); return; }}
-                        let tsv = "Бренд\\tЯзык\\tДетали ошибки\\n";
-                        errorBlocks.forEach(block => {{
-                            const brand = block.getAttribute('data-brand') || 'Global';
-                            const lang = block.getAttribute('data-lang') || '-';
-                            const doc = new DOMParser().parseFromString(block.getAttribute('data-details') || '', "text/html");
-                            tsv += `${{brand}}\\t${{lang}}\\t${{doc.documentElement.textContent}}\\n`;
-                        }});
-                        const textArea = document.createElement("textarea");
-                        textArea.value = tsv; document.body.appendChild(textArea); textArea.select();
-                        try {{ document.execCommand('copy'); alert("✅ Ошибки скопированы!"); }} 
-                        catch (err) {{ alert("Ошибка копирования"); }}
-                        document.body.removeChild(textArea);
-                    }});
-
-                    window.copyLocalErrors = function(btn, event, onlyCritical) {{
-                        event.preventDefault();
-                        const detailsNode = btn.closest('details');
-                        let errorBlocks;
-                        if (onlyCritical) {{
-                            errorBlocks = detailsNode.querySelectorAll('.critical-error-flag');
-                        }} else {{
-                            errorBlocks = detailsNode.querySelectorAll('.copyable-error');
-                        }}
-                        if (errorBlocks.length === 0) return;
-                        let tsv = "Лейбл\\tБренд\\tЯзык/Условие\\tДетали ошибки\\n";
-                        errorBlocks.forEach(block => {{
-                            const macro = block.getAttribute('data-macro') || '-';
-                            const brand = block.getAttribute('data-brand') || 'Global';
-                            const lang = block.getAttribute('data-lang') || '-';
-                            const doc = new DOMParser().parseFromString(block.getAttribute('data-details') || '', "text/html");
-                            tsv += `${{macro}}\\t${{brand}}\\t${{lang}}\\t${{doc.documentElement.textContent}}\\n`;
-                        }});
-                        const textArea = document.createElement("textarea");
-                        textArea.value = tsv; document.body.appendChild(textArea); textArea.select();
-                        const originalText = btn.innerHTML;
-                        try {{ document.execCommand('copy'); btn.innerHTML = "✅ Copied!"; setTimeout(() => btn.innerHTML = originalText, 2000); }} 
-                        catch (err) {{ alert("Ошибка"); }}
-                        document.body.removeChild(textArea);
-                    }};
-
-                    // АВТО-ЗАКРЫТИЕ СПОЙЛЕРОВ
-                    document.querySelectorAll('details').forEach(details => {{
-                        const closeBtn = document.createElement('button');
-                        closeBtn.innerHTML = '⬆️ Свернуть';
-                        closeBtn.className = 'mt-3 px-3 py-1.5 bg-slate-100 hover:bg-slate-200 dark:bg-slate-800 dark:hover:bg-slate-700 text-slate-600 dark:text-slate-400 rounded text-xs font-semibold w-full text-center transition-colors shadow-sm';
-                        closeBtn.addEventListener('click', (e) => {{
-                            e.preventDefault();
-                            const y = details.getBoundingClientRect().top + window.scrollY - 100;
-                            window.scrollTo({{top: y, behavior: 'smooth'}});
-                            setTimeout(() => details.removeAttribute('open'), 150);
-                        }});
-                        const contentContainer = Array.from(details.children).find(child => child.tagName.toLowerCase() === 'div');
-                        if (contentContainer) contentContainer.appendChild(closeBtn);
-                        else details.appendChild(closeBtn);
-                    }});
-                    
-                    // CSV Export
-                    document.getElementById('exportCsv').addEventListener('click', () => {{
-                        let csv = [];
-                        document.querySelectorAll('.data-table tr').forEach(row => {{
-                            let cols = [];
-                            row.querySelectorAll('td, th').forEach(col => cols.push('"' + col.innerText.replace(/"/g, '""') + '"'));
-                            csv.push(cols.join(','));
-                        }});
-                        const blob = new Blob([csv.join('\\n')], {{ type: 'text/csv' }});
-                        const url = window.URL.createObjectURL(blob);
-                        const a = document.createElement('a');
-                        a.href = url; a.download = 'audit_export.csv'; a.click();
-                    }});
-
-                    // Scroll to top
-                    const btt = document.getElementById('back-to-top');
-                    window.addEventListener('scroll', () => btt.classList.toggle('hidden', window.scrollY < 300));
-                    btt.addEventListener('click', () => window.scrollTo({{ top: 0, behavior: 'smooth' }}));
-                }});
-            </script>
         </body>
         </html>
         """
         
-        print(f"[DEBUG-HTML] ⏳ Анализ всего контента (nodes_html) занял: {time.time() - t_deep:.2f} сек")
         print(f"[DEBUG-HTML] 🟢 ИТОГО СБОРКА HTML ОТЧЕТА ЗАНЯЛА: {time.time() - t_start_html:.2f} сек\n")
-        
         return html_content
