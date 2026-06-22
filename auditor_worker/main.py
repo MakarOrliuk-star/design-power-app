@@ -255,6 +255,15 @@ async def audit_stream(request: AuditRequest):
                                 if n_type == "Push" and ("pwa" in n_name.lower() or "pwa" in r_name.lower()):
                                     actual_type = "Push PWA"
                                 
+                                link_url = "#"
+                                if r_id:
+                                    if actual_type == "Email": link_url = f"https://{drive_host}/{brand_id}#/templated_mail/{r_id}"
+                                    elif actual_type in ["Push", "Push PWA", "WebHook"]: link_url = f"https://{drive_host}/{brand_id}#/resource_push/{r_id}"
+                                    elif actual_type == "SMS": link_url = f"https://{drive_host}/{brand_id}#/resource_sms/{r_id}"
+                                    elif actual_type == "Pop-up": link_url = f"https://{drive_host}/{brand_id}#/templated_popup/{r_id}"
+                                
+                                ign_tags = (actual_type == "Email")
+                                
                                 email_previews = []
                                 variations = []
                                 
@@ -304,8 +313,8 @@ async def audit_stream(request: AuditRequest):
                                 report_data["deep_analysis"].append({
                                     "type": actual_type, "name": n_name, "title_url": title_text, "body": body_text,
                                     "link": link_text, "resource_name": r_name, "subject": subj_text,
-                                    "status_name": "Active", "email_url": f"https://{drive_host}/{brand_id}#/{n_type.lower()}/{r_id}" if r_id else "#",
-                                    "syntax_errors": core.validate_label_syntax(f"{title_text} {body_text}", ignore_formatting_tags=True),
+                                    "status_name": "Active", "email_url": link_url,
+                                    "syntax_errors": core.validate_label_syntax(f"{title_text} {body_text}", ignore_formatting_tags=ign_tags),
                                     "previews": email_previews,
                                     "variations": variations,
                                     "resource_id": r_id

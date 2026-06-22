@@ -1760,8 +1760,7 @@ class SmarticoCore:
         return ""
     
     def render_audited_label_html(self, label_name, data, brand_id, labels_store, visited=None, target_utm=None, custom_badge="", custom_class="", node_type="", full_node_text="", is_nested=False, expected_data=None):
-        # ⚡ ФИКС UX: Если это лейбл верхнего уровня (не внутри другого лейбла), сбрасываем кэш посещений.
-        # Теперь каждый лейбл в письме/пуше будет рендериться как полноценная карточка!
+        
         if visited is None or not is_nested: 
             visited = set()
             
@@ -2175,10 +2174,14 @@ class SmarticoCore:
                     warn_errs.append(f"Значение '{val}' не совпадает с промо-планом (Ожидалось: {exp_str})")
 
             is_js_type = tag_type_lower == "javascript function"
+            is_html_content = ("<" in val and ">" in val)
+            is_email_context = (node_type == "Email")
+
+            ignore_tags = is_js_type or is_html_content or is_email_context
             
-            cache_key = (val, is_js_type)
+            cache_key = (val, ignore_tags)
             if cache_key not in local_syntax_cache:
-                local_syntax_cache[cache_key] = self.validate_label_syntax(val, ignore_formatting_tags=not is_js_type)
+                local_syntax_cache[cache_key] = self.validate_label_syntax(val, ignore_formatting_tags=ignore_tags)
                 
             syntax_res = local_syntax_cache[cache_key]
             crit_errs = syntax_res["critical"]
@@ -2890,7 +2893,6 @@ class SmarticoCore:
                 else:
                     card_inner += f"<div class='pre-text' style='margin-top:8px;'>{esc(item.get('body','N/A'))}</div>"
                 
-                # 🚨 ФИКС 2: Достаем вариации напрямую из item (ведь мы прокинули их в main.py!)
                 variations = item.get("variations", [])
 
                 labels_store = data.get("labels_data", {})
@@ -2948,9 +2950,21 @@ class SmarticoCore:
                     else: return f"<div style='margin-top:6px; background:#f0fdf4; border:1px solid #86efac; padding:8px 12px; border-radius:4px; font-size:12px; color:#166534;'>📱 <b>SMS Симуляция:</b> ~{sim_len} симв. | {encoding} | <b>{parts} SMS</b>{text_preview}</div>"
 
                 if variations:
-                    baseline_all_text = " ".join([str(val) for val in item.values() if isinstance(val, (str, int, float))])
+                    # Четко собираем только текстовые поля, чтобы не цеплять системные ссылки и ID
+                    if t == "Email":
+                        baseline_all_text = str(item.get("body","")) + " " + str(item.get("subject",""))
+                    elif t in ["Push", "Push PWA", "WebHook"]:
+                        baseline_all_text = str(item.get("title_url","")) + " " + str(item.get("body","")) + " " + str(item.get("link","")) + " " + str(item.get("button1",""))
+                    elif t == "Pop-up":
+                        baseline_all_text = str(item.get("title_url","")) + " " + str(item.get("body","")) + " " + str(item.get("link","")) + " " + str(item.get("button1",""))
+                    elif t == "SMS":
+                        baseline_all_text = str(item.get("body",""))
+                    else:
+                        baseline_all_text = item.get("body", "")
+
                     baseline_labels = [l for l in re.findall(r'\{\{label\.[^\s\}]+\}\}', baseline_all_text) if not self.is_ignored_label(l)]
                     baseline_counts = Counter(baseline_labels)
+                    
                     var_html = f"<details style='margin-top:15px;'><summary style='cursor:pointer; font-weight:bold; color:#8e44ad;'>🔄 Сверка макросов в вариациях ({len(variations)} шт.)</summary><div style='display:flex; flex-direction:column; gap:6px; margin-top:8px;'>"
                     for var in variations:
                         raw_cond = str(var.get("variation_condition_readable") or var.get("conditions_readable") or "Unknown")
@@ -2964,7 +2978,18 @@ class SmarticoCore:
                         var_url = f"https://{self.drive_host}/{self.brand_id}#/{actual_ui_route}/{var_id}" if self.drive_host and self.brand_id and actual_ui_route else "#"
                         var_link_html = f"<a href='{var_url}' target='_blank' style='color:#3b82f6; text-decoration:none; border-bottom:1px dashed #93c5fd; transition:0.2s;' onmouseover=\"this.style.color='#2563eb'\" onmouseout=\"this.style.color='#3b82f6'\">{esc(var_cond)}</a> <span style='color:#94a3b8; font-size:10px; font-weight:normal;'>(ID: {var_id})</span>"
                         
-                        var_all_text = " ".join([str(val) for val in var.values() if isinstance(val, (str, int, float))])
+                        # Собираем текстовые поля из вариации так же, как из оригинала
+                        if t == "Email":
+                            var_all_text = str(var.get("body","")) + " " + str(var.get("subject",""))
+                        elif t in ["Push", "Push PWA", "WebHook"]:
+                            var_all_text = str(var.get("title","")) + " " + str(var.get("body","")) + " " + str(var.get("action","")) + " " + str(var.get("button1",""))
+                        elif t == "Pop-up":
+                            var_all_text = str(var.get("title","")) + " " + str(var.get("sub_title","")) + " " + str(var.get("action","")) + " " + str(var.get("button1",""))
+                        elif t == "SMS":
+                            var_all_text = str(var.get("body",""))
+                        else:
+                            var_all_text = str(var.get("body",""))
+                            
                         var_labels = [l for l in re.findall(r'\{\{label\.[^\s\}]+\}\}', var_all_text) if not self.is_ignored_label(l)]
                         var_counts = Counter(var_labels)
                         
