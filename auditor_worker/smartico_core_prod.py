@@ -2642,7 +2642,9 @@ class SmarticoCore:
                         if re.search(r'\bOR\b', r_clean) and r_clean.lstrip(" '\"").startswith("("): or_rules.append(r_clean.strip("'\""))
                         else: std_rules.append(r_clean)
                     rules_html_parts = []
-                    if or_rules: rules_html_parts.append(f"<div style='background:#fef3c7; border:1px solid #fde68a; border-left:4px solid #f59e0b; padding:8px 12px; border-radius:4px; margin-bottom:10px; font-size:13px;'><b>⚠️ Сработает любое из условий (OR):</b><br>{'<br>'.join([f'🔸 <span style=\"color:#b45309; font-family:monospace;\">{esc(r)}</span>' for r in or_rules])}</div>")
+                    if or_rules: 
+                        or_lines_html = "<br>".join([f"🔸 <span style='color:#b45309; font-family:monospace;'>{esc(r)}</span>" for r in or_rules])
+                        rules_html_parts.append(f"<div style='background:#fef3c7; border:1px solid #fde68a; border-left:4px solid #f59e0b; padding:8px 12px; border-radius:4px; margin-bottom:10px; font-size:13px;'><b>⚠️ Сработает любое из условий (OR):</b><br>{or_lines_html}</div>")
                     if std_rules: rules_html_parts.append("<br>".join([format_smartico_rule_local(r) for r in std_rules]))
                     rules_html = "".join(rules_html_parts)
                 branches_html += f"<li style='margin-bottom: 12px;'><b style='color: #0f172a; font-size: 15px;'>{esc(b_name)}</b><div style='margin-top: 8px; background: #f8fafc; border: 1px solid #e2e8f0; border-left: 4px solid #3b82f6; padding: 10px; border-radius: 4px; font-family: monospace; font-size: 13px; color: #334155; word-wrap: break-word;'>{rules_html}</div></li>"
