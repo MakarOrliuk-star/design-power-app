@@ -2878,6 +2878,20 @@ class SmarticoCore:
                     s_raw = set(re.findall(r'\{\{label\.[^\s\}]+\}\}', b_val))
                     s_lbls = sorted([l for l in s_raw if not self.is_ignored_label(l)])
                     if s_lbls: card_inner += f"<details style='margin-top:10px;'><summary style='cursor:pointer; font-weight:bold; color:#d35400;'>📁 Labels ({len(s_lbls)})</summary><div style='margin-top:8px;'>{get_labels_ui(s_lbls)}</div></details>"        
+                    
+                    previews = item.get("previews", [])
+                    if previews:
+                        preview_html = "<div><div style='display:flex; flex-wrap:nowrap; gap:20px; overflow-x:auto; padding:5px 5px 15px 5px;'>"
+                        for prev in previews:
+                            tier_badge = "<span style='background:#fef08a; color:#854d0e; padding:2px 8px; border-radius:12px; font-size:11px; margin-left:8px; font-weight:bold;'>👑 VIP</span>" if "VIP" in prev['desc'] else f"<span style='background:#e2e8f0; color:#334155; padding:2px 8px; border-radius:12px; font-size:11px; margin-left:8px; font-weight:bold;'>🏷️ {esc(prev['desc'])}</span>"
+                            preview_html += f"<div style='flex: 0 0 auto; text-align:center; border: 1px solid #D1D5DB; padding: 15px; border-radius: 8px; background: #FFFFFF; width: 350px; box-shadow: 0 4px 12px rgba(0,0,0,0.05);'>"
+                            preview_html += f"<div style='display:flex; justify-content:center; align-items:center; margin-bottom:12px;'><strong style='color:#111827; font-size:15px;'>👤 User ID: {esc(prev['uid'])}</strong> {tier_badge}</div>"
+                            preview_html += f"<div style='background:#f8fafc; padding:12px; border-radius:6px; font-family:monospace; font-size:13px; white-space:pre-wrap; text-align:left; color:#334155; border:1px solid #e2e8f0;'>{esc(prev.get('text', ''))}</div>"
+                            preview_html += "</div>"
+                        preview_html += "</div></div>"
+                        card_inner += f"<details style='margin-top:15px;'><summary style='cursor:pointer; font-weight:bold; color:#0A58CA; font-size: 15px;'>📸 Симуляция на реальных профилях ({len(previews)})</summary>{preview_html}</details>"
+                    
+
 
                 elif t == "WebHook":
                     if item.get('title_url'): card_inner += f"<p style='margin:4px 0;'><b>URL:</b> {esc(item['title_url'])}</p>"

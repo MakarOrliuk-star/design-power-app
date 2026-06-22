@@ -98,6 +98,7 @@ async def audit_stream(request: AuditRequest):
                 )
                 
                 total_urls = len(urls)
+                first_campaign_name = "Unified Smartico Campaign Audit Report"
                 for index, current_url in enumerate(urls):
                     print(f" [WORKER] Processing campaign {index + 1}/{total_urls}: {current_url}", flush=True)
                     send_event({'type': 'progress', 'percent': int(10 + (index / total_urls) * 80), 'msg': f'Processing campaign {index + 1}/{total_urls}: {current_url}'})
@@ -128,6 +129,8 @@ async def audit_stream(request: AuditRequest):
                         send_event({'type': 'error', 'msg': f'Unauthorized or inaccessible Campaign ID {camp_id}'})
                         browser.close()
                         return
+                    if index == 0:
+                        first_campaign_name = gen_data.get("Name", f"Campaign {camp_id}")
                         
                     print(" [WORKER] Verifying context tags...", flush=True)
                     context_status = core.check_context_campaign_tag(camp_id, current_url)
@@ -195,7 +198,7 @@ async def audit_stream(request: AuditRequest):
                                 cond_str = core.fix_empty_brackets_locally(cond_str, c_dict.get("conditions", []))
                             report_data["condition_registry"].append({"name": n_name, "condition": cond_str})
                             
-                        elif n_type in ["Email", "Push", "SMS", "Pop-up"]:
+                        elif n_type in ["Email", "Push", "SMS", "Pop-up", "WebHook"]:
                             is_pop = (n_type == "Pop-up")
                             
                             caps_map = {1: "Respect user level and global caps", 2: "Ignore user and global level caps", 3: "Respect user caps, but ignore global caps", 4: "Respect global caps, but ignore user caps"}
@@ -262,15 +265,20 @@ async def audit_stream(request: AuditRequest):
                                     elif actual_type == "SMS": link_url = f"https://{drive_host}/{brand_id}#/resource_sms/{r_id}"
                                     elif actual_type == "Pop-up": link_url = f"https://{drive_host}/{brand_id}#/templated_popup/{r_id}"
                                 
-                                ign_tags = (actual_type == "Email")
+                                ign_tags = (actual_type == "Email" or actual_type == "WebHook")
                                 
                                 email_previews = []
                                 variations = []
+                                button_text = ""
+                                image_url = ""
+                                icon_url = ""
                                 
                                 if n_type == "Email" and r_id:
                                     mail_details = core.get_email_details(r_id)
                                     variations = mail_details.get("variations", [])
-                                    full_raw_html = mail_details.get("body", "")
+                                    body_text = mail_details.get("body", body_text)
+                                    subj_text = mail_details.get("subject", subj_text)
+                                    full_raw_html = body_text
                                     
                                     if full_raw_html:
                                         if r_id in rendered_emails_cache:
@@ -294,27 +302,53 @@ async def audit_stream(request: AuditRequest):
                                         variations = ext_details.get("variations", [])
                                         title_text = ext_details.get("title", title_text)
                                         body_text = ext_details.get("body", body_text)
+                                        link_text = ext_details.get("action", ext_details.get("button_url", link_text))
+                                        button_text = ext_details.get("button1", "")
+                                        image_url = ext_details.get("image_url", "")
+                                        icon_url = ext_details.get("icon_url", "")
                                 
                                 elif n_type == "Pop-up" and r_id:
                                     ext_details = core.get_inapp_details(r_id)
                                     if ext_details:
                                         variations = ext_details.get("variations", [])
                                         title_text = ext_details.get("title", title_text)
-                                        body_text = ext_details.get("sub_title", body_text)
+                                        body_text = ext_details.get("sub_title", ext_details.get("body", body_text))
+                                        link_text = ext_details.get("action", ext_details.get("button_url", link_text))
+                                        button_text = ext_details.get("button1", "")
+                                        image_url = ext_details.get("image_url", "")
+                                        icon_url = ext_details.get("icon_url", "")
                                 
                                 elif n_type == "SMS" and r_id:
                                     res_details = core.get_sms_details(r_id)
                                     if res_details:
                                         variations = res_details.get("variations", [])
                                         body_text = res_details.get("body", body_text)
+                                        
+                                        qa_personas = core.get_qa_personas()
+                                        for desc, uid in qa_personas.items():
+                                            send_event({'type': 'progress', 'percent': 60, 'msg': f'📸 Resolving SMS macros for persona: {desc}...'})
+                                            pers_text = core.get_personalized_email_preview(body_text, uid)
+                                            if pers_text:
+                                                clean_text = re.sub(r'<[^>]+>', '', pers_text).strip()
+                                                email_previews.append({"desc": desc, "uid": uid, "text": clean_text})
+                                
+                                elif n_type == "WebHook" and r_id:
+                                    ext_details = core.get_push_details(r_id)
+                                    if ext_details:
+                                        variations = ext_details.get("variations", [])
+                                        title_text = ext_details.get("title", title_text)
+                                        body_text = ext_details.get("body", body_text)
+                                        link_text = ext_details.get("action", ext_details.get("button_url", link_text))
 
-                                all_other_labels.update(re.findall(r'\{\{label\.[^\}]+\}\}', f"{title_text} {body_text} {link_text} {subj_text}"))
+                                full_text_to_check = f"{title_text} {body_text} {link_text} {subj_text} {button_text} {image_url} {icon_url}"
+                                all_other_labels.update(re.findall(r'\{\{label\.[^\}]+\}\}', full_text_to_check))
                                 
                                 report_data["deep_analysis"].append({
                                     "type": actual_type, "name": n_name, "title_url": title_text, "body": body_text,
-                                    "link": link_text, "resource_name": r_name, "subject": subj_text,
+                                    "link": link_text, "resource_name": r_name, "subject": subj_text, "button1": button_text,
+                                    "image_url": image_url, "icon_url": icon_url,
                                     "status_name": "Active", "email_url": link_url,
-                                    "syntax_errors": core.validate_label_syntax(f"{title_text} {body_text}", ignore_formatting_tags=ign_tags),
+                                    "syntax_errors": core.validate_label_syntax(full_text_to_check, ignore_formatting_tags=ign_tags),
                                     "previews": email_previews,
                                     "variations": variations,
                                     "resource_id": r_id
@@ -350,6 +384,16 @@ async def audit_stream(request: AuditRequest):
                     
                 combined_html += '</div>'
                 browser.close()
+
+                if total_urls == 1:
+                    combined_html = combined_html.replace(
+                        "<title>Unified Smartico Campaign Audit Report</title>",
+                        f"<title>Audit: {first_campaign_name}</title>"
+                    )
+                    combined_html = combined_html.replace(
+                        "<h1 class=\"text-3xl font-extrabold text-center text-slate-900 dark:text-white mb-10\">Unified Smartico Campaign Audit Report</h1>",
+                        f"<h1 class=\"text-3xl font-extrabold text-center text-slate-900 dark:text-white mb-10\">{first_campaign_name}</h1>"
+                    )
                 
                 report_id = f"rep_{uuid4().hex[:12]}"
                 REPORTS_CACHE[report_id] = combined_html
