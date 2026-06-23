@@ -12,7 +12,14 @@ import { prisma } from "../lib/prisma.js";
 // can't be favorited — its star silently reverts (400 invalid_service_key).
 export const crmRouter: Router = Router();
 
-const VALID_SERVICE_KEYS = new Set(["calculator", "bonuscalc", "auditor", "smartico"]);
+const VALID_SERVICE_KEYS = new Set([
+  "calculator",
+  "bonuscalc",
+  "auditor",
+  "smartico",
+  "chrome_extensions",
+  "prioritycalc",
+]);
 
 /** Current user's favorite service keys. */
 crmRouter.get("/favorites", async (req: Request, res: Response) => {

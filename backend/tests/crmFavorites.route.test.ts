@@ -55,15 +55,19 @@ describe("POST /api/crm/favorites/:serviceKey", () => {
     expect(db.upsert).toHaveBeenCalledOnce();
   });
 
-  // Regression: "smartico" is a real (non-soon) service and MUST be favoritable.
-  // It was missing from the allowlist, so its star silently reverted (400).
-  it("upserts a favorite for the smartico service key", async () => {
-    db.upsert.mockResolvedValue({});
-    const res = await request(makeApp()).post("/api/crm/favorites/smartico");
-    expect(res.status).toBe(200);
-    expect(res.body).toEqual({ ok: true });
-    expect(db.upsert).toHaveBeenCalledOnce();
-  });
+  // Regression: every real (non-soon) service tile must be favoritable. Keys
+  // missing from the allowlist silently revert their star (400). Keep this list
+  // in sync with the non-`soon` SERVICES in frontend/app/pages/crm.vue.
+  it.each(["smartico", "chrome_extensions", "prioritycalc"])(
+    "upserts a favorite for the %s service key",
+    async (key) => {
+      db.upsert.mockResolvedValue({});
+      const res = await request(makeApp()).post(`/api/crm/favorites/${key}`);
+      expect(res.status).toBe(200);
+      expect(res.body).toEqual({ ok: true });
+      expect(db.upsert).toHaveBeenCalledOnce();
+    },
+  );
 
   // The allowlist guards against junk keys AND against favoriting a "soon" tile
   // (e.g. rebrandly), which has no real logic yet.

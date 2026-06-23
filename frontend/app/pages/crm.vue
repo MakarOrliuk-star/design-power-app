@@ -15,6 +15,32 @@ const { theme, toggle: toggleTheme } = useTheme();
 type ServiceKey = "calculator" | "bonuscalc" | "auditor" | "smartico"| "prioritycalc";
 const activeService = ref<null | ServiceKey>(null);
 
+const route = useRoute();
+const router = useRouter();
+
+// Services that open an in-page panel (vs. external-link tiles). Used to restore
+// the open service from the URL on reload.
+const OPENABLE = new Set<ServiceKey>([
+  "calculator",
+  "bonuscalc",
+  "auditor",
+  "smartico",
+  "prioritycalc",
+]);
+
+// How we arrived: captured once so a Drive OAuth return (/crm?drive=...) can be
+// handed to CrmSmartico, then scrubbed from the URL (so reload doesn't re-trigger).
+const driveReturn = ref<string | null>(
+  typeof route.query.drive === "string" ? route.query.drive : null,
+);
+
+// The open service lives in the URL (?service=key) so a page reload keeps you
+// where you were — home stays home, a service stays open.
+function setService(key: ServiceKey | null) {
+  activeService.value = key;
+  router.replace({ query: key ? { service: key } : {} });
+}
+
 interface Service {
   key: string;
   title: string;
@@ -121,7 +147,7 @@ function openService(s: Service) {
     window.open(s.externalUrl, "_blank", "noopener,noreferrer");
     return;
   }
-  activeService.value = s.key as ServiceKey;
+  setService(s.key as ServiceKey);
 }
 
 async function logout() {
@@ -131,9 +157,15 @@ async function logout() {
 
 onMounted(() => {
   if (!crm.ready) void crm.fetchFavorites();
-  // Returning from the Google Drive consent flow (/crm?drive=...) — drop the user
-  // straight back into the Smartico service, which reads the status itself.
-  if (useRoute().query.drive) activeService.value = "smartico";
+  if (driveReturn.value) {
+    // Returning from the Google Drive consent flow — open Smartico and replace
+    // ?drive=... with ?service=smartico so a reload no longer re-opens it.
+    activeService.value = "smartico";
+    router.replace({ query: { service: "smartico" } });
+  } else if (typeof route.query.service === "string" && OPENABLE.has(route.query.service as ServiceKey)) {
+    // Restore the previously open service after a reload.
+    activeService.value = route.query.service as ServiceKey;
+  }
 });
 </script>
 
@@ -146,7 +178,7 @@ onMounted(() => {
         type="button"
         aria-label="На главную CRM"
         title="На главную CRM"
-        @click="activeService = null"
+        @click="setService(null)"
       >
         <span class="logo">
           <span class="logo__letter">m</span>
@@ -272,7 +304,7 @@ onMounted(() => {
 
       <div v-else class="service-layout animate-fade">
         <div class="service-header">
-          <button class="btn-back" type="button" @click="activeService = null">
+          <button class="btn-back" type="button" @click="setService(null)">
             ← Назад в меню CRM
           </button>
         </div>
@@ -281,7 +313,7 @@ onMounted(() => {
           <CrmCalculator v-if="activeService === 'calculator'" />
           <CrmBonusCalculator v-else-if="activeService === 'bonuscalc'" />
           <CrmAuditor v-else-if="activeService === 'auditor'" />
-          <CrmSmartico v-else-if="activeService === 'smartico'" />
+          <CrmSmartico v-else-if="activeService === 'smartico'" :drive-return="driveReturn" />
           <PriorityCalculator v-else-if="activeService === 'prioritycalc'" />
         </div>
       </div>
