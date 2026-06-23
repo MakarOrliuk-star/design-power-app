@@ -62,6 +62,8 @@ export const calculatorService = {
       console.error("❌ CryptoCompare API key missing in environment variables");
       return;
     }
+
+    const cleanCodes: string[] = [];
     
     for (const code of codes) {
       if (code === 'BNBSC') continue;
@@ -69,23 +71,33 @@ export const calculatorService = {
         await calculatorCache.setRate(code, 1.0);
         continue;
       }
+      cleanCodes.push(code);
+    }
 
-      try {
-        const url = `https://min-api.cryptocompare.com/data/v2/histoday?fsym=${code}&tsym=EUR&limit=2&api_key=${apiKey}`;
-        const resp = await globalThis.fetch(url);
-        if (resp.status === 200) {
-          const d: any = await resp.json();
-          const bars = d?.Data?.Data;
-          if (Array.isArray(bars) && bars.length >= 2) {
-            const close = bars[1]?.close;
-            if (close && close > 0) {
-              await calculatorCache.setRate(code, 1 / close);
-            }
+    if (cleanCodes.length === 0) return;
+
+    try {
+      const fsyms = cleanCodes.join(',');
+      const url = `https://min-api.cryptocompare.com/data/pricemulti?fsyms=${fsyms}&tsyms=EUR&api_key=${apiKey}`;
+      
+      const resp = await globalThis.fetch(url);
+      if (resp.status === 200) {
+        const data: any = await resp.json();
+        
+        for (const code of cleanCodes) {
+          const price = data[code]?.EUR;
+          if (price && price > 0) {
+            // Сохраняем оригинальную математику ценности 1 EUR в отношении к крипте (1 / цена)
+            await calculatorCache.setRate(code, 1 / price);
+          } else {
+            console.warn(`⚠️ No rate returned from CryptoCompare for ${code}`);
           }
         }
-      } catch (e) {
-        console.error(`❌ Crypto rate fetch error for ${code}`);
+      } else {
+        console.error(`❌ CryptoCompare API error. Status: ${resp.status}`);
       }
+    } catch (e) {
+      console.error(`❌ Crypto rate batch fetch error:`, e);
     }
   },
 
@@ -100,6 +112,7 @@ export const calculatorService = {
       const rate = await calculatorCache.getRate(c);
       if (CURRENCY_DATA[c] && rate === null) missingCrypto.push(c);
     }
+    
     if (missingCrypto.length > 0) {
       await this.fetchCryptoRates(missingCrypto);
     }

@@ -11,7 +11,9 @@ export const calculatorCache = {
     
     try {
       const obj = JSON.parse(raw);
-      const ttl = FIAT_CURRENCIES.includes(lookupCode) ? 7 * 24 * 60 * 60 : 24 * 60 * 60;
+      
+      
+      const ttl = FIAT_CURRENCIES.includes(lookupCode) ? 7 * 24 * 60 * 60 : 36 * 60 * 60;
       const now = Math.floor(Date.now() / 1000);
       
       if ((now - obj.t) < ttl) return obj.r;
@@ -24,7 +26,8 @@ export const calculatorCache = {
   async setRate(currency: string, rate: number): Promise<void> {
     await ensureRedis();
     const lookupCode = currency === 'BNBSC' ? 'BNB' : currency;
-    const ttl = FIAT_CURRENCIES.includes(lookupCode) ? 7 * 24 * 60 * 60 : 24 * 60 * 60;
+    
+    const ttl = FIAT_CURRENCIES.includes(lookupCode) ? 7 * 24 * 60 * 60 : 36 * 60 * 60;
     const now = Math.floor(Date.now() / 1000);
     
     await redis.setex(
