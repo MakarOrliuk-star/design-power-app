@@ -1,6 +1,9 @@
 <script setup lang="ts">
 import { ref, computed, onMounted } from "vue";
 
+const config = useRuntimeConfig();
+
+
 useHead({ title: "Design Power — CRM Power" });
 
 const auth = useAuthStore();
@@ -20,6 +23,7 @@ interface Service {
   iconBg: string;
   footer: string;
   soon: boolean;
+  externalUrl?: string;
 }
 
 const SERVICES: Service[] = [
@@ -68,6 +72,16 @@ const SERVICES: Service[] = [
     footer: "Запустить сервис →",
     soon: false,
   },
+  {
+    key: "chrome_extensions",
+    title: "Расширения Chrome",
+    desc: "Google Drive со всеми Chrome-расширениями для автоматизации",
+    icon: "🧩",
+    iconBg: "#f5f3ff", 
+    footer: "Открыть папку →",
+    soon: false,
+    externalUrl: config.public.googleDriveUrl as string, 
+  },
 ];
 
 const SERVICE_TITLES: Record<ServiceKey, string> = {
@@ -92,6 +106,10 @@ const otherServices = computed(() =>
 
 function openService(s: Service) {
   if (s.soon) return; // soon tiles are not clickable
+  if (s.externalUrl) {
+    window.open(s.externalUrl, "_blank", "noopener,noreferrer");
+    return;
+  }
   activeService.value = s.key as ServiceKey;
 }
 

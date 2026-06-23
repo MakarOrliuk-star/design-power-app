@@ -1,32 +1,32 @@
 <template>
   <div class="auditor-panel">
     
-    <div class="auditor-card token-card">
-      <details>
-        <summary>
-          <div class="flex items-center gap-3">
-            <span>🔑 Smartico Auth Tokens Configuration</span>
-            <span class="status-pill" :class="hasAnyToken ? 'pill-green' : 'pill-red'">
-              {{ hasAnyToken ? 'Configured' : 'No tokens saved' }}
-            </span>
-          </div>
-        </summary>
-        <div class="token-inputs-grid mt-4">
-          <div v-for="env in ['env2', 'env5', 'env7']" :key="env" class="token-row">
-            <label class="env-label">{{ env.toUpperCase() }} Token:</label>
-            <div class="flex gap-2 flex-1">
-              <input 
-                type="password" 
-                v-model="tokenInputs[env]" 
-                :placeholder="`Enter ${env.toUpperCase()} active auth token...`" 
-                class="crm-input flex-1"
-              />
-              <button @click="saveToken(env)" class="crm-btn crm-btn-primary">Save</button>
-              <button @click="clearToken(env)" v-if="savedTokens[env]" class="crm-btn crm-btn-danger">Clear</button>
-            </div>
+    <div class="auditor-card top-auth-bar">
+      <div class="auth-bar-left">
+        <span class="card-icon" style="font-size: 20px;">🔑</span>
+        <span class="token-title" style="margin: 0; font-size: 15px;">Smartico Tokens</span>
+        <span class="status-pill" :class="hasAnyToken ? 'pill-green' : 'pill-red'" style="margin-left: 8px;">
+          {{ hasAnyToken ? 'Configured' : 'No Tokens' }}
+        </span>
+      </div>
+      
+      <div class="auth-bar-right">
+        <div v-for="env in ['env2', 'env5', 'env7']" :key="env" class="auth-env-group">
+          <span class="env-badge">{{ env.toUpperCase() }}</span>
+          <div style="display: flex;">
+            <input 
+              type="password" 
+              v-model="tokenInputs[env]" 
+              placeholder="Token..." 
+              class="crm-input compact-input"
+              style="border-top-right-radius: 0; border-bottom-right-radius: 0; border-right: 0;"
+              :disabled="isLoading"
+            />
+            <button @click="saveToken(env)" class="crm-btn crm-btn-primary compact-btn" :style="!savedTokens[env] ? 'border-top-left-radius: 0; border-bottom-left-radius: 0;' : 'border-radius: 0;'">Save</button>
+            <button @click="clearToken(env)" v-if="savedTokens[env]" class="crm-btn crm-btn-danger compact-btn" style="border-top-left-radius: 0; border-bottom-left-radius: 0;">✕</button>
           </div>
         </div>
-      </details>
+      </div>
     </div>
 
     <div class="tabs-nav">
@@ -73,7 +73,7 @@
       <h3 class="card-title mb-4">🕵️‍♂️ Bulk Campaign Auditor</h3>
       <div class="input-group">
         <label>🔗 Paste Smartico Campaign Links (One URL per line)</label>
-        <textarea v-model="massUrlsInput" rows="6" placeholder="https://drive.smartico.ai/2828#/j_audience_scheduled/11111&#10;https://drive.smartico.ai/2828#/j_audience_head/22222" class="crm-textarea" :disabled="isLoading"></textarea>
+        <textarea v-model="massUrlsInput" rows="6" placeholder="https://drive.smartico.ai/2828#/j_audience_scheduled/11111" class="crm-textarea" :disabled="isLoading"></textarea>
       </div>
       <div class="settings-row mt-4">
         <label class="checkbox-label">
@@ -97,7 +97,7 @@
         </button>
       </div>
 
-      <div v-if="activeSubTab === 'search'" class="space-y-4">
+      <div v-if="activeSubTab === 'search'" style="display:flex; flex-direction:column; gap:16px;">
         <div class="input-group">
           <label>🔗 Target Campaign Links (One URL per line)</label>
           <textarea v-model="brandSearchUrls" rows="4" class="crm-textarea" placeholder="Urls to scan..."></textarea>
@@ -109,8 +109,8 @@
         <button @click="executeBrandSearch" class="crm-btn crm-btn-primary w-full" :disabled="isLoading || !brandSearchKeyword || !brandSearchUrls">Scan Campaigns</button>
       </div>
 
-      <div v-if="activeSubTab === 'labels'" class="space-y-4">
-        <div class="grid grid-cols-3 gap-4">
+      <div v-if="activeSubTab === 'labels'" style="display:flex; flex-direction:column; gap:16px;">
+        <div class="inputs-grid">
           <div class="input-group">
             <label>Environment</label>
             <select v-model="labelEnv" class="crm-input">
@@ -130,15 +130,15 @@
         </div>
         <div class="input-group">
           <label>📋 Paste Labels List</label>
-          <textarea v-model="labelNamesInput" rows="4" class="crm-textarea" placeholder="crm2_brand_link&#10;{{label.bonus_label}}"></textarea>
+          <textarea v-model="labelNamesInput" rows="4" class="crm-textarea" placeholder="crm2_brand_link..."></textarea>
         </div>
         <button @click="executeBulkLabels" class="crm-btn crm-btn-primary w-full" :disabled="isLoading || !labelKeyword || !labelNamesInput">Extract Dictionary Values</button>
       </div>
 
-      <div v-if="activeSubTab === 'links'" class="space-y-4">
+      <div v-if="activeSubTab === 'links'" style="display:flex; flex-direction:column; gap:16px;">
         <div class="input-group">
           <label>🔗 Tracking Short Links (One per line)</label>
-          <textarea v-model="shortLinksInput" rows="4" class="crm-textarea" placeholder="rngsp.cc/xyz&#10;https://rebrand.ly/abc"></textarea>
+          <textarea v-model="shortLinksInput" rows="4" class="crm-textarea" placeholder="rngsp.cc/xyz..."></textarea>
         </div>
         <button @click="executeResolveLinks" class="crm-btn crm-btn-primary w-full" :disabled="isLoading || !shortLinksInput">Resolve Tracking Chains</button>
       </div>
@@ -155,49 +155,49 @@
     </div>
 
     <div class="auditor-card results-table-card" v-if="tableResults && !isLoading">
-      <h4 class="text-md font-bold mb-3 text-slate-700">📊 Operation Execution Output</h4>
+      <h4 class="card-title mb-4">📊 Execution Output</h4>
       
-      <div v-if="activeSubTab === 'search' && activeTab === 'brands'" class="space-y-4">
-        <div v-for="(res, idx) in tableResults" :key="idx" class="border border-slate-200 rounded-lg p-4 bg-slate-50">
-          <div class="flex justify-between font-bold text-slate-800 text-sm border-b pb-2">
+      <div v-if="activeSubTab === 'search' && activeTab === 'brands'" style="display:flex; flex-direction:column; gap:16px;">
+        <div v-for="(res, idx) in tableResults" :key="idx" class="table-results-nested">
+          <div class="nested-header">
             <span>📋 {{ res.name }} (ID: {{ res.campaign_id }})</span>
-            <span :class="res.matches.length ? 'text-amber-600' : 'text-slate-400'">
+            <span :class="res.matches.length ? 'match-success' : 'match-none'">
               Matches: {{ res.matches.length }}
             </span>
           </div>
-          <div class="text-xs font-mono text-slate-600 mt-2 space-y-1" v-if="res.matches.length">
-            <div v-for="(m, mIdx) in res.matches" :key="mIdx" class="bg-white p-2 rounded border border-slate-100">
-              <b class="text-blue-600">Path:</b> {{ m.path }} <br/> <b class="text-amber-600">Value:</b> {{ m.value }}
+          <div v-if="res.matches.length" style="margin-top: 10px; display:flex; flex-direction:column; gap:6px;">
+            <div v-for="(m, mIdx) in res.matches" :key="mIdx" class="nested-row-match">
+              <b style="color: #3b82f6;">Path:</b> {{ m.path }} <br/> 
+              <b style="color: #10b981;">Value:</b> {{ m.value }}
             </div>
           </div>
-          <div v-else class="text-xs italic text-slate-400 mt-2">No matching structural brand rules configured.</div>
+          <div v-else class="match-none" style="margin-top: 10px; font-style: italic;">No matches found.</div>
         </div>
       </div>
 
-      <table v-if="['labels', 'links'].includes(activeSubTab) && activeTab === 'brands'" class="results-grid">
-        <thead>
-          <tr>
-            <th>Input Token / Key</th>
-            <th>Resolved Output Target Data Payload</th>
-          </tr>
-        </thead>
-        <tbody>
-          <tr v-for="(val, key) in tableResults" :key="key">
-            <td class="font-bold font-mono text-xs max-w-[250px] break-all">{{ key }}</td>
-            <td class="font-mono text-xs break-all text-slate-700">{{ val }}</td>
-          </tr>
-        </tbody>
-      </table>
+      <div v-if="['labels', 'links'].includes(activeSubTab) && activeTab === 'brands'" style="overflow-x: auto; border-radius: 8px;">
+        <table class="results-grid">
+          <thead>
+            <tr><th>Input Token / Key</th><th>Resolved Output Target Data Payload</th></tr>
+          </thead>
+          <tbody>
+            <tr v-for="(val, key) in tableResults" :key="key">
+              <td class="table-key-cell">{{ key }}</td>
+              <td class="table-value-cell">{{ val }}</td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
     </div>
 
     <div class="auditor-card result-card" v-if="finalHtml && !isLoading">
       <div class="result-content">
         <div class="result-icon">🎉</div>
         <div class="result-text">
-          <h3>HTML Analysis Matrix Document Rendered Successfully</h3>
-          <p>Interactive graph structures, deep text compliance checks, and cross-channel evaluations are ready.</p>
+          <h3>Report Rendered Successfully</h3>
+          <p>Interactive graph structures and textual compliance checks are ready.</p>
         </div>
-        <button @click="downloadHtml" class="crm-btn crm-btn-primary download-btn">📥 Download HTML Report</button>
+        <button @click="downloadHtml" class="crm-btn crm-btn-success download-btn">📥 Download Report</button>
       </div>
     </div>
 
@@ -207,7 +207,6 @@
 <script setup>
 import { ref, computed, onMounted, nextTick, watch } from 'vue';
 
-// Configuration definitions
 const tabs = [
   { id: 'single', label: '🗺️ Single Audit' },
   { id: 'mass', label: '🕵️‍♂️ Mass Audit' },
@@ -217,23 +216,20 @@ const tabs = [
 const subTabs = [
   { id: 'search', label: '🔍 Campaign Scan' },
   { id: 'labels', label: '🔠 Dictionary Extractor' },
-  { id: 'links', label: '🔗 Redirect Chain Resolver' }
+  { id: 'links', label: '🔗 Redirect Resolver' }
 ];
 
-// Operational environment state tracking
 const activeTab = ref('single');
 const activeSubTab = ref('search');
 const savedTokens = ref({ env2: '', env5: '', env7: '' });
 const tokenInputs = ref({ env2: '', env5: '', env7: '' });
 
-// Forms inputs data binding layers
 const singleMainUrl = ref('');
 const singlePopUrl = ref('');
 const massUrlsInput = ref('');
 const useStats = ref(true);
 const daysBack = ref(14);
 
-// Brand contextual tools forms binding
 const brandSearchUrls = ref('');
 const brandSearchKeyword = ref('');
 const labelEnv = ref('env2');
@@ -242,7 +238,6 @@ const labelKeyword = ref('');
 const labelNamesInput = ref('');
 const shortLinksInput = ref('');
 
-// Execution logs state engine bindings
 const isLoading = ref(false);
 const progress = ref(0);
 const logs = ref([]);
@@ -287,7 +282,6 @@ watch(logs, async () => {
   if (terminalRef.value) terminalRef.value.scrollTop = terminalRef.value.scrollHeight;
 }, { deep: true });
 
-// Core stream-oriented executor engine pointing directly to local Node.js proxy routers
 async function executeAuditPipeline(urlList) {
   isLoading.value = true;
   progress.value = 0;
@@ -324,7 +318,6 @@ async function executeAuditPipeline(urlList) {
     let streamBuffer = '';
     let reportIdToDownload = null;
 
-    // Step 1: Read the progress stream logs until complete token is acquired
     while (true) {
       const { done, value } = await reader.read();
       if (done) break;
@@ -359,7 +352,6 @@ async function executeAuditPipeline(urlList) {
       if (reportIdToDownload) break;
     }
 
-    // Step 2: Request compiled heavy HTML output outside of stream context
     if (reportIdToDownload) {
       try {
         logs.value.push(`<span class="log-time">>></span> Downloading full analysis matrix document safely...`);
@@ -393,7 +385,6 @@ function triggerMassAudit() {
   if (targets.length) executeAuditPipeline(targets);
 }
 
-// Brand scanning JSON-based transactional endpoint interactions
 async function executeBrandSearch() {
   isLoading.value = true;
   tableResults.value = null;
@@ -459,11 +450,26 @@ async function executeResolveLinks() {
 
 function downloadHtml() {
   if (!finalHtml.value) return;
+
+  let fileName = "Smartico_Audit_Report.html";
+
+  const titleMatch = finalHtml.value.match(/<title>Audit:\s*(.*?)<\/title>/i);
+  
+  if (titleMatch && titleMatch[1]) {
+    let cleanName = titleMatch[1].replace(/[^a-zA-Z0-9\s\-_()а-яА-ЯёЁ]/gi, '').trim().replace(/\s+/g, '_');
+    if (cleanName) {
+      fileName = `${cleanName}_Report.html`;
+    }
+  } else if (activeTab.value === 'mass') {
+    const urlsCount = massUrlsInput.value.split('\n').map(u => u.trim()).filter(u => !!u).length;
+    fileName = `Mass_Audit_${urlsCount}_Campaigns_Report.html`;
+  }
+
   const blob = new Blob([finalHtml.value], { type: 'text/html;charset=utf-8' });
   const url = URL.createObjectURL(blob);
   const a = document.createElement('a');
   a.href = url;
-  a.download = `Smartico_Unified_Audit_Report_${new Date().getTime()}.html`;
+  a.download = fileName;
   a.click();
   URL.revokeObjectURL(url);
 }
@@ -471,217 +477,146 @@ function downloadHtml() {
 
 <style scoped>
 /* =====================================================================
-   ☀️ LIGHT MODE DEFAULT STYLES
+   🎨 BASE CSS (Каркас и Светлая тема)
    ===================================================================== */
-.auditor-panel {
-  display: flex;
-  flex-direction: column;
-  gap: 20px;
-  max-width: 1000px;
-  margin: 0 auto;
-  font-family: system-ui, sans-serif;
-}
+.auditor-panel { display: flex; flex-direction: column; gap: 20px; width: 100%; font-family: system-ui, -apple-system, sans-serif; }
+.auditor-card { background: #ffffff; border: 1px solid #e2e8f0; border-radius: 12px; padding: 24px; box-shadow: 0 4px 6px -1px rgba(0,0,0,0.05); width: 100%; box-sizing: border-box; transition: all 0.2s; }
+.card-title { color: #0f172a; font-weight: bold; margin-top: 0; margin-bottom: 16px; font-size: 18px; }
+.mb-4 { margin-bottom: 16px; }
+.mt-4 { margin-top: 16px; }
+.mt-5 { margin-top: 20px; }
+.w-full { width: 100%; }
 
-.auditor-card {
-  background: #ffffff !important;
-  border: 1px solid #e2e8f0 !important;
-  border-radius: 12px;
-  padding: 24px;
-  box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.05);
-  transition: all 0.2s ease;
-}
+/* --- 🔑 Compact Top Auth Bar --- */
+.top-auth-bar { padding: 12px 20px; margin-bottom: 4px; display: flex; flex-wrap: wrap; justify-content: space-between; align-items: center; gap: 16px; }
+.auth-bar-left { display: flex; align-items: center; gap: 8px; }
+.auth-bar-right { display: flex; flex-wrap: wrap; gap: 16px; flex: 1; justify-content: flex-end; }
+.auth-env-group { display: flex; align-items: center; gap: 6px; }
+.env-badge { font-size: 12px; font-weight: bold; color: #64748b; font-family: monospace; width: 40px; }
+.compact-input { padding: 6px 10px !important; max-width: 120px; font-size: 12px !important; }
+.compact-btn { padding: 6px 12px !important; font-size: 12px !important; }
 
-/* Force dark text contrast inside white cards to override global dark leaking */
-.card-title, 
-summary span, 
-.env-label, 
-.checkbox-label span, 
-.days-input label {
-  color: #0f172a !important; 
-}
+/* Status Pills */
+.status-pill { font-size: 10px; font-weight: bold; padding: 2px 8px; border-radius: 999px; text-transform: uppercase; border: 1px solid transparent; }
+.pill-green { background: #dcfce7; color: #166534; border-color: #86efac; }
+.pill-red { background: #fee2e2; color: #991b1b; border-color: #fca5a5; }
 
-.input-group label {
-  color: #475569 !important;
-}
-
-.disabled-card {
-  opacity: 0.5;
-  pointer-events: none;
-  filter: grayscale(50%);
-}
-
-.card-header {
-  display: flex;
-  justify-content: space-between;
-  align-items: center;
-  margin-bottom: 16px;
-  border-bottom: 1px solid #e2e8f0;
-  padding-bottom: 12px;
-}
-
-.status-pill {
-  font-size: 11px;
-  font-weight: bold;
-  padding: 2px 8px;
-  border-radius: 10px;
-}
-.pill-green { background: #dcfce7 !important; color: #166534 !important; }
-.pill-red { background: #fee2e2 !important; color: #991b1b !important; }
-
-.token-inputs-grid {
-  display: flex;
-  flex-direction: column;
-  gap: 12px;
-}
-.token-row { display: flex; align-items: center; gap: 12px; }
-
-.tabs-nav { display: flex; gap: 8px; border-bottom: 2px solid #e2e8f0; padding-bottom: 2px; }
-.tab-btn {
-  padding: 10px 20px;
-  font-weight: 600;
-  font-size: 14px;
-  border: none;
-  background: transparent;
-  cursor: pointer;
-  color: #64748b;
-  border-bottom: 2px solid transparent;
-  margin-bottom: -2px;
-  transition: all 0.2s;
-}
+/* --- 📑 Tabs --- */
+.tabs-nav { display: flex; gap: 8px; border-bottom: 1px solid #e2e8f0; }
+.tab-btn { padding: 12px 24px; font-weight: 600; font-size: 14px; border: none; background: transparent; cursor: pointer; color: #64748b; border-bottom: 2px solid transparent; transition: 0.2s; }
 .tab-btn:hover:not(:disabled) { color: #0f172a; }
-.tab-active { color: #3b82f6 !important; border-bottom-color: #3b82f6 !important; }
+.tab-active { color: #3b82f6; border-bottom-color: #3b82f6; }
 
-.sub-tabs-nav { display: flex; gap: 6px; background: #f1f5f9; padding: 4px; border-radius: 8px; }
-.sub-tab-btn { flex: 1; padding: 8px; font-size: 12px; font-weight: 600; border: none; background: transparent; border-radius: 6px; cursor: pointer; color: #475569; }
-.sub-active { background: #ffffff !important; color: #0f172a !important; box-shadow: 0 1px 3px rgba(0,0,0,0.1); }
+.sub-tabs-nav { display: flex; gap: 4px; background: #f8fafc; padding: 4px; border-radius: 8px; border: 1px solid #e2e8f0; }
+.sub-tab-btn { flex: 1; padding: 8px; font-size: 12px; font-weight: 600; border: none; background: transparent; border-radius: 6px; cursor: pointer; color: #64748b; }
+.sub-tab-btn:hover { color: #0f172a; }
+.sub-active { background: #ffffff; color: #3b82f6; box-shadow: 0 1px 3px rgba(0,0,0,0.05); }
 
+/* --- 📝 Forms & Inputs --- */
 .inputs-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; }
-@media (max-width: 640px) { .inputs-grid { grid-template-columns: 1fr; } }
+.input-group label { display: block; color: #475569; font-size: 13px; font-weight: 500; margin-bottom: 6px; }
+.crm-input, .crm-textarea { width: 100%; padding: 10px 14px; border: 1px solid #e2e8f0; border-radius: 8px; font-size: 14px; outline: none; background: #f8fafc; color: #0f172a; box-sizing: border-box; }
+.crm-textarea { font-family: monospace; font-size: 13px; resize: vertical; }
+.crm-input:focus, .crm-textarea:focus { border-color: #3b82f6; }
+select.crm-input { appearance: none; background-image: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='24' height='24' viewBox='0 0 24 24' fill='none' stroke='%2394a3b8' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'><polyline points='6 9 12 15 18 9'></polyline></svg>"); background-repeat: no-repeat; background-position: right 10px center; background-size: 16px; padding-right: 35px; }
 
-.crm-input, .crm-textarea {
-  width: 100%;
-  padding: 10px 14px;
-  border: 1px solid #e2e8f0 !important;
-  border-radius: 8px;
-  font-size: 14px;
-  outline: none;
-  background: #f8fafc !important;
-  color: #0f172a !important;
-  box-sizing: border-box;
-}
-.crm-textarea { resize: vertical; font-family: monospace; font-size: 13px; }
-.crm-input:focus, .crm-textarea:focus { border-color: #3b82f6 !important; background: #ffffff !important; }
+.settings-row { display: flex; align-items: center; justify-content: space-between; background: #f8fafc; padding: 12px 16px; border-radius: 8px; border: 1px solid #e2e8f0; }
+.checkbox-label { display: flex; align-items: center; gap: 10px; font-size: 13px; font-weight: 500; cursor: pointer; color: #334155; }
+.checkbox-label input[type="checkbox"] { accent-color: #3b82f6; width: 15px; height: 15px; }
+.days-input { display: flex; align-items: center; gap: 8px; font-size: 13px; color: #475569; }
 
-.settings-row {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  background: #f1f5f9;
-  padding: 12px 16px;
-  border-radius: 8px;
-  border: 1px solid #e2e8f0;
-}
-.checkbox-label { display: flex; align-items: center; gap: 8px; font-size: 13px; font-weight: 600; cursor: pointer; }
-.days-input { display: flex; align-items: center; gap: 8px; font-size: 13px; }
-
-.crm-btn { padding: 10px 16px; border-radius: 8px; font-size: 13px; font-weight: 600; cursor: pointer; border: 1px solid transparent; transition: all 0.2s; }
+/* --- 🔘 Buttons --- */
+.crm-btn { border: none; font-weight: bold; cursor: pointer; transition: 0.2s; border-radius: 6px; }
+.crm-btn:disabled { opacity: 0.5; cursor: not-allowed; }
 .crm-btn-primary { background: #3b82f6; color: white; }
-.crm-btn-primary:hover { background: #2563eb; }
-.crm-btn-danger { background: #fee2e2; color: #b91c1c; border-color: #fca5a5; }
-.crm-btn-danger:hover { background: #fca5a5; }
-.crm-btn-success { background: #10b981; color: white; }
-.crm-btn-success:hover { background: #059669; }
-.run-btn { width: 100%; padding: 14px; font-size: 15px; }
+.crm-btn-primary:hover:not(:disabled) { background: #2563eb; }
+.crm-btn-danger { background: #ef4444; color: white; }
+.crm-btn-danger:hover:not(:disabled) { background: #dc2626; }
+.crm-btn-success { background: #059669; color: white; padding: 14px; font-size: 15px; border-radius: 10px; width: 100%; }
+.crm-btn-success:hover:not(:disabled) { background: #047857; }
 
-/* Terminal Layout Configuration */
-.terminal-card { background: #0f172a !important; border-color: #1e293b !important; }
-.progress-wrapper { width: 100%; height: 6px; background: #1e293b; border-radius: 3px; overflow: hidden; }
-.progress-bar { height: 100%; background: linear-gradient(90deg, #3b82f6, #10b981); transition: width 0.3s; }
-.progress-text { color: #94a3b8 !important; font-size: 11px; text-align: right; margin-top: 4px; font-family: monospace; }
-.terminal { background: #020617; border: 1px solid #1e293b; border-radius: 8px; padding: 14px; height: 220px; overflow-y: auto; font-family: monospace; font-size: 12px; line-height: 1.5; margin-top: 10px; color: #e2e8f0; }
+/* --- 📺 Terminal --- */
+.terminal-card { padding: 0 !important; overflow: hidden; background: #18181b !important; border-color: #27272a !important; }
+.progress-wrapper { width: 100%; height: 6px; background: #27272a; }
+.progress-bar { height: 100%; background: #3b82f6; transition: width 0.3s ease; }
+.progress-text { padding: 8px 16px 0; color: #a1a1aa; font-size: 11px; text-align: right; font-family: monospace; }
+.terminal { background: transparent; padding: 0 16px 16px; height: 220px; overflow-y: auto; font-family: monospace; font-size: 12px; line-height: 1.6; color: #e4e4e7; }
 .terminal-line { margin-bottom: 4px; }
-:deep(.log-time) { color: #64748b; }
-:deep(.log-success) { color: #10b981; font-weight: bold; }
-:deep(.log-err) { color: #ef4444; font-weight: bold; }
+:deep(.log-time) { color: #71717a; }
+:deep(.log-success) { color: #34d399; font-weight: bold; }
+:deep(.log-err) { color: #f87171; font-weight: bold; }
 
+/* --- 📊 Table Results --- */
 .results-table-card { border-left: 4px solid #3b82f6; }
-.results-grid { width: 100%; border-collapse: collapse; margin-top: 10px; }
-.results-grid th { background: #f1f5f9; color: #475569; font-weight: 600; font-size: 12px; text-transform: uppercase; padding: 10px; border: 1px solid #e2e8f0; }
-.results-grid td { padding: 10px; border: 1px solid #e2e8f0; background: #ffffff; color: #0f172a; }
+.table-results-nested { background: #f8fafc; border: 1px solid #e2e8f0; border-radius: 8px; padding: 16px; margin-bottom: 12px; }
+.nested-header { display: flex; justify-content: space-between; align-items: center; border-bottom: 1px solid #e2e8f0; padding-bottom: 8px; font-weight: bold; font-size: 14px; color: #0f172a; }
+.match-success { background: #dcfce7; color: #166534; padding: 2px 8px; border-radius: 4px; font-size: 12px; border: 1px solid #86efac; }
+.match-none { color: #64748b; font-size: 12px; }
+.nested-row-match { background: #ffffff; border: 1px solid #e2e8f0; border-radius: 4px; padding: 10px; font-family: monospace; font-size: 12px; color: #334155; }
+.results-grid { width: 100%; border-collapse: collapse; }
+.results-grid th { background: #f1f5f9; color: #475569; font-weight: 600; font-size: 12px; text-transform: uppercase; padding: 12px; border: 1px solid #e2e8f0; text-align: left; }
+.results-grid td { padding: 12px; border: 1px solid #e2e8f0; font-family: monospace; font-size: 13px; color: #334155; }
+.table-key-cell { font-weight: bold; max-width: 250px; word-break: break-all; }
+.table-value-cell { word-break: break-all; }
 
-.result-card { background: #f0fdf4 !important; border-color: #bbf7d0 !important; }
+/* --- 🎉 Result Card --- */
+.result-card { background: #ecfdf5 !important; border-color: #a7f3d0 !important; display: flex; align-items: center; justify-content: space-between; }
 .result-content { display: flex; align-items: center; gap: 16px; }
-.result-icon { font-size: 28px; }
-.result-text h3 { margin: 0 0 2px 0; color: #166534 !important; font-size: 16px; font-weight: 700; }
-.result-text p { margin: 0; color: #15803d !important; font-size: 13px; }
-.download-btn { margin-left: auto; background: #15803d; color: white; }
-.download-btn:hover { background: #166534; }
+.result-icon { font-size: 32px; }
+.result-text h3 { margin: 0 0 4px 0; color: #065f46; font-size: 16px; font-weight: bold; }
+.result-text p { margin: 0; color: #047857; font-size: 13px; }
+.download-btn { width: auto; padding: 10px 20px; font-size: 14px; margin: 0; }
+</style>
 
+<!-- 
+  =====================================================================
+  🌙 DARK MODE (Железобетонный метод) 
+  Отдельный тег style БЕЗ слова "scoped", чтобы точно пробить изоляцию Vue!
+  ===================================================================== 
+-->
+<style>
+html[data-theme="dark"] .auditor-panel .auditor-card { background: #18181b !important; border-color: #27272a !important; box-shadow: 0 4px 6px rgba(0,0,0,0.3) !important; }
+html[data-theme="dark"] .auditor-panel .card-title, 
+html[data-theme="dark"] .auditor-panel .token-title, 
+html[data-theme="dark"] .auditor-panel .env-label, 
+html[data-theme="dark"] .auditor-panel .checkbox-label span, 
+html[data-theme="dark"] .auditor-panel .days-input label { color: #f4f4f5 !important; }
+html[data-theme="dark"] .auditor-panel .input-group label { color: #a1a1aa !important; }
 
-/* =====================================================================
-   🌙 DARK MODE ENFORCEMENT OVERRIDES (Nuxt global cascade compatibility)
-   ===================================================================== */
-:global(.dark) .auditor-card {
-  background: #1e293b !important;
-  border-color: #334155 !important;
-  box-shadow: none;
-}
+/* Dark mode overrides */
+html[data-theme="dark"] .auditor-panel .tabs-nav { border-color: #27272a !important; }
+html[data-theme="dark"] .auditor-panel .tab-btn:hover:not(:disabled) { color: #f4f4f5 !important; }
+html[data-theme="dark"] .auditor-panel .tab-active { color: #38bdf8 !important; border-bottom-color: #38bdf8 !important; }
+html[data-theme="dark"] .auditor-panel .sub-tabs-nav { background: #09090b !important; border-color: #27272a !important; }
+html[data-theme="dark"] .auditor-panel .sub-tab-btn { color: #71717a !important; }
+html[data-theme="dark"] .auditor-panel .sub-tab-btn:hover { color: #e4e4e7 !important; }
+html[data-theme="dark"] .auditor-panel .sub-active { background: #27272a !important; color: #38bdf8 !important; border-color: #27272a !important; box-shadow: none !important; }
 
-:global(.dark) .card-title, 
-:global(.dark) summary span, 
-:global(.dark) .env-label, 
-:global(.dark) .checkbox-label span, 
-:global(.dark) .days-input label {
-  color: #f8fafc !important;
-}
+html[data-theme="dark"] .auditor-panel .crm-input, 
+html[data-theme="dark"] .auditor-panel .crm-textarea { background: #09090b !important; border-color: #27272a !important; color: #f4f4f5 !important; }
+html[data-theme="dark"] .auditor-panel .crm-input:focus, 
+html[data-theme="dark"] .auditor-panel .crm-textarea:focus { border-color: #38bdf8 !important; }
+html[data-theme="dark"] .auditor-panel .settings-row { background: #09090b !important; border-color: #27272a !important; }
 
-:global(.dark) .input-group label {
-  color: #94a3b8 !important;
-}
+/* Status Pills Dark */
+html[data-theme="dark"] .auditor-panel .pill-green { background: rgba(16, 185, 129, 0.1) !important; color: #34d399 !important; border-color: rgba(16, 185, 129, 0.2) !important; }
+html[data-theme="dark"] .auditor-panel .pill-red { background: rgba(239, 68, 68, 0.1) !important; color: #f87171 !important; border-color: rgba(239, 68, 68, 0.2) !important; }
 
-:global(.dark) .card-header,
-:global(.dark) .tabs-nav {
-  border-color: #334155 !important;
-}
+/* Table Results Dark */
+html[data-theme="dark"] .auditor-panel .table-results-nested { border-color: #27272a !important; background: #09090b !important; }
+html[data-theme="dark"] .auditor-panel .nested-header { border-color: #27272a !important; color: #f4f4f5 !important; }
+html[data-theme="dark"] .auditor-panel .nested-row-match { background: #18181b !important; border-color: #27272a !important; color: #a1a1aa !important; }
+html[data-theme="dark"] .auditor-panel .match-success { background: rgba(16, 185, 129, 0.1) !important; color: #34d399 !important; border-color: rgba(16, 185, 129, 0.2) !important; }
 
-:global(.dark) .tab-btn:hover:not(:disabled) {
-  color: #f8fafc;
-}
+html[data-theme="dark"] .auditor-panel .results-grid th { background: #09090b !important; color: #a1a1aa !important; border-color: #27272a !important; }
+html[data-theme="dark"] .auditor-panel .results-grid td { background: #18181b !important; border-color: #27272a !important; color: #d4d4d8 !important; }
 
-:global(.dark) .sub-tabs-nav {
-  background: #0f172a;
-}
+/* Terminal Dark */
+html[data-theme="dark"] .auditor-panel .terminal-card { background: #18181b !important; border-color: #27272a !important; }
+html[data-theme="dark"] .auditor-panel .terminal { background: transparent !important; color: #e4e4e7 !important; }
 
-:global(.dark) .sub-tab-btn {
-  color: #94a3b8;
-}
-
-:global(.dark) .sub-active {
-  background: #1e293b !important;
-  color: #f8fafc !important;
-}
-
-:global(.dark) .crm-input, 
-:global(.dark) .crm-textarea {
-  background: #0f172a !important;
-  border-color: #334155 !important;
-  color: #f1f5f9 !important;
-}
-
-:global(.dark) .settings-row {
-  background: #0f172a;
-  border-color: #334155;
-}
-
-:global(.dark) .results-grid th {
-  background: #0f172a;
-  color: #94a3b8;
-  border-color: #334155;
-}
-
-:global(.dark) .results-grid td {
-  background: #1e293b;
-  color: #e2e8f0;
-  border-color: #334155;
-}
+/* Result Card Dark */
+html[data-theme="dark"] .auditor-panel .result-card { background: rgba(6, 78, 59, 0.2) !important; border-color: rgba(4, 120, 87, 0.4) !important; }
+html[data-theme="dark"] .auditor-panel .result-text h3 { color: #34d399 !important; }
+html[data-theme="dark"] .auditor-panel .result-text p { color: #a7f3d0 !important; }
 </style>

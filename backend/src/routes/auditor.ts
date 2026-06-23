@@ -3,7 +3,7 @@ import { Router } from "express";
 export const auditorRouter = Router();
 
 // Extract the base worker URL from the environment variable configuration
-const workerStreamUrl = process.env.PYTHON_WORKER_URL || "http://localhost:8000/audit/stream";
+const workerStreamUrl = process.env.PYTHON_WORKER_URL!;
 const workerBaseUrl = workerStreamUrl.replace("/audit/stream", "");
 
 // 1. Streams campaign audit progress and final report using Server-Sent Events (SSE)
