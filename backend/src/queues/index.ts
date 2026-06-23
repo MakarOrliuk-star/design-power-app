@@ -25,6 +25,20 @@ export interface SmarticoJobData {
   selectedTypes: string[]; // canonical TypeKeys to generate
 }
 
+// Google Drive source: iterate every brand folder under `branchId`, pull the
+// chosen event's CRM image per type, and build the same Smartico functions.
+export interface DriveSmarticoJobData {
+  userId: string; // whose Drive token (Redis) to read with
+  branchId: string; // the "Maiking" or "Tournaments" folder id
+  branchName: string; // its display name (for the pack namespace)
+  eventName: string; // chosen event/tournament folder name, identical per brand
+  packName: string; // dedup namespace + Cloudinary folder ("<branch> — <event>")
+  selectedTypes: string[]; // subset of email | pop-up | push
+}
+
+export type SmarticoQueueData = SmarticoJobData | DriveSmarticoJobData;
+export type SmarticoJobName = "generate" | "drive";
+
 let _connection: Redis | null = null;
 export function getBullConnection(): Redis {
   if (!_connection) {
@@ -74,10 +88,10 @@ const smarticoJobOptions = {
   removeOnFail: { age: 3600, count: 500 },
 };
 
-let _smarticoQueue: Queue<SmarticoJobData, unknown, "generate"> | null = null;
-export function getSmarticoQueue(): Queue<SmarticoJobData, unknown, "generate"> {
+let _smarticoQueue: Queue<SmarticoQueueData, unknown, SmarticoJobName> | null = null;
+export function getSmarticoQueue(): Queue<SmarticoQueueData, unknown, SmarticoJobName> {
   if (!_smarticoQueue) {
-    _smarticoQueue = new Queue<SmarticoJobData, unknown, "generate">(SMARTICO_QUEUE, {
+    _smarticoQueue = new Queue<SmarticoQueueData, unknown, SmarticoJobName>(SMARTICO_QUEUE, {
       connection: getBullConnection(),
       defaultJobOptions: smarticoJobOptions,
     });

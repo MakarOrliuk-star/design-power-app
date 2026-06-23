@@ -1,6 +1,15 @@
 import { Worker } from "bullmq";
-import { SMARTICO_QUEUE, getBullConnection, type SmarticoJobData } from "./index.js";
+import type { Job } from "bullmq";
+import {
+  SMARTICO_QUEUE,
+  getBullConnection,
+  type SmarticoQueueData,
+  type SmarticoJobName,
+  type SmarticoJobData,
+  type DriveSmarticoJobData,
+} from "./index.js";
 import { processSmarticoJob } from "./smartico.processor.js";
+import { processDriveSmarticoJob } from "./drive-smartico.processor.js";
 
 /**
  * Smartico worker — embedded in the API process (NOT the dedicated worker).
@@ -19,13 +28,16 @@ import { processSmarticoJob } from "./smartico.processor.js";
 
 const LONG_LOCK_MS = 5 * 60 * 1000;
 
-let _worker: Worker<SmarticoJobData, unknown, "generate"> | null = null;
+let _worker: Worker<SmarticoQueueData, unknown, SmarticoJobName> | null = null;
 
-export function startSmarticoWorker(): Worker<SmarticoJobData, unknown, "generate"> {
+export function startSmarticoWorker(): Worker<SmarticoQueueData, unknown, SmarticoJobName> {
   if (_worker) return _worker;
-  _worker = new Worker<SmarticoJobData, unknown, "generate">(
+  _worker = new Worker<SmarticoQueueData, unknown, SmarticoJobName>(
     SMARTICO_QUEUE,
-    (job) => processSmarticoJob(job),
+    (job) =>
+      job.name === "drive"
+        ? processDriveSmarticoJob(job as Job<DriveSmarticoJobData>)
+        : processSmarticoJob(job as Job<SmarticoJobData>),
     { connection: getBullConnection(), concurrency: 2, lockDuration: LONG_LOCK_MS },
   );
   _worker.on("failed", (job, err) =>

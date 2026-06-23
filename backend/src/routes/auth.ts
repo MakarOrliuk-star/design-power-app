@@ -2,15 +2,24 @@ import { Router } from "express";
 import type { CookieOptions, Request, Response } from "express";
 import { randomBytes } from "node:crypto";
 import { env, googleOAuthConfigured, isProd } from "../env.js";
-import { buildGoogleAuthUrl, exchangeCodeForProfile } from "../lib/google.js";
+import {
+  buildGoogleAuthUrl,
+  exchangeCodeForProfile,
+  buildDriveAuthUrl,
+  exchangeCodeForDriveToken,
+} from "../lib/google.js";
 import { SESSION_COOKIE, signSession } from "../lib/jwt.js";
 import { resolveLogin } from "../services/auth.service.js";
 import { prisma } from "../lib/prisma.js";
 import { loadUser, requireAuth } from "../middleware/auth.js";
+import { storeDriveToken } from "../lib/driveTokens.js";
 
 export const authRouter: Router = Router();
 
 const STATE_COOKIE = "oauth_state";
+// Separate CSRF cookie for the incremental Drive consent so it never collides
+// with an in-flight login.
+const DRIVE_STATE_COOKIE = "drive_oauth_state";
 
 // Post-login landing page, chosen on the split Design/CRM start page. Carried
 // through the OAuth round-trip in its own short-lived cookie so the state
@@ -93,6 +102,59 @@ authRouter.get("/google/callback", async (req: Request, res: Response) => {
   } catch (err) {
     console.error("OAuth callback error:", err);
     loginRedirect(res, "server");
+  }
+});
+
+// ---- Incremental Google Drive consent (Smartico × Drive) ----
+// Opt-in, separate from login: a logged-in CRM user grants drive.readonly so the
+// backend can read the shared "Promotional packs" folder with THEIR token. The
+// short-lived access token is kept in Redis (lib/driveTokens), keyed by userId.
+
+// Step 1 — start Drive consent (must already be logged in).
+authRouter.get("/google/drive", loadUser, requireAuth, (req: Request, res: Response) => {
+  if (!googleOAuthConfigured) {
+    res.status(503).json({ error: "google_oauth_not_configured" });
+    return;
+  }
+  const state = randomBytes(16).toString("hex");
+  res.cookie(DRIVE_STATE_COOKIE, state, { ...baseCookie, maxAge: 10 * 60 * 1000 });
+  res.redirect(buildDriveAuthUrl(state, req.user!.email));
+});
+
+// Step 2 — Drive consent callback: store the access token for this user, then
+// bounce back to /crm with a status flag the UI reads.
+authRouter.get("/google/drive/callback", loadUser, async (req: Request, res: Response) => {
+  const back = (status: string): void => {
+    res.redirect(`${env.FRONTEND_URL.replace(/\/$/, "")}/crm?drive=${status}`);
+  };
+
+  const state = req.query.state;
+  const expectedState = req.cookies?.[DRIVE_STATE_COOKIE];
+  res.clearCookie(DRIVE_STATE_COOKIE, baseCookie);
+
+  // The session must still be present (callback is a top-level redirect back to
+  // our own domain, so the session cookie rides along). If not — back to login.
+  if (!req.user) {
+    res.redirect(`${env.FRONTEND_URL}/login?error=session`);
+    return;
+  }
+  if (typeof req.query.error === "string") {
+    back("denied");
+    return;
+  }
+  const code = req.query.code;
+  if (typeof code !== "string" || typeof state !== "string" || state !== expectedState) {
+    back("state");
+    return;
+  }
+
+  try {
+    const tok = await exchangeCodeForDriveToken(code);
+    await storeDriveToken(req.user.sub, tok.accessToken, tok.expiresIn);
+    back("connected");
+  } catch (err) {
+    console.error("Drive OAuth callback error:", err);
+    back("error");
   }
 });
 
