@@ -3,20 +3,21 @@ import { env } from "./env.js";
 import {
   PERSON_QUEUE,
   ITEM_QUEUE,
-  SMARTICO_QUEUE,
   getBullConnection,
   type GenerationJobData,
-  type SmarticoJobData,
 } from "./queues/index.js";
 import { processPersonJob } from "./queues/person.processor.js";
 import { processItemJob } from "./queues/item.processor.js";
-import { processSmarticoJob } from "./queues/smartico.processor.js";
 
 /**
  * Worker entrypoint (separate process / Railway service). Drains the person +
  * item queues. Both providers are synchronous (fal.run / nano-gpt), so jobs can
  * run for a while — the long lockDuration keeps BullMQ from reclaiming an
  * in-flight job. Run with `npm run worker`.
+ *
+ * Smartico jobs are intentionally NOT handled here: they read the uploaded ZIP
+ * from local temp storage on the API container, so they run inside the API
+ * process instead (see `queues/smartico.worker.ts`).
  */
 
 const LONG_LOCK_MS = 5 * 60 * 1000;
@@ -34,28 +35,19 @@ const itemWorker = new Worker<GenerationJobData, void, "generate">(
   { connection, concurrency: 5, lockDuration: LONG_LOCK_MS },
 );
 
-// Smartico jobs are heavy (ZIP extraction + many Cloudinary uploads); each job
-// parallelizes its own uploads internally, so keep the per-worker concurrency low.
-const smarticoWorker = new Worker<SmarticoJobData, unknown, "generate">(
-  SMARTICO_QUEUE,
-  (job) => processSmarticoJob(job),
-  { connection, concurrency: 2, lockDuration: LONG_LOCK_MS },
-);
-
 for (const [name, w] of [
   ["person", personWorker],
   ["item", itemWorker],
-  ["smartico", smarticoWorker],
 ] as const) {
   w.on("failed", (job, err) => console.error(`❌ ${name} job ${job?.id} failed:`, err.message));
   w.on("error", (err) => console.error(`⚠️ ${name} worker error:`, err.message));
 }
 
-console.log(`👷 Workers started (${env.NODE_ENV}) — person + item + smartico`);
+console.log(`👷 Workers started (${env.NODE_ENV}) — person + item`);
 
 async function shutdown(signal: string) {
   console.log(`\n${signal} received — closing workers`);
-  await Promise.allSettled([personWorker.close(), itemWorker.close(), smarticoWorker.close()]);
+  await Promise.allSettled([personWorker.close(), itemWorker.close()]);
   process.exit(0);
 }
 for (const s of ["SIGINT", "SIGTERM"] as const) process.on(s, () => void shutdown(s));
