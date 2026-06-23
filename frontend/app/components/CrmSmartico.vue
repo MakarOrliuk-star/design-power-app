@@ -51,9 +51,13 @@ const ERROR_TEXT: Record<string, string> = {
   network_error: "Сеть недоступна. Проверьте подключение.",
 };
 
+// `driveReturn` is the ?drive=... outcome captured by the parent (crm.vue) on a
+// Google OAuth return, passed in as a prop so this component doesn't depend on
+// the URL (which the parent scrubs right after).
+const props = defineProps<{ driveReturn?: string | null }>();
+
 const config = useRuntimeConfig();
 const api = useApi();
-const route = useRoute();
 const { copiedKey, markCopied } = useCopied(1800);
 
 // Two input sources, one shared result column. "zip" = upload an archive (legacy
@@ -475,10 +479,10 @@ async function copyCode(idx: number, code: string) {
 
 onMounted(() => {
   void fetchDriveStatus();
-  // Returned from the Drive consent flow (/crm?drive=...). Land the user in Drive
-  // mode and surface the outcome.
-  const d = route.query.drive;
-  if (typeof d === "string") {
+  // Returned from the Drive consent flow. Land the user in Drive mode and surface
+  // the outcome (the parent passes the ?drive=... value as a prop).
+  const d = props.driveReturn;
+  if (d) {
     mode.value = "drive";
     if (d === "connected") {
       driveConnected.value = true;
