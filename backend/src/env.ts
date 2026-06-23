@@ -26,6 +26,18 @@ const schema = z
     GOOGLE_CALLBACK_URL: z
       .string()
       .default("http://localhost:3001/auth/google/callback"),
+
+    // ---- Smartico × Google Drive (CRM) ----
+    // Drive read access is granted by the logged-in user (incremental OAuth with
+    // drive.readonly), NOT a service account — the shared "Promotional packs"
+    // folder is group-restricted, so only a member's own token can read it.
+    // Reuses GOOGLE_CLIENT_ID/SECRET; only the redirect URI differs.
+    GOOGLE_DRIVE_CALLBACK_URL: z
+      .string()
+      .default("http://localhost:3001/auth/google/drive/callback"),
+    // Optional: lock Drive navigation to descendants of this root folder id so
+    // the listing endpoints can't be pointed at arbitrary Drive folders.
+    SMARTICO_DRIVE_ROOT_ID: z.string().optional(),
     // Session JWT signing secret.
     JWT_SECRET: z.string().optional(),
     // Comma-separated emails that are auto-allowed AND promoted to ADMIN on first
@@ -66,6 +78,9 @@ export const JWT_SECRET = env.JWT_SECRET ?? "dev-insecure-secret-change-me";
 export const googleOAuthConfigured = Boolean(
   env.GOOGLE_CLIENT_ID && env.GOOGLE_CLIENT_SECRET,
 );
+
+/** Drive (Smartico) reuses the OAuth client — same readiness as login OAuth. */
+export const driveConfigured = googleOAuthConfigured;
 
 export const bootstrapAdminEmails = new Set(
   env.BOOTSTRAP_ADMIN_EMAILS.split(",")

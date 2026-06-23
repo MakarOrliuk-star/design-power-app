@@ -47,20 +47,53 @@ describe("generateOutputs", () => {
     expect(blocks[1]!.code).toContain("https://cdn/p2.png");
   });
 
-  it("renders All brands as a single-URL label, not a function", () => {
+  it("renders All brands as a constant-return function (Сквозной)", () => {
     const urls: UrlMap = {
       "All brands": { email: { default: "https://cdn/all.png", KO: null } },
       corgibet: { email: { default: "https://cdn/corgi.png", KO: null } },
     };
     const blocks = generateOutputs(urls, ["email"], [nb("All brands"), nb("corgibet")]);
-    const label = blocks.find((b) => b.kind === "label");
-    const fn = blocks.find((b) => b.kind === "function");
-    expect(label?.title).toBe("Email — All Brands (Label)");
-    expect(label?.code).toContain("Create a label with this image URL:");
-    expect(label?.code).toContain("https://cdn/all.png");
-    // the All-brands key must not leak into the individual-brand function
+    const all = blocks.find((b) => b.title.includes("All Brands"));
+    const fn = blocks.find((b) => b.title === "Email — Function");
+    expect(all?.kind).toBe("function");
+    expect(all?.title).toBe("Email — All Brands (Сквозной)");
+    expect(all?.code).toContain('return "https://cdn/all.png";');
+    expect(all?.code).toContain("Сквозной All brands");
+    expect(all?.code).not.toContain("core_sm_brand_id");
+    // the All-brands url must not leak into the individual-brand function
     expect(fn?.code).not.toContain("https://cdn/all.png");
     expect(fn?.code).toContain('"Corgibet": "https://cdn/corgi.png"');
+  });
+
+  it("emits Korea and Korea realistic as separate KO-guarded functions", () => {
+    const urls: UrlMap = {
+      Korea: { email: { default: "https://cdn/kr.png", KO: null } },
+      "Korea realistic": { email: { default: "https://cdn/kr-real.png", KO: null } },
+      corgibet: { email: { default: "https://cdn/corgi.png", KO: null } },
+    };
+    const blocks = generateOutputs(
+      urls,
+      ["email"],
+      [nb("Korea"), nb("Korea realistic"), nb("corgibet")],
+    );
+    const titles = blocks.map((b) => b.title);
+    expect(titles).toContain("Email — Korea (KO)");
+    expect(titles).toContain("Email — Korea realistic (KO)");
+
+    const korea = blocks.find((b) => b.title === "Email — Korea (KO)")!;
+    expect(korea.kind).toBe("function");
+    expect(korea.code).toContain("var language = state.core_user_language;");
+    expect(korea.code).toContain('if (language === "KO")');
+    expect(korea.code).toContain('return "https://cdn/kr.png";');
+    expect(korea.code).toContain("{{label.dynamic_image_default_unique}}");
+
+    const realistic = blocks.find((b) => b.title === "Email — Korea realistic (KO)")!;
+    expect(realistic.code).toContain('return "https://cdn/kr-real.png";');
+
+    // Korea must not leak into the individual-brand function
+    const fn = blocks.find((b) => b.title === "Email — Function")!;
+    expect(fn.code).not.toContain("https://cdn/kr.png");
+    expect(fn.code).not.toContain("Korea");
   });
 
   it("keeps a brand with only a Korean image as a plain default string", () => {

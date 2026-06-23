@@ -77,3 +77,68 @@ export async function exchangeCodeForProfile(
     ...(typeof payload.picture === "string" ? { picture: payload.picture } : {}),
   };
 }
+
+// ---- Incremental Drive authorization (Smartico × Google Drive) ----
+// A separate, opt-in consent on top of login: only CRM users who use the Drive
+// feature grant read access. Reuses the same OAuth client; only the redirect
+// URI + scope differ from login. Online access only — we keep the short-lived
+// access token in Redis (see lib/driveTokens.ts), no refresh token stored.
+
+const DRIVE_SCOPE = "https://www.googleapis.com/auth/drive.readonly";
+
+/** Build the Drive-consent URL. `loginHint` pre-selects the user's account. */
+export function buildDriveAuthUrl(state: string, loginHint?: string): string {
+  const params = new URLSearchParams({
+    client_id: env.GOOGLE_CLIENT_ID ?? "",
+    redirect_uri: env.GOOGLE_DRIVE_CALLBACK_URL,
+    response_type: "code",
+    scope: DRIVE_SCOPE,
+    state,
+    access_type: "online",
+    include_granted_scopes: "true",
+    prompt: "consent",
+  });
+  if (loginHint) params.set("login_hint", loginHint);
+  return `${GOOGLE_AUTH_URL}?${params.toString()}`;
+}
+
+export interface DriveToken {
+  accessToken: string;
+  expiresIn: number; // seconds until expiry (typically 3600)
+  scope: string;
+}
+
+/** Exchange the Drive-consent code for a short-lived access token. */
+export async function exchangeCodeForDriveToken(code: string): Promise<DriveToken> {
+  const body = new URLSearchParams({
+    code,
+    client_id: env.GOOGLE_CLIENT_ID ?? "",
+    client_secret: env.GOOGLE_CLIENT_SECRET ?? "",
+    redirect_uri: env.GOOGLE_DRIVE_CALLBACK_URL,
+    grant_type: "authorization_code",
+  });
+
+  const res = await fetch(GOOGLE_TOKEN_URL, {
+    method: "POST",
+    headers: { "Content-Type": "application/x-www-form-urlencoded" },
+    body,
+  });
+
+  if (!res.ok) {
+    const text = await res.text();
+    throw new Error(`Drive token exchange failed (${res.status}): ${text.slice(0, 200)}`);
+  }
+
+  const tokens = (await res.json()) as {
+    access_token?: string;
+    expires_in?: number;
+    scope?: string;
+  };
+  if (!tokens.access_token) throw new Error("No access_token in Google Drive response");
+
+  return {
+    accessToken: tokens.access_token,
+    expiresIn: typeof tokens.expires_in === "number" ? tokens.expires_in : 3600,
+    scope: tokens.scope ?? "",
+  };
+}

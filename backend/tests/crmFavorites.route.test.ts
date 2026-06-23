@@ -55,6 +55,16 @@ describe("POST /api/crm/favorites/:serviceKey", () => {
     expect(db.upsert).toHaveBeenCalledOnce();
   });
 
+  // Regression: "smartico" is a real (non-soon) service and MUST be favoritable.
+  // It was missing from the allowlist, so its star silently reverted (400).
+  it("upserts a favorite for the smartico service key", async () => {
+    db.upsert.mockResolvedValue({});
+    const res = await request(makeApp()).post("/api/crm/favorites/smartico");
+    expect(res.status).toBe(200);
+    expect(res.body).toEqual({ ok: true });
+    expect(db.upsert).toHaveBeenCalledOnce();
+  });
+
   // The allowlist guards against junk keys AND against favoriting a "soon" tile
   // (e.g. rebrandly), which has no real logic yet.
   it("rejects an unknown / soon service key with 400", async () => {
