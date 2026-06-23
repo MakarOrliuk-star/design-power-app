@@ -12,7 +12,7 @@ const { theme, toggle: toggleTheme } = useTheme();
 
 // Only services with real logic are openable (and favoritable). The "soon"
 // tiles are disabled placeholders — see SERVICES below.
-type ServiceKey = "calculator" | "bonuscalc" | "auditor" | "smartico";
+type ServiceKey = "calculator" | "bonuscalc" | "auditor" | "smartico"| "prioritycalc";
 const activeService = ref<null | ServiceKey>(null);
 
 interface Service {
@@ -82,6 +82,16 @@ const SERVICES: Service[] = [
     soon: false,
     externalUrl: config.public.googleDriveUrl as string, 
   },
+
+  {
+    key: "prioritycalc",
+    title: "Калькулятор Приоритетов",
+    desc: "Быстрый скоринг при постановке задач на основе сложности, уверенности и финансового импакта.",
+    icon: "⚖️", 
+    iconBg: "#f5f3ff", 
+    footer: "Оценить задачу →",
+    soon: false,
+  }
 ];
 
 const SERVICE_TITLES: Record<ServiceKey, string> = {
@@ -89,6 +99,7 @@ const SERVICE_TITLES: Record<ServiceKey, string> = {
   bonuscalc: "Калькулятор Бонусов",
   auditor: "Массовый аудит",
   smartico: "Unique Image Smartico",
+  prioritycalc: "Калькулятор Приоритетов"
 };
 
 const displayName = computed(() => auth.user?.name || auth.user?.email || "");
