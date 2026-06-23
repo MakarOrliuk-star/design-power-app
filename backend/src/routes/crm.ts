@@ -6,9 +6,13 @@ import { prisma } from "../lib/prisma.js";
 // Per-user favorite CRM services. Services are a static list (not DB rows), so
 // favorites are keyed by a string serviceKey validated against this allowlist.
 // Only services with real logic are favoritable — "soon" tiles are excluded.
+//
+// IMPORTANT: keep this set in sync with the non-`soon` service keys in
+// frontend/app/pages/crm.vue (SERVICES). A working tile that is missing here
+// can't be favorited — its star silently reverts (400 invalid_service_key).
 export const crmRouter: Router = Router();
 
-const VALID_SERVICE_KEYS = new Set(["calculator", "bonuscalc", "auditor"]);
+const VALID_SERVICE_KEYS = new Set(["calculator", "bonuscalc", "auditor", "smartico"]);
 
 /** Current user's favorite service keys. */
 crmRouter.get("/favorites", async (req: Request, res: Response) => {

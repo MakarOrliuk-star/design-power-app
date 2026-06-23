@@ -65,7 +65,7 @@ const SERVICES: Service[] = [
   },
   {
     key: "smartico",
-    title: "Unique-Image-Smartico",
+    title: "Unique Image Smartico",
     desc: "Генерация уникальных изображений под кампании Smartico без ручной обработки.",
     icon: "🖼️",
     iconBg: "#fdf2f8",
@@ -120,6 +120,9 @@ async function logout() {
 
 onMounted(() => {
   if (!crm.ready) void crm.fetchFavorites();
+  // Returning from the Google Drive consent flow (/crm?drive=...) — drop the user
+  // straight back into the Smartico service, which reads the status itself.
+  if (useRoute().query.drive) activeService.value = "smartico";
 });
 </script>
 

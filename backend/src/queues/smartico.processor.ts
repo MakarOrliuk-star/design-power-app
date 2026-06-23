@@ -1,7 +1,5 @@
-import { createHash } from "node:crypto";
 import type { Job } from "bullmq";
 import { prisma } from "../lib/prisma.js";
-import { uploadBuffer, withRetry } from "../lib/cloudinary.js";
 import { listEntryPaths, extractAndProcess } from "../lib/smartico/zip.js";
 import { zipPathForToken, removeToken } from "../lib/smartico/storage.js";
 import {
@@ -13,6 +11,7 @@ import {
   type NormalizedBrand,
 } from "../lib/smartico/detect.js";
 import { generateOutputs, type OutputBlock } from "../lib/smartico/generate.js";
+import { uploadSmarticoAsset } from "../lib/smartico/uploadAsset.js";
 import type { SmarticoJobData } from "./index.js";
 
 const UPLOAD_CONCURRENCY = 5;
@@ -35,20 +34,6 @@ export interface SmarticoJobResult {
     failed: number;
     failedItems: string[];
   };
-}
-
-function sanitize(s: string): string {
-  return (
-    s
-      .normalize("NFKD")
-      .replace(/[^A-Za-z0-9._-]+/g, "-")
-      .replace(/^-+|-+$/g, "")
-      .slice(0, 80) || "x"
-  );
-}
-
-function publicIdFor(brand: string, type: TypeKey, locale: LocaleKey): string {
-  return `${sanitize(brand)}_${sanitize(type)}${locale === "KO" ? "_ko" : ""}`;
 }
 
 export async function processSmarticoJob(job: Job<SmarticoJobData>): Promise<SmarticoJobResult> {
@@ -98,49 +83,20 @@ export async function processSmarticoJob(job: Job<SmarticoJobData>): Promise<Sma
       await extractAndProcess(zipPath, wanted, UPLOAD_CONCURRENCY, async (path, buffer) => {
         const m = meta.get(path)!;
         const label = `${m.brand}/${m.type}${m.locale === "KO" ? "/KO" : ""}`;
-        const md5 = createHash("md5").update(buffer).digest("hex");
-        const where = {
-          zipName_brand_type_locale: {
-            zipName,
+        try {
+          const outcome = await uploadSmarticoAsset(buffer, {
+            namespace: zipName,
             brand: m.brand,
             type: m.type,
             locale: m.locale,
-          },
-        };
-        try {
-          const existing = await prisma.smarticoAsset.findUnique({ where });
-          if (existing && existing.md5 === md5) {
-            setUrl(m.brand, m.type, m.locale, existing.secureUrl);
-            reused++;
-          } else {
-            const folder = `smartico/${sanitize(zipName)}`;
-            const publicId = publicIdFor(m.brand, m.type, m.locale);
-            const up = await withRetry(
-              () => uploadBuffer(buffer, publicId, folder, true),
-              label,
-            );
-            if (up.success && up.secure_url) {
-              await prisma.smarticoAsset.upsert({
-                where,
-                create: {
-                  zipName,
-                  brand: m.brand,
-                  type: m.type,
-                  locale: m.locale,
-                  md5,
-                  secureUrl: up.secure_url,
-                  publicId: up.public_id ?? publicId,
-                },
-                update: { md5, secureUrl: up.secure_url, publicId: up.public_id ?? publicId },
-              });
-              setUrl(m.brand, m.type, m.locale, up.secure_url);
-              uploaded++;
-            } else {
-              setUrl(m.brand, m.type, m.locale, null);
-              failed++;
-              failedItems.push(label);
-              console.error(`⚠️ Smartico upload failed for ${label}: ${up.error ?? "unknown"}`);
-            }
+          });
+          setUrl(m.brand, m.type, m.locale, outcome.url);
+          if (outcome.status === "uploaded") uploaded++;
+          else if (outcome.status === "reused") reused++;
+          else {
+            failed++;
+            failedItems.push(label);
+            console.error(`⚠️ Smartico upload failed for ${label}: ${outcome.error ?? "unknown"}`);
           }
         } catch (e) {
           setUrl(m.brand, m.type, m.locale, null);
