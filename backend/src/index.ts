@@ -51,12 +51,12 @@ const server = app.listen(env.PORT, "0.0.0.0", () => {
   console.log(`Backend listening on http://0.0.0.0:${env.PORT} (${env.NODE_ENV})`);
   initCronJobs();
 
-  console.log("🔄 Запуск первоначального прогрева кеша курсов...");
+  
   calculatorService.fetchFiatRates();
   calculatorService.fetchCryptoRates(CRYPTO_CODES);
 
   setInterval(() => {
-    console.log("⏰ Проснулся суточный таймер: обновляем курсы валют...");
+
     calculatorService.fetchFiatRates();
     calculatorService.fetchCryptoRates(CRYPTO_CODES);
   }, 24 * 60 * 60 * 1000);
