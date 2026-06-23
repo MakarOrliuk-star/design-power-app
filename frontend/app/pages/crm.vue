@@ -279,6 +279,7 @@ onMounted(() => {
           <CrmBonusCalculator v-else-if="activeService === 'bonuscalc'" />
           <CrmAuditor v-else-if="activeService === 'auditor'" />
           <CrmSmartico v-else-if="activeService === 'smartico'" />
+          <PriorityCalculator v-else-if="activeService === 'prioritycalc'" />
         </div>
       </div>
     </div>
