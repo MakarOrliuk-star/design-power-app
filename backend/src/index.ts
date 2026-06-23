@@ -15,6 +15,9 @@ import { crmRouter } from "./routes/crm.js";
 import { smarticoRouter } from "./routes/smartico.js";
 import { startSmarticoWorker, stopSmarticoWorker } from "./queues/smartico.worker.js";
 
+import { calculatorService } from "./services/calculator.service.js";
+import { CRYPTO_CODES } from "./config/calculator.config.js";
+
 assertApiProductionConfig();
 
 const app = express();
@@ -48,6 +51,17 @@ app.use("/api", loadUser, requireAuth, requireZone("DESIGNER"), generateRouter);
 const server = app.listen(env.PORT, "0.0.0.0", () => {
   console.log(`Backend listening on http://0.0.0.0:${env.PORT} (${env.NODE_ENV})`);
   initCronJobs();
+
+  
+  calculatorService.fetchFiatRates();
+  calculatorService.fetchCryptoRates(CRYPTO_CODES);
+
+  setInterval(() => {
+
+    calculatorService.fetchFiatRates();
+    calculatorService.fetchCryptoRates(CRYPTO_CODES);
+  }, 24 * 60 * 60 * 1000);
+  
   // Smartico jobs read the uploaded ZIP from this container's local temp dir, so
   // they must be processed here (not on the separate worker container).
   startSmarticoWorker();
