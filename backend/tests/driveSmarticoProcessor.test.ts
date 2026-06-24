@@ -81,6 +81,27 @@ function wireHappyTree() {
   });
 }
 
+// Like wireHappyTree but with a single brand whose event has CRM + SMARTICO,
+// and SMARTICO holds card.webp.
+function wireWithSmartico() {
+  drive.list.mockImplementation(async (_tok: string, folderId: string) => {
+    switch (folderId) {
+      case "branch1":
+        return [folder("brandA", "BrandA")];
+      case "brandA":
+        return [folder("evtA", "Tournament Summer VIP")];
+      case "evtA":
+        return [folder("crmA", "CRM"), folder("smA", "SMARTICO")];
+      case "crmA":
+        return [file("e", "email.webp"), file("p", "push.webp")];
+      case "smA":
+        return [file("c", "card.webp")];
+      default:
+        return [];
+    }
+  });
+}
+
 describe("processDriveSmarticoJob", () => {
   it("walks every brand, pulls the chosen types, and builds functions", async () => {
     wireHappyTree();
@@ -141,6 +162,34 @@ describe("processDriveSmarticoJob", () => {
     expect(result.stats.uploaded).toBe(1);
     expect(result.stats.failed).toBe(1);
     expect(result.stats.failedItems).toContain("BrandA/push");
+  });
+
+  it("adds a Smartico card.webp function when includeSmartico is on", async () => {
+    wireWithSmartico();
+    const result = await processDriveSmarticoJob(makeJob({ includeSmartico: true }));
+
+    // email + push (CRM) + card (SMARTICO)
+    expect(drive.download).toHaveBeenCalledTimes(3);
+    const cardCall = asset.upload.mock.calls.find(
+      (c: unknown[]) => (c[1] as { type: string }).type === "card",
+    );
+    expect(cardCall).toBeTruthy();
+    expect(cardCall![1]).toMatchObject({ brand: "BrandA", type: "card", locale: "default" });
+
+    const titles = result.outputs.map((o) => o.title);
+    expect(titles).toContain("Smartico — Card");
+    const cardBlock = result.outputs.find((o) => o.title === "Smartico — Card")!;
+    expect(cardBlock.code).toContain('"BrandA": "https://cdn/BrandA_card"');
+    expect(result.stats.uploaded).toBe(3);
+  });
+
+  it("ignores the SMARTICO folder when includeSmartico is off", async () => {
+    wireWithSmartico();
+    const result = await processDriveSmarticoJob(makeJob()); // flag absent
+
+    expect(drive.download).toHaveBeenCalledTimes(2); // email + push only
+    expect(asset.upload.mock.calls.some((c: unknown[]) => (c[1] as { type: string }).type === "card")).toBe(false);
+    expect(result.outputs.map((o) => o.title)).not.toContain("Smartico — Card");
   });
 
   it("throws when the Drive token is missing", async () => {

@@ -325,7 +325,7 @@ onMounted(() => {
 .crm {
   display: flex;
   flex-direction: column;
-  gap: 24px;
+  gap: var(--space-20);
   height: 100%;
   min-height: 0;
 }
@@ -459,12 +459,12 @@ onMounted(() => {
   flex: 1;
   min-height: 0;
   overflow-y: auto;
-  padding-top: 4px;
-  padding-bottom: 24px;
+  padding-top: var(--space-4);
+  padding-bottom: var(--space-20);
 }
 
 .services-section {
-  margin-bottom: 28px;
+  margin-bottom: var(--space-32);
 }
 .services-section:last-child {
   margin-bottom: 0;
@@ -488,7 +488,7 @@ onMounted(() => {
   background: var(--color-white);
   border: 1px solid var(--color-border);
   border-radius: var(--radius-lg);
-  padding: 28px;
+  padding: var(--space-32);
   cursor: pointer;
   box-shadow: var(--shadow-card);
   display: flex;
@@ -587,7 +587,7 @@ onMounted(() => {
   background: var(--color-white);
   border: 1px solid var(--color-border);
   border-radius: var(--radius-lg);
-  padding: 28px;
+  padding: var(--space-32);
   box-shadow: var(--shadow-card);
   min-height: 500px;
 }

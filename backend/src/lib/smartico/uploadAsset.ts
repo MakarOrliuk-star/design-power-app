@@ -14,10 +14,14 @@ import type { TypeKey, LocaleKey } from "./detect.js";
  * `zipName` column (a generic per-pack namespace, despite the legacy name).
  */
 
+// "card" is the Tournament Smartico image (card.webp); it isn't a CRM TypeKey but
+// shares the same dedup/upload path. The DB `type` column is a plain string.
+export type AssetType = TypeKey | "card";
+
 export interface AssetParams {
   namespace: string;
   brand: string;
-  type: TypeKey;
+  type: AssetType;
   locale: LocaleKey;
 }
 
@@ -40,7 +44,7 @@ export function sanitize(s: string): string {
   );
 }
 
-export function publicIdFor(brand: string, type: TypeKey, locale: LocaleKey): string {
+export function publicIdFor(brand: string, type: AssetType, locale: LocaleKey): string {
   return `${sanitize(brand)}_${sanitize(type)}${locale === "KO" ? "_ko" : ""}`;
 }
 

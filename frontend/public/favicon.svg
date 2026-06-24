@@ -1,19 +1,16 @@
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" width="64" height="64">
   <defs>
-    <linearGradient id="mkWave" x1="0" y1="11" x2="46" y2="11" gradientUnits="userSpaceOnUse">
-      <stop stop-color="#6A72D9"/>
-      <stop offset="0.51" stop-color="#8151AA"/>
-      <stop offset="1" stop-color="#DD88ED"/>
+    <linearGradient id="mkWave" x1="22" y1="32" x2="46" y2="32" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#5B6BE8"/>
+      <stop offset="0.5" stop-color="#8B5BC4"/>
+      <stop offset="1" stop-color="#E08CEE"/>
     </linearGradient>
   </defs>
-  <rect x="1.5" y="1.5" width="61" height="61" rx="15" fill="#FFFFFF" stroke="#CFCFCF" stroke-width="1.5"/>
-  <g fill="#1F1F1F" font-family="Inter, 'Segoe UI', Roboto, Arial, sans-serif" font-weight="600" font-size="24">
-    <text x="6" y="40">m</text>
-    <text x="47" y="40">k</text>
+  <rect x="1.5" y="1.5" width="61" height="61" rx="16" fill="#FFFFFF" stroke="#E2E2E2" stroke-width="1.5"/>
+  <g fill="#1A1A1A" font-family="Inter, 'Segoe UI', Roboto, Arial, sans-serif" font-weight="600" font-size="26">
+    <text x="7" y="41">m</text>
+    <text x="46" y="41">k</text>
   </g>
-  <g transform="translate(23 22)">
-    <path d="M1 11 C 5 1, 11 1, 15 11 S 25 21, 29 11 S 39 1, 45 11"
-          transform="scale(0.5)"
-          stroke="url(#mkWave)" stroke-width="3" stroke-linecap="round" fill="none"/>
-  </g>
+  <path d="M22 32 C 24.7 25, 28.3 25, 31 32 S 37.3 39, 40 32 S 46 25, 46 32"
+        stroke="url(#mkWave)" stroke-width="3.2" stroke-linecap="round" stroke-linejoin="round" fill="none"/>
 </svg>

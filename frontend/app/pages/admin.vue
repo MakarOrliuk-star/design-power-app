@@ -13,7 +13,7 @@ interface AdminUser {
   id: string;
   email: string;
   name: string | null;
-  role: "ADMIN" | "DESIGNER" | "CRM";
+  role: "ADMIN" | "DESIGNER" | "CRM" | "MANAGER";
   isActive: boolean;
   lastLoginAt: string | null;
 }
@@ -400,10 +400,11 @@ onMounted(() => {
               <select
                 :value="u.role"
                 :disabled="u.id === auth.user?.id"
-                @change="patchUser(u, { role: ($event.target as HTMLSelectElement).value as 'ADMIN' | 'DESIGNER' | 'CRM' })"
+                @change="patchUser(u, { role: ($event.target as HTMLSelectElement).value as 'ADMIN' | 'DESIGNER' | 'CRM' | 'MANAGER' })"
               >
                 <option value="DESIGNER">DESIGNER</option>
                 <option value="CRM">CRM</option>
+                <option value="MANAGER">MANAGER</option>
                 <option value="ADMIN">ADMIN</option>
               </select>
             </td>
@@ -663,7 +664,7 @@ onMounted(() => {
 .admin {
   display: flex;
   flex-direction: column;
-  gap: 24px;
+  gap: var(--space-20);
   height: 100%;
   min-height: 0;
   overflow-y: auto;
@@ -675,7 +676,7 @@ h1 {
   background: var(--color-window);
   border: 1px solid var(--color-border);
   border-radius: var(--radius-lg);
-  padding: 24px;
+  padding: var(--space-32);
 }
 h2 {
   margin: 0 0 16px;

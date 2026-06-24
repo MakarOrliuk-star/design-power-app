@@ -281,7 +281,15 @@ const driveGenerateSchema = z.object({
   branchName: z.string().min(1).max(200),
   eventName: z.string().min(1).max(300),
   selectedTypes: z.array(z.enum(["email", "pop-up", "push"])).min(1),
+  // TASK D3: also build a card.webp Smartico function. Honoured only for
+  // Tournament branches (enforced below), where the SMARTICO/card.webp folder exists.
+  includeSmartico: z.boolean().optional(),
 });
+
+/** Tournament branches are the only ones with a SMARTICO/card.webp folder. */
+function isTournamentBranch(name: string): boolean {
+  return /tournament/i.test(name);
+}
 
 /** Step 4–5: enqueue the Drive generation job for the chosen event. */
 smarticoRouter.post("/drive/generate", async (req: Request, res: Response) => {
@@ -310,6 +318,8 @@ smarticoRouter.post("/drive/generate", async (req: Request, res: Response) => {
   // De-dup types while preserving canonical order.
   const types = (["email", "pop-up", "push"] as const).filter((t) => selectedTypes.includes(t));
   const packName = `${branchName} — ${eventName}`;
+  // Smartico card.webp only applies to Tournament branches — ignore the flag elsewhere.
+  const includeSmartico = parsed.data.includeSmartico === true && isTournamentBranch(branchName);
 
   try {
     const job = await getSmarticoQueue().add("drive", {
@@ -319,6 +329,7 @@ smarticoRouter.post("/drive/generate", async (req: Request, res: Response) => {
       eventName,
       packName,
       selectedTypes: types,
+      includeSmartico,
     });
     res.status(202).json({ jobId: job.id });
   } catch (err) {

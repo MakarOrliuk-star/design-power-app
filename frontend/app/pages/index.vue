@@ -102,7 +102,7 @@ function openAssets() {
 .home {
   display: flex;
   flex-direction: column;
-  gap: 24px;
+  gap: var(--space-20);
   height: 100%;
   min-height: 0;
 }
@@ -118,17 +118,17 @@ function openAssets() {
   background: var(--color-white);
   border: 1px solid var(--color-border);
   border-radius: var(--radius-lg);
-  padding: 24px 28px;
+  padding: var(--space-32);
   display: flex;
   flex-direction: column;
-  gap: 20px;
+  gap: var(--space-20);
 }
 
 /* control row */
 .top {
   display: flex;
   align-items: center;
-  gap: 24px;
+  gap: var(--space-16);
   flex-wrap: wrap;
 }
 .search {
@@ -234,8 +234,8 @@ function openAssets() {
    bottom padding so the last row can scroll out from under it. */
 .assets {
   position: absolute;
-  right: 28px;
-  bottom: 20px;
+  right: var(--space-32);
+  bottom: var(--space-20);
   display: inline-flex;
   align-items: center;
   gap: 8px;
@@ -265,7 +265,7 @@ function openAssets() {
   }
   .board__cols {
     grid-template-columns: 1fr;
-    gap: 24px;
+    gap: var(--space-20);
     height: auto;
   }
   .board__picker {

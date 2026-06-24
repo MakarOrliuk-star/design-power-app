@@ -5,7 +5,7 @@ export interface AuthUser {
   email: string;
   name?: string | null;
   avatarUrl?: string | null;
-  role: "ADMIN" | "DESIGNER" | "CRM";
+  role: "ADMIN" | "DESIGNER" | "CRM" | "MANAGER";
 }
 
 /**
@@ -20,9 +20,14 @@ export const useAuthStore = defineStore("auth", () => {
   const isAdmin = computed(() => user.value?.role === "ADMIN");
   const isCrm = computed(() => user.value?.role === "CRM");
   const isDesigner = computed(() => user.value?.role === "DESIGNER");
-  // Zone access — ADMIN reaches both zones; the others are walled off.
-  const canDesign = computed(() => user.value?.role === "ADMIN" || user.value?.role === "DESIGNER");
-  const canCrm = computed(() => user.value?.role === "ADMIN" || user.value?.role === "CRM");
+  // Zone access — ADMIN and MANAGER reach both zones; DESIGNER/CRM are walled off
+  // to their own. (MANAGER = Design + CRM, but not /admin → see isAdmin.)
+  const canDesign = computed(
+    () => user.value?.role === "ADMIN" || user.value?.role === "MANAGER" || user.value?.role === "DESIGNER",
+  );
+  const canCrm = computed(
+    () => user.value?.role === "ADMIN" || user.value?.role === "MANAGER" || user.value?.role === "CRM",
+  );
 
   async function fetchMe() {
     try {

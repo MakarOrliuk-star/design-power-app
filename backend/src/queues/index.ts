@@ -34,6 +34,9 @@ export interface DriveSmarticoJobData {
   eventName: string; // chosen event/tournament folder name, identical per brand
   packName: string; // dedup namespace + Cloudinary folder ("<branch> — <event>")
   selectedTypes: string[]; // subset of email | pop-up | push
+  // Tournament-only (TASK D3): also read <brand>/<event>/SMARTICO/card.webp and
+  // emit a separate Smartico function. Guarded to Tournament branches in the route.
+  includeSmartico?: boolean;
 }
 
 export type SmarticoQueueData = SmarticoJobData | DriveSmarticoJobData;
