@@ -96,6 +96,69 @@ function buildKoreaFunction(url: string, displayType: string, label: string): st
   return output;
 }
 
+/**
+ * Smartico card.webp function (TASK D3 — Tournament only). Same multi-brand shape
+ * as the CRM functions, but a single image per brand (card.webp, no localization).
+ * Emitted as its own block in addition to the selected CRM-type functions.
+ */
+export function generateSmarticoCardOutputs(
+  cardUrls: Record<string, string | null>,
+  brands: NormalizedBrand[],
+): OutputBlock[] {
+  const displayType = "Smartico";
+  const canonicalByRaw = new Map<string, string>();
+  let allBrandsRaw: string | null = null;
+  const koreaBrands: NormalizedBrand[] = [];
+  const individualRaws: string[] = [];
+  for (const b of brands) {
+    canonicalByRaw.set(b.raw, b.canonical);
+    if (b.isAllBrands) allBrandsRaw = b.raw;
+    else if (b.isKorea) koreaBrands.push(b);
+    else individualRaws.push(b.raw);
+  }
+
+  const blocks: OutputBlock[] = [];
+
+  const entries: string[] = [];
+  for (const raw of individualRaws) {
+    const url = cardUrls[raw];
+    if (!url) continue;
+    const canonical = canonicalByRaw.get(raw) ?? raw;
+    entries.push(`        "${canonical}": "${url}"`);
+  }
+  if (entries.length > 0) {
+    blocks.push({
+      title: `${displayType} — Card`,
+      code: buildFunction(entries, false, displayType),
+      kind: "function",
+    });
+  }
+
+  if (allBrandsRaw) {
+    const url = cardUrls[allBrandsRaw];
+    if (url) {
+      blocks.push({
+        title: `${displayType} — All Brands (Сквозной)`,
+        code: buildConstantFunction(url, displayType),
+        kind: "function",
+      });
+    }
+  }
+
+  for (const k of koreaBrands) {
+    const url = cardUrls[k.raw];
+    if (url) {
+      blocks.push({
+        title: `${displayType} — ${k.raw} (KO)`,
+        code: buildKoreaFunction(url, displayType, k.raw),
+        kind: "function",
+      });
+    }
+  }
+
+  return blocks;
+}
+
 export function generateOutputs(
   urls: UrlMap,
   selectedTypes: TypeKey[],

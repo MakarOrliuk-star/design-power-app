@@ -23,6 +23,9 @@ enum Role {
   ADMIN
   DESIGNER
   CRM
+  // MANAGER reaches BOTH the Design and CRM zones (but not /admin). Treated like
+  // ADMIN by requireZone for zone access; blocked from admin routes by requireAdmin.
+  MANAGER
 }
 
 model User {

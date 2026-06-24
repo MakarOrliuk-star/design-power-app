@@ -13,7 +13,7 @@ import {
   normalizeBrand,
   type TypeKey,
 } from "../lib/smartico/detect.js";
-import { generateOutputs } from "../lib/smartico/generate.js";
+import { generateOutputs, generateSmarticoCardOutputs } from "../lib/smartico/generate.js";
 import { uploadSmarticoAsset } from "../lib/smartico/uploadAsset.js";
 import type { SmarticoJobResult, SmarticoUrlSlot } from "./smartico.processor.js";
 import type { DriveSmarticoJobData } from "./index.js";
@@ -28,6 +28,9 @@ import type { DriveSmarticoJobData } from "./index.js";
 
 const BRAND_CONCURRENCY = 5;
 const CRM_FOLDER = "CRM";
+// Tournament-only sibling of CRM holding a single card image (TASK D3).
+const SMARTICO_FOLDER = "SMARTICO";
+const CARD_FILENAME = "card.webp";
 
 // The CRM folder always holds exactly these filenames (guaranteed by the team).
 const DRIVE_FILENAME: Partial<Record<TypeKey, string>> = {
@@ -58,6 +61,7 @@ export async function processDriveSmarticoJob(
 ): Promise<SmarticoJobResult> {
   const { userId, branchId, eventName, packName } = job.data;
   const selectedTypes = job.data.selectedTypes as TypeKey[];
+  const includeSmartico = job.data.includeSmartico === true;
 
   const token = await getDriveToken(userId);
   if (!token) throw new Error("drive_not_connected");
@@ -69,6 +73,7 @@ export async function processDriveSmarticoJob(
   const brandMap = buildBrandMap(rows.map((r) => r.name));
 
   const urls: Record<string, Partial<Record<TypeKey, SmarticoUrlSlot>>> = {};
+  const cardUrls: Record<string, string | null> = {}; // raw brand → card.webp URL
   const failedItems: string[] = [];
   let uploaded = 0;
   let reused = 0;
@@ -84,46 +89,78 @@ export async function processDriveSmarticoJob(
   await mapPool(brandFolders, BRAND_CONCURRENCY, async (brandFolder) => {
     const rawBrand = brandFolder.name.trim();
     try {
-      // brand → <event> → CRM
+      // brand → <event> → { CRM, SMARTICO }
       const eventFolder = findChildFolder(
         await listFolderChildren(token, brandFolder.id),
         eventName,
       );
       if (!eventFolder) return; // this brand doesn't have the chosen event
-      const crmFolder = findChildFolder(
-        await listFolderChildren(token, eventFolder.id),
-        CRM_FOLDER,
-      );
-      if (!crmFolder) return;
+      const eventChildren = await listFolderChildren(token, eventFolder.id);
 
-      const crmFiles = await listFolderChildren(token, crmFolder.id);
-      for (const type of selectedTypes) {
-        const filename = DRIVE_FILENAME[type];
-        if (!filename) continue;
-        const file = findChildFile(crmFiles, filename);
-        if (!file) continue;
+      // ---- CRM: one image per selected type (default folder of the event) ----
+      const crmFolder = findChildFolder(eventChildren, CRM_FOLDER);
+      if (crmFolder) {
+        const crmFiles = await listFolderChildren(token, crmFolder.id);
+        for (const type of selectedTypes) {
+          const filename = DRIVE_FILENAME[type];
+          if (!filename) continue;
+          const file = findChildFile(crmFiles, filename);
+          if (!file) continue;
 
-        const label = `${rawBrand}/${type}`;
-        try {
-          const buffer = await downloadDriveFile(token, file.id);
-          const outcome = await uploadSmarticoAsset(buffer, {
-            namespace: packName,
-            brand: rawBrand,
-            type,
-            locale: "default",
-          });
-          setUrl(rawBrand, type, outcome.url);
-          if (outcome.status === "uploaded") uploaded++;
-          else if (outcome.status === "reused") reused++;
-          else {
+          const label = `${rawBrand}/${type}`;
+          try {
+            const buffer = await downloadDriveFile(token, file.id);
+            const outcome = await uploadSmarticoAsset(buffer, {
+              namespace: packName,
+              brand: rawBrand,
+              type,
+              locale: "default",
+            });
+            setUrl(rawBrand, type, outcome.url);
+            if (outcome.status === "uploaded") uploaded++;
+            else if (outcome.status === "reused") reused++;
+            else {
+              failed++;
+              failedItems.push(label);
+            }
+          } catch (e) {
+            if (isFatalDriveError(e)) throw e;
             failed++;
             failedItems.push(label);
+            console.error(`⚠️ Drive image error for ${label}:`, e);
           }
-        } catch (e) {
-          if (isFatalDriveError(e)) throw e;
-          failed++;
-          failedItems.push(label);
-          console.error(`⚠️ Drive image error for ${label}:`, e);
+        }
+      }
+
+      // ---- SMARTICO: a single card.webp (Tournament only, opt-in) ----
+      if (includeSmartico) {
+        const smFolder = findChildFolder(eventChildren, SMARTICO_FOLDER);
+        const smFile = smFolder
+          ? findChildFile(await listFolderChildren(token, smFolder.id), CARD_FILENAME)
+          : undefined;
+        if (smFile) {
+          const label = `${rawBrand}/card`;
+          try {
+            const buffer = await downloadDriveFile(token, smFile.id);
+            const outcome = await uploadSmarticoAsset(buffer, {
+              namespace: packName,
+              brand: rawBrand,
+              type: "card",
+              locale: "default",
+            });
+            cardUrls[rawBrand] = outcome.url;
+            if (outcome.status === "uploaded") uploaded++;
+            else if (outcome.status === "reused") reused++;
+            else {
+              failed++;
+              failedItems.push(label);
+            }
+          } catch (e) {
+            if (isFatalDriveError(e)) throw e;
+            failed++;
+            failedItems.push(label);
+            console.error(`⚠️ Drive image error for ${label}:`, e);
+          }
         }
       }
     } catch (e) {
@@ -137,8 +174,13 @@ export async function processDriveSmarticoJob(
     }
   });
 
-  const brands = Object.keys(urls).map((raw) => normalizeBrand(raw, brandMap));
+  // Brands seen via CRM and/or the Smartico card folder (a brand may have only one).
+  const rawBrands = Array.from(new Set([...Object.keys(urls), ...Object.keys(cardUrls)]));
+  const brands = rawBrands.map((raw) => normalizeBrand(raw, brandMap));
   const outputs = generateOutputs(urls, selectedTypes, brands);
+  if (includeSmartico) {
+    outputs.push(...generateSmarticoCardOutputs(cardUrls, brands));
+  }
 
   await job.updateProgress(100);
   return {

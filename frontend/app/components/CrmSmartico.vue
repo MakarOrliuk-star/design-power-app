@@ -163,6 +163,9 @@ const driveConnected = ref(false);
 const driveStatusReady = ref(false);
 
 const driveSelectedTypes = ref<DriveType[]>(["email", "pop-up", "push"]);
+// Tournament-only Smartico card.webp (TASK D3): an extra function built from the
+// SMARTICO/card.webp folder, in addition to the CRM-type functions.
+const includeSmartico = ref(false);
 const driveUrl = ref("");
 type DriveStep = "idle" | "branch" | "event";
 const driveStep = ref<DriveStep>("idle");
@@ -180,6 +183,12 @@ const canGenerateDrive = computed(
     driveStep.value === "event" &&
     !!selectedEvent.value &&
     driveSelectedTypes.value.length > 0,
+);
+
+// The Smartico card.webp checkbox only makes sense for Tournament branches
+// (the only ones with a SMARTICO/card.webp folder). Mirrors the backend guard.
+const isTournamentBranch = computed(() =>
+  /tournament/i.test(selectedBranch.value?.name ?? ""),
 );
 
 function driveErrText(code: string | undefined): string {
@@ -206,6 +215,7 @@ function resetDriveWizard() {
   selectedBranch.value = null;
   events.value = [];
   selectedEvent.value = "";
+  includeSmartico.value = false;
 }
 
 async function fetchDriveStatus() {
@@ -269,6 +279,7 @@ async function pickBranch(b: DriveFolder) {
   driveBusy.value = true;
   selectedBranch.value = b;
   selectedEvent.value = "";
+  includeSmartico.value = false;
   try {
     const brandFolders = await listChildren(b.id);
     if (!brandFolders.length) {
@@ -311,6 +322,7 @@ async function generateDrive() {
         branchName: selectedBranch.value.name,
         eventName: selectedEvent.value,
         selectedTypes: driveSelectedTypes.value,
+        includeSmartico: isTournamentBranch.value && includeSmartico.value,
       },
     });
     pollJob(jobId);
@@ -704,6 +716,16 @@ onUnmounted(() => {
               @click="selectedEvent = e.name"
             >🏆 {{ e.name }}</button>
           </div>
+
+          <!-- Tournament-only: add a separate Smartico card.webp function -->
+          <label v-if="isTournamentBranch" class="smartico-opt">
+            <input type="checkbox" v-model="includeSmartico" />
+            <span class="type__icon">🃏</span>
+            <span>
+              Smartico <code>card.webp</code> — отдельная функция
+            </span>
+          </label>
+
           <button
             class="btn btn--primary"
             :disabled="!canGenerateDrive || phase === 'generating'"
@@ -909,6 +931,28 @@ onUnmounted(() => {
 .folder:disabled {
   opacity: 0.55;
   cursor: default;
+}
+/* Tournament-only Smartico card.webp opt-in */
+.smartico-opt {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  padding: 10px 16px;
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md);
+  background: var(--color-white);
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--color-text);
+  cursor: pointer;
+  align-self: flex-start;
+}
+.smartico-opt code {
+  background: var(--color-bubble);
+  padding: 1px 5px;
+  border-radius: 4px;
+  font-size: 12px;
+  font-weight: 500;
 }
 .smartico__left,
 .smartico__right {

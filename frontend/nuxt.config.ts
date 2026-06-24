@@ -30,8 +30,9 @@ export default defineNuxtConfig({
       ],
       link: [
         // m∿k logo favicon (SVG, crisp at any tab size); .ico stays as fallback.
-        { rel: "icon", type: "image/svg+xml", href: "/favicon.svg" },
-        { rel: "alternate icon", href: "/favicon.ico" },
+        // ?v=2 busts the old green icon cached by browsers / pinned tabs.
+        { rel: "icon", type: "image/svg+xml", href: "/favicon.svg?v=2" },
+        { rel: "alternate icon", href: "/favicon.ico?v=2" },
         { rel: "preconnect", href: "https://fonts.googleapis.com" },
         { rel: "preconnect", href: "https://fonts.gstatic.com", crossorigin: "" },
         {

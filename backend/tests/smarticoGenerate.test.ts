@@ -1,5 +1,9 @@
 import { describe, it, expect } from "vitest";
-import { generateOutputs, type UrlMap } from "../src/lib/smartico/generate.js";
+import {
+  generateOutputs,
+  generateSmarticoCardOutputs,
+  type UrlMap,
+} from "../src/lib/smartico/generate.js";
 import { buildBrandMap, normalizeBrand, type TypeKey } from "../src/lib/smartico/detect.js";
 
 const brandMap = buildBrandMap(["BrunoCasino", "Corgibet", "God of Coins"]);
@@ -109,5 +113,51 @@ describe("generateOutputs", () => {
     const urls: UrlMap = { corgibet: { email: { default: null, KO: null } } };
     const blocks = generateOutputs(urls, ["email"], [nb("corgibet")]);
     expect(blocks).toHaveLength(0);
+  });
+});
+
+describe("generateSmarticoCardOutputs (Tournament card.webp)", () => {
+  it("builds one multi-brand card function with canonical keys and no localization", () => {
+    const cardUrls = {
+      brunocasino: "https://cdn/c/bruno.png",
+      corgibet: "https://cdn/c/corgi.png",
+    };
+    const blocks = generateSmarticoCardOutputs(cardUrls, [nb("brunocasino"), nb("corgibet")]);
+    expect(blocks).toHaveLength(1);
+    expect(blocks[0]!.title).toBe("Smartico — Card");
+    expect(blocks[0]!.kind).toBe("function");
+    expect(blocks[0]!.code).toContain('"BrunoCasino": "https://cdn/c/bruno.png"');
+    expect(blocks[0]!.code).toContain('"Corgibet": "https://cdn/c/corgi.png"');
+    expect(blocks[0]!.code).toContain("state.core_sm_brand_id");
+    expect(blocks[0]!.code).not.toContain("core_user_language"); // card has no KO
+  });
+
+  it("renders All brands as a constant-return Smartico function", () => {
+    const cardUrls = {
+      "All brands": "https://cdn/c/all.png",
+      corgibet: "https://cdn/c/corgi.png",
+    };
+    const blocks = generateSmarticoCardOutputs(cardUrls, [nb("All brands"), nb("corgibet")]);
+    const all = blocks.find((b) => b.title.includes("All Brands"));
+    expect(all?.title).toBe("Smartico — All Brands (Сквозной)");
+    expect(all?.code).toContain('return "https://cdn/c/all.png";');
+    // the All-brands url must not leak into the per-brand card function
+    const fn = blocks.find((b) => b.title === "Smartico — Card")!;
+    expect(fn.code).not.toContain("https://cdn/c/all.png");
+    expect(fn.code).toContain('"Corgibet": "https://cdn/c/corgi.png"');
+  });
+
+  it("emits Korea as a KO-guarded Smartico function", () => {
+    const cardUrls = { Korea: "https://cdn/c/kr.png", corgibet: "https://cdn/c/corgi.png" };
+    const blocks = generateSmarticoCardOutputs(cardUrls, [nb("Korea"), nb("corgibet")]);
+    const korea = blocks.find((b) => b.title === "Smartico — Korea (KO)")!;
+    expect(korea.kind).toBe("function");
+    expect(korea.code).toContain("var language = state.core_user_language;");
+    expect(korea.code).toContain('if (language === "KO")');
+    expect(korea.code).toContain('return "https://cdn/c/kr.png";');
+  });
+
+  it("returns no blocks when no brand produced a card URL", () => {
+    expect(generateSmarticoCardOutputs({ corgibet: null }, [nb("corgibet")])).toHaveLength(0);
   });
 });

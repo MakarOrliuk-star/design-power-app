@@ -60,7 +60,9 @@ export function requireZone(...roles: SessionPayload["role"][]) {
         res.status(401).json({ error: "unauthorized" });
         return;
       }
-      if (user.role !== "ADMIN" && !roles.includes(user.role)) {
+      // ADMIN and MANAGER pass every zone (MANAGER = Design + CRM). Admin routes
+      // are guarded separately by requireAdmin, so MANAGER never reaches them.
+      if (user.role !== "ADMIN" && user.role !== "MANAGER" && !roles.includes(user.role)) {
         res.status(403).json({ error: "forbidden" });
         return;
       }

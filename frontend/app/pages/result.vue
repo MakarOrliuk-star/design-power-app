@@ -330,7 +330,7 @@ function copyImage(img: { id: string; generatedImageUrl: string }) {
 .result-page {
   display: flex;
   flex-direction: column;
-  gap: 24px;
+  gap: var(--space-20);
   height: 100%;
   min-height: 0;
 }
@@ -344,10 +344,10 @@ function copyImage(img: { id: string; generatedImageUrl: string }) {
   background: var(--color-white);
   border: 1px solid var(--color-border);
   border-radius: var(--radius-lg);
-  padding: 32px;
+  padding: var(--space-32);
   display: flex;
   flex-direction: column;
-  gap: 24px;
+  gap: var(--space-20);
 }
 .board__head {
   display: flex;
@@ -409,7 +409,7 @@ function copyImage(img: { id: string; generatedImageUrl: string }) {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  gap: 24px;
+  gap: var(--space-16);
   flex-wrap: wrap;
 }
 .tabs {
@@ -492,7 +492,7 @@ function copyImage(img: { id: string; generatedImageUrl: string }) {
   min-height: 0;
   display: grid;
   grid-template-columns: 1fr 320px;
-  gap: 24px;
+  gap: var(--space-32);
   align-items: stretch;
 }
 
@@ -506,7 +506,7 @@ function copyImage(img: { id: string; generatedImageUrl: string }) {
   overflow-y: auto;
   display: flex;
   flex-direction: column;
-  gap: 28px;
+  gap: var(--space-32);
 }
 .lane::-webkit-scrollbar {
   width: 8px;

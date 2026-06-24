@@ -241,7 +241,7 @@ const userInitials = computed(() => {
 .toolbar {
   display: flex;
   align-items: stretch;
-  gap: 20px;
+  gap: var(--space-16);
   width: 100%;
 }
 
@@ -283,7 +283,7 @@ const userInitials = computed(() => {
 .card--progress {
   flex: 3 1 580px;
   min-width: 520px;
-  gap: 18px;
+  gap: var(--space-16);
 }
 .job {
   flex: 1;
@@ -342,7 +342,7 @@ const userInitials = computed(() => {
 /* --- stop / delete --- */
 .card--actions {
   flex: 0 0 auto;
-  gap: 18px;
+  gap: var(--space-16);
 }
 .act {
   display: grid;

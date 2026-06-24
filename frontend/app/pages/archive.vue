@@ -283,7 +283,7 @@ function onCopySelected() {
 .archive-page {
   display: flex;
   flex-direction: column;
-  gap: 24px;
+  gap: var(--space-20);
   height: 100%;
   min-height: 0;
 }
@@ -296,10 +296,10 @@ function onCopySelected() {
   background: var(--color-white);
   border: 1px solid var(--color-border);
   border-radius: var(--radius-lg);
-  padding: 32px;
+  padding: var(--space-32);
   display: flex;
   flex-direction: column;
-  gap: 18px;
+  gap: var(--space-16);
 }
 
 .section-title {
@@ -369,7 +369,7 @@ function onCopySelected() {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  gap: 24px;
+  gap: var(--space-16);
   flex-wrap: wrap;
 }
 .tabs {

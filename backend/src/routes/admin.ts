@@ -71,7 +71,7 @@ adminRouter.get("/users", async (_req: Request, res: Response) => {
 });
 
 const patchUserSchema = z.object({
-  role: z.enum(["ADMIN", "DESIGNER", "CRM"]).optional(),
+  role: z.enum(["ADMIN", "DESIGNER", "CRM", "MANAGER"]).optional(),
   isActive: z.boolean().optional(),
 });
 
@@ -96,7 +96,7 @@ adminRouter.patch("/users/:id", async (req: Request, res: Response) => {
   }
 
   // Build the update payload without explicit `undefined` (exactOptionalPropertyTypes).
-  const data: { role?: "ADMIN" | "DESIGNER" | "CRM"; isActive?: boolean } = {};
+  const data: { role?: "ADMIN" | "DESIGNER" | "CRM" | "MANAGER"; isActive?: boolean } = {};
   if (parsed.data.role !== undefined) data.role = parsed.data.role;
   if (parsed.data.isActive !== undefined) data.isActive = parsed.data.isActive;
 
