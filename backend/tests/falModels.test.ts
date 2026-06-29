@@ -40,14 +40,16 @@ describe("falModels registry", () => {
     expect(edit.resolution).toBe("1K");
   });
 
-  it("grok body omits seed/safety_tolerance/limit_generations and uses lowercase resolution", () => {
+  it("grok body omits seed/safety_tolerance/limit_generations, forces auto+jpeg, lowercase resolution", () => {
     const grok = resolveModel("xai/grok-imagine-image");
     const body = grok.buildBody("p", ["a", "b", "c", "d"], "9:16");
     expect(body.seed).toBeUndefined();
     expect(body.safety_tolerance).toBeUndefined();
     expect(body.limit_generations).toBeUndefined();
     expect(body.resolution).toBe("1k");
-    expect(body.output_format).toBe("png");
+    expect(body.output_format).toBe("jpeg");
+    // Grok ignores the caller's aspect ratio pick and always uses "auto".
+    expect(body.aspect_ratio).toBe("auto");
     // image_urls capped at 3 (model limit)
     expect(body.image_urls).toEqual(["a", "b", "c"]);
   });
