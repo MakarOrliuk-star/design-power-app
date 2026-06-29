@@ -70,6 +70,10 @@ model Brand {
   // 9:16 regardless of the user's 1:1/9:16 pick; null → honour the pick.
   // Edits follow automatically — the edit flow probes the source image pixels.
   forcedAspectRatio String?
+  // fal.ai model override (admin-managed). null → default fal-ai/nano-banana-2;
+  // otherwise a MODEL_REGISTRY key (e.g. "xai/grok-imagine-image"). The endpoint
+  // (/edit vs text-to-image) and request body are derived from the registry.
+  imageModel        String?
   createdAt    DateTime            @default(now())
 
   categories   BrandCategoryLink[]

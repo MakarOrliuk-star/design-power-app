@@ -42,7 +42,13 @@ export async function processPersonJob(generationId: string, aspectRatio = "1:1"
   // user-uploaded image.
   const prompt = withBlendingHint(builtPrompt, gen.referenceImages.length);
 
-  const fal = await runPersonFal(prompt, gen.referenceImages, aspectRatio);
+  // Per-brand fal model override (admin-managed); null → default nano-banana-2.
+  const brand = await prisma.brand.findUnique({
+    where: { name: gen.brandName },
+    select: { imageModel: true },
+  });
+
+  const fal = await runPersonFal(prompt, gen.referenceImages, aspectRatio, brand?.imageModel ?? null);
   if (!fal.success || !fal.imageUrl) {
     await prisma.job.update({ where: { id: jobId }, data: { status: "FAILED" } });
     await finalizeFailure(generationId, `fal: ${fal.error ?? "unknown"}`);

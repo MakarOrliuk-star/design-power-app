@@ -1,4 +1,5 @@
 import { env } from "../env.js";
+import { resolveModel, modelEndpoint } from "./falModels.js";
 
 /**
  * fal.ai SYNCHRONOUS client — matches the Make blueprint, which calls
@@ -47,31 +48,22 @@ async function callFalSync(model: string, body: Record<string, unknown>): Promis
 
 /**
  * Run ONE fal job synchronously and return the generated image URL.
- * Empty imageUrls → text-to-image (nano-banana-2); non-empty → image-to-image
- * (nano-banana-2/edit). Light retry on 5xx/429/network.
+ * Empty imageUrls → text-to-image (`<base>`); non-empty → image-to-image
+ * (`<base>/edit`). The model is chosen from MODEL_REGISTRY via `modelKey`
+ * (Brand.imageModel); null/unknown → the default nano-banana-2. Each model's
+ * request body (incl. nano's per-call `seed`) is built by its registry entry.
+ * Light retry on 5xx/429/network.
  */
 export async function runPersonFal(
   prompt: string,
   imageUrls: string[],
   aspectRatio = "1:1",
+  modelKey?: string | null,
 ): Promise<FalRunResult> {
-  const hasImages = imageUrls.length > 0;
-  const model = hasImages ? "fal-ai/nano-banana-2/edit" : "fal-ai/nano-banana-2";
-
-  const body: Record<string, unknown> = {
-    prompt,
-    num_images: 1,
-    aspect_ratio: aspectRatio,
-    output_format: "png",
-    resolution: "1K",
-  };
-  if (hasImages) {
-    body.image_urls = imageUrls;
-    body.safety_tolerance = "5";
-    body.limit_generations = true;
-  }
-
-  return callFalSync(model, body);
+  const model = resolveModel(modelKey);
+  const endpoint = modelEndpoint(model, imageUrls.length > 0);
+  const body = model.buildBody(prompt, imageUrls, aspectRatio);
+  return callFalSync(endpoint, body);
 }
 
 /**
