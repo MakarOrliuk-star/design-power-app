@@ -4,6 +4,7 @@ import { z } from "zod";
 import { prisma } from "../lib/prisma.js";
 import { cloudinaryConfigured } from "../env.js";
 import { uploadBase64, withRetry } from "../lib/cloudinary.js";
+import { MODEL_KEYS, MODEL_OPTIONS } from "../lib/falModels.js";
 
 // All routes here are mounted behind loadUser + requireAdmin (see index.ts).
 export const adminRouter: Router = Router();
@@ -125,6 +126,7 @@ adminRouter.get("/catalog", async (_req: Request, res: Response) => {
         id: true,
         name: true,
         forcedAspectRatio: true,
+        imageModel: true,
         nanoRef: { select: { referenceImages: true } },
       },
     }),
@@ -146,11 +148,13 @@ adminRouter.get("/catalog", async (_req: Request, res: Response) => {
       id: b.id,
       name: b.name,
       forcedAspectRatio: b.forcedAspectRatio,
+      imageModel: b.imageModel,
       referenceImages: b.nanoRef?.referenceImages ?? [],
       personPrompt: personByKey.get(b.name.toLowerCase()) ?? "",
     })),
     categories: categories.map((c) => ({ id: c.id, name: c.name })),
     itemPrompts: itemPrompts.map((p) => ({ key: p.key, content: p.content })),
+    models: MODEL_OPTIONS,
   });
 });
 
@@ -225,9 +229,18 @@ adminRouter.post("/brands", async (req: Request, res: Response) => {
   }
 });
 
-/** Update an existing brand's settings (TASK §7: the forced-format toggle). */
+/**
+ * Update an existing brand's settings: the forced-format toggle (TASK §7) and/or
+ * the fal model override (Task 1). Both fields are optional so the front-end can
+ * PATCH either independently; `imageModel: null` clears the override (→ default).
+ */
 const patchBrandSchema = z.object({
-  forcedAspectRatio: z.enum(["9:16"]).nullable(),
+  forcedAspectRatio: z.enum(["9:16"]).nullable().optional(),
+  imageModel: z
+    .string()
+    .nullable()
+    .optional()
+    .refine((v) => v == null || MODEL_KEYS.includes(v), { message: "unknown_model" }),
 });
 adminRouter.patch("/brands/:id", async (req: Request, res: Response) => {
   const parsed = patchBrandSchema.safeParse(req.body);
@@ -236,11 +249,17 @@ adminRouter.patch("/brands/:id", async (req: Request, res: Response) => {
     return;
   }
   const id = String(req.params.id ?? "");
+
+  // Only write the keys the client actually sent (exactOptionalPropertyTypes).
+  const data: { forcedAspectRatio?: string | null; imageModel?: string | null } = {};
+  if (parsed.data.forcedAspectRatio !== undefined) data.forcedAspectRatio = parsed.data.forcedAspectRatio;
+  if (parsed.data.imageModel !== undefined) data.imageModel = parsed.data.imageModel;
+
   try {
     const brand = await prisma.brand.update({
       where: { id },
-      data: { forcedAspectRatio: parsed.data.forcedAspectRatio },
-      select: { id: true, name: true, forcedAspectRatio: true },
+      data,
+      select: { id: true, name: true, forcedAspectRatio: true, imageModel: true },
     });
     res.json({ brand });
   } catch {

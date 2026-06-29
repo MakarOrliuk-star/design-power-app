@@ -80,6 +80,7 @@ interface AdminBrand {
   id: string;
   name: string;
   forcedAspectRatio: string | null; // "9:16" = форс формата (TASK §7), null = по выбору юзера
+  imageModel: string | null; // ключ модели fal (Task 1); null = nano-banana-2 по умолчанию
   referenceImages: string[];
   personPrompt: string;
 }
@@ -91,10 +92,15 @@ interface BrandCategory {
   id: string;
   name: string;
 }
+interface ModelOption {
+  key: string;
+  label: string;
+}
 
 const brands = ref<AdminBrand[]>([]);
 const categories = ref<BrandCategory[]>([]);
 const itemPrompts = ref<ItemPrompt[]>([]);
+const models = ref<ModelOption[]>([]);
 
 // ---- Create brand (TASK §2) ----
 function emptyNewBrand() {
@@ -196,12 +202,16 @@ function padTo3(arr: string[]): string[] {
 
 async function loadCatalog() {
   try {
-    const res = await api<{ brands: AdminBrand[]; categories: BrandCategory[]; itemPrompts: ItemPrompt[] }>(
-      "/api/admin/catalog",
-    );
+    const res = await api<{
+      brands: AdminBrand[];
+      categories: BrandCategory[];
+      itemPrompts: ItemPrompt[];
+      models: ModelOption[];
+    }>("/api/admin/catalog");
     brands.value = res.brands.map((b) => ({ ...b, referenceImages: padTo3(b.referenceImages) }));
     categories.value = res.categories;
     itemPrompts.value = res.itemPrompts;
+    models.value = res.models ?? [];
   } catch {
     error.value = "Не удалось загрузить каталог.";
   }
@@ -236,6 +246,12 @@ function toggleForce916(b: AdminBrand) {
   b.forcedAspectRatio = b.forcedAspectRatio === "9:16" ? null : "9:16";
 }
 
+/** Human label for a brand's model override key (for the badge). */
+function modelLabelFor(key: string | null): string {
+  if (!key) return "";
+  return models.value.find((m) => m.key === key)?.label ?? key;
+}
+
 async function saveBrand(b: AdminBrand) {
   savingId.value = b.id;
   rowMsg.value[b.id] = "";
@@ -248,7 +264,7 @@ async function saveBrand(b: AdminBrand) {
     });
     await api(`/api/admin/brands/${b.id}`, {
       method: "PATCH",
-      body: { forcedAspectRatio: b.forcedAspectRatio },
+      body: { forcedAspectRatio: b.forcedAspectRatio, imageModel: b.imageModel },
     });
     rowMsg.value[b.id] = "Сохранено ✓";
   } catch {
@@ -539,6 +555,7 @@ onMounted(() => {
                 {{ b.personPrompt.trim() ? "промпт ✓" : "промпт —" }}
               </span>
               <span v-if="b.forcedAspectRatio === '9:16'" class="badge badge--warn">всегда 9:16</span>
+              <span v-if="b.imageModel" class="badge badge--warn">{{ modelLabelFor(b.imageModel) }}</span>
             </span>
             <span v-if="rowMsg[b.id]" class="brand-card__msg">{{ rowMsg[b.id] }}</span>
           </div>
@@ -572,6 +589,13 @@ onMounted(() => {
                 @change="toggleForce916(b)"
               />
               Всегда 9:16
+            </label>
+            <label class="model-select" title="Модель генерации fal.ai для этого бренда">
+              Модель:
+              <select v-model="b.imageModel">
+                <option :value="null">Nano Banana 2 (по умолчанию)</option>
+                <option v-for="m in models" :key="m.key" :value="m.key">{{ m.label }}</option>
+              </select>
             </label>
             <button class="btn-primary" :disabled="savingId === b.id" @click="saveBrand(b)">
               {{ savingId === b.id ? "Сохранение…" : "Сохранить" }}
@@ -833,6 +857,18 @@ select {
   font-size: 14px;
   color: var(--color-text);
   cursor: pointer;
+}
+.model-select {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 14px;
+  color: var(--color-text);
+}
+.model-select select {
+  font-size: 14px;
+  padding: 4px 8px;
+  border-radius: 6px;
 }
 .refs {
   display: grid;
