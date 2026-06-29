@@ -55,15 +55,17 @@ export const MODEL_REGISTRY: Record<string, FalModel> = {
 
   // Task 1: Grok Imagine Image. No seed / safety_tolerance / limit_generations;
   // lowercase resolution; image_urls capped at 3 (model limit, nano allowed 14).
+  // Per request: Grok ignores the user's 9:16/1:1 pick and always uses
+  // aspect_ratio "auto", and outputs jpeg (nano stays png / honours the pick).
   "xai/grok-imagine-image": {
     base: "xai/grok-imagine-image",
     label: "Grok Imagine Image",
-    buildBody(prompt, imageUrls, aspectRatio) {
+    buildBody(prompt, imageUrls, _aspectRatio) {
       const body: Record<string, unknown> = {
         prompt,
         num_images: 1,
-        aspect_ratio: aspectRatio,
-        output_format: "png",
+        aspect_ratio: "auto",
+        output_format: "jpeg",
         resolution: "1k",
       };
       if (imageUrls.length > 0) body.image_urls = imageUrls.slice(0, 3);
