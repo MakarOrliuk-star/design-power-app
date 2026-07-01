@@ -535,14 +535,14 @@ onBeforeUnmount(() => ro?.disconnect());
 .scale__preview {
   display: grid;
   place-items: center;
-  padding: 10px;
+  padding: 8px;
   border-radius: var(--radius-sm);
   background: var(--color-white);
   border: 1px solid var(--color-border);
 }
 .scale__thumb {
   max-width: 100%;
-  max-height: 220px;
+  max-height: 96px;
   object-fit: contain;
   border-radius: var(--radius-sm);
 }
