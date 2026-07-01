@@ -1532,8 +1532,9 @@ class SmarticoCore:
             p_count_raw = node_obj.get("report_activities_count")
             p_count = int(p_count_raw) if p_count_raw is not None else 0
             
-            # 🔄 ПЕРЕВОРАЧИВАЕМ ДЕРЕВО: row вместо column, border-top вместо border-left
-            child_html = "<div style='display: flex; flex-direction: row; gap: 12px; border-top: 2px solid #cbd5e1; padding-left: 15px; padding-right: 15px; margin-top: 0;'>"
+            
+            child_html = "<div style='display: flex; flex-direction: row; gap: 12px; border-top: 2px solid #cbd5e1; padding-left: 15px; padding-right: 15px; margin-top: 0; align-items: flex-start;'>"
+            
             for cond, child_id in children:
                 cond_print = esc(cond.replace("(MATCHING) ", ""))
                 
