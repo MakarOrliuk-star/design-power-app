@@ -2,7 +2,7 @@
 // Result page. All logic lives in the `useResult` composable so it can be
 // unit-tested without the Nuxt runtime (see app/composables/useResult.ts). This
 // file only binds the composable to the template + reuses TheToolbar.
-import { useResult, type ResultApi } from "~/composables/useResult";
+import { useResult, stripGender, type ResultApi } from "~/composables/useResult";
 
 useHead({ title: "Design Power — Result" });
 
@@ -26,6 +26,12 @@ const {
   editError,
   editMsg,
   runEdit,
+  scaleTarget,
+  scaling,
+  scaleError,
+  scaleMsg,
+  runScale,
+  runInpaint,
   flatImages,
   viewerIndex,
   viewerImage,
@@ -252,7 +258,7 @@ function copyImage(img: { id: string; generatedImageUrl: string }) {
                     v-model="perEditPrompts[img.id]"
                     class="edit-textarea edit-textarea--sm"
                     rows="2"
-                    :placeholder="`Промпт для «${img.brandName}»`"
+                    :placeholder="`Промпт для «${stripGender(img.brandName)}»`"
                   />
                 </div>
               </div>
@@ -276,6 +282,15 @@ function copyImage(img: { id: string; generatedImageUrl: string }) {
             </span>
             {{ editing ? "Отправка…" : "Edit" }}
           </button>
+
+          <ScalePanel
+            :image="scaleTarget"
+            :busy="scaling"
+            :error="scaleError"
+            :msg="scaleMsg"
+            @scale="runScale"
+            @inpaint="runInpaint"
+          />
         </aside>
       </div>
     </div>
@@ -304,7 +319,7 @@ function copyImage(img: { id: string; generatedImageUrl: string }) {
         <figure class="viewer__stage" @click.self="closeViewer">
           <img v-if="viewerImage" class="viewer__img" :src="viewerImage.generatedImageUrl" :alt="viewerImage.brandName" />
           <figcaption v-if="viewerImage" class="viewer__caption">
-            <span class="viewer__brand">{{ viewerImage.brandName }}</span>
+            <span class="viewer__brand">{{ stripGender(viewerImage.brandName) }}</span>
             <span v-if="viewerImage.description" class="viewer__desc">{{ viewerImage.description }}</span>
             <span class="viewer__count">{{ viewerIndex + 1 }} / {{ flatImages.length }}</span>
           </figcaption>

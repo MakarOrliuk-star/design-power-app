@@ -117,17 +117,27 @@ export function nearestFalAspect(width: number, height: number): string {
 }
 
 /**
- * Fetch an image and return its nearest fal aspect_ratio, or null on any failure
- * (caller falls back to a default). Downloads the whole image — Edit batches are
- * small, so this is cheap enough and avoids Range-support assumptions.
+ * Fetch an image and return its pixel dimensions, or null on any failure.
+ * Downloads the whole image (avoids Range-support assumptions); callers here
+ * deal with single images, so this is cheap enough. Shared by probeAspectRatio
+ * and the Scale flow (which needs the exact source size to build the outpaint
+ * canvas on the backend rather than trusting client-reported dimensions).
  */
-export async function probeAspectRatio(url: string): Promise<string | null> {
+export async function probeImageSize(url: string): Promise<ImageSize | null> {
   try {
     const res = await fetch(url);
     if (!res.ok) return null;
-    const size = readImageSize(Buffer.from(await res.arrayBuffer()));
-    return size ? nearestFalAspect(size.width, size.height) : null;
+    return readImageSize(Buffer.from(await res.arrayBuffer()));
   } catch {
     return null;
   }
+}
+
+/**
+ * Fetch an image and return its nearest fal aspect_ratio, or null on any failure
+ * (caller falls back to a default).
+ */
+export async function probeAspectRatio(url: string): Promise<string | null> {
+  const size = await probeImageSize(url);
+  return size ? nearestFalAspect(size.width, size.height) : null;
 }

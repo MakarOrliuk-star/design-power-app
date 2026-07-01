@@ -5,10 +5,11 @@ import { z } from "zod";
 import { prisma } from "../lib/prisma.js";
 import type { Prisma } from "../../generated/prisma/client.js";
 import { personPipelineReady, itemPipelineReady, editPipelineReady } from "../env.js";
-import { uploadBase64, withRetry } from "../lib/cloudinary.js";
+import { uploadBase64, uploadFromUrl, withRetry } from "../lib/cloudinary.js";
 import { createPersonBatch, createItemBatch, createEditBatch } from "../services/generation.service.js";
 import { recomputeBatchStatus } from "../services/finalize.js";
-import { probeAspectRatio } from "../lib/imageSize.js";
+import { probeAspectRatio, probeImageSize } from "../lib/imageSize.js";
+import { runBriaExpand, runSeedvrUpscale, runBriaGenfill, runBriaEraser } from "../lib/fal.js";
 
 // Mounted behind loadUser + requireAuth (see index.ts).
 export const generateRouter: Router = Router();
@@ -208,6 +209,238 @@ generateRouter.post("/generate/edit", async (req: Request, res: Response) => {
   } catch (err) {
     const msg = err instanceof Error ? err.message : "error";
     res.status(400).json({ error: msg });
+  }
+});
+
+// Store a fal result under a NEW Cloudinary public_id (old asset stays as backup)
+// and REPLACE the source image in place — same Generation id, so it keeps its
+// tab/group. Returns the new secure_url, or null on upload failure. Shared by the
+// Scale and Inpaint routes.
+async function storeReplacement(
+  row: { id: string; brandName: string },
+  imageUrl: string,
+  prefix: string,
+): Promise<string | null> {
+  const fileName = `${prefix}_${row.id}_${Date.now()}.png`;
+  const uploaded = await withRetry(
+    () => uploadFromUrl(imageUrl, fileName, `${prefix}/${row.brandName}`),
+    `${prefix} ${row.id}`,
+  );
+  if (!uploaded.success || !uploaded.secure_url) return null;
+  await prisma.generation.update({
+    where: { id: row.id },
+    data: { generatedImageUrl: uploaded.secure_url },
+  });
+  return uploaded.secure_url;
+}
+
+const clamp = (v: number, min: number, max: number) => Math.round(Math.min(Math.max(v, min), max));
+const MAX_CANVAS = 4096; // bria practical ceiling; also bounds file weight / cost
+
+// ---- Scale one image: Midjourney-style outpaint + auto 2x upscale (TASK §1) ----
+// Synchronous (single image): place the source on a larger canvas via bria/expand,
+// upscale the result 2x, store it, and replace the source in place. The client
+// sends EITHER `pad` (edge-expand: extra px per side, source pixels) OR a full
+// `placement` (free move/zoom: target canvas + scaled image size + position). The
+// backend probes the real source dimensions rather than trusting the client.
+const padSchema = z.object({
+  top: z.number().min(0),
+  right: z.number().min(0),
+  bottom: z.number().min(0),
+  left: z.number().min(0),
+});
+const placementSchema = z.object({
+  canvasW: z.number().positive(),
+  canvasH: z.number().positive(),
+  imgW: z.number().positive(),
+  imgH: z.number().positive(),
+  imgX: z.number().min(0),
+  imgY: z.number().min(0),
+});
+const scaleSchema = z.object({
+  generationId: z.string(),
+  pad: padSchema.optional(),
+  placement: placementSchema.optional(),
+  prompt: z.string().optional(),
+});
+
+interface ExpandBox {
+  canvasW: number;
+  canvasH: number;
+  originX: number;
+  originY: number;
+  imgW: number;
+  imgH: number;
+}
+
+generateRouter.post("/generate/scale", async (req: Request, res: Response) => {
+  const parsed = scaleSchema.safeParse(req.body);
+  if (!parsed.success) {
+    res.status(400).json({ error: "invalid_body", details: parsed.error.flatten().fieldErrors });
+    return;
+  }
+  if (!editPipelineReady) {
+    res.status(503).json({ error: "scale_pipeline_not_configured" });
+    return;
+  }
+  const d = parsed.data;
+  if (!d.pad && !d.placement) {
+    res.status(400).json({ error: "no_target" });
+    return;
+  }
+  const userId = req.user!.sub;
+
+  // Source must belong to the user and have a stored image.
+  const row = await prisma.generation.findFirst({
+    where: { id: d.generationId, userId, status: "DONE", generatedImageUrl: { not: null } },
+    select: { id: true, generatedImageUrl: true, brandName: true },
+  });
+  if (!row) {
+    res.status(404).json({ error: "no_editable_image" });
+    return;
+  }
+
+  // Backend is the source of truth for dimensions (client value is preview-only).
+  const size = await probeImageSize(row.generatedImageUrl!);
+  if (!size) {
+    res.status(422).json({ error: "probe_failed" });
+    return;
+  }
+
+  // Resolve the expand box from whichever payload was sent.
+  let box: ExpandBox;
+  if (d.placement) {
+    const canvasW = clamp(d.placement.canvasW, 1, MAX_CANVAS);
+    const canvasH = clamp(d.placement.canvasH, 1, MAX_CANVAS);
+    const imgW = clamp(d.placement.imgW, 1, canvasW);
+    const imgH = clamp(d.placement.imgH, 1, canvasH);
+    box = {
+      canvasW,
+      canvasH,
+      imgW,
+      imgH,
+      originX: clamp(d.placement.imgX, 0, canvasW - imgW),
+      originY: clamp(d.placement.imgY, 0, canvasH - imgH),
+    };
+    // Nothing to outpaint if the image fills the whole canvas.
+    if (box.imgW >= canvasW && box.imgH >= canvasH) {
+      res.status(400).json({ error: "no_expansion" });
+      return;
+    }
+  } else {
+    // Edge-expand: cap each side to <=100% of that dimension (max doubling).
+    const left = clamp(d.pad!.left, 0, size.width);
+    const right = clamp(d.pad!.right, 0, size.width);
+    const top = clamp(d.pad!.top, 0, size.height);
+    const bottom = clamp(d.pad!.bottom, 0, size.height);
+    if (left + right + top + bottom === 0) {
+      res.status(400).json({ error: "no_expansion" });
+      return;
+    }
+    box = {
+      canvasW: size.width + left + right,
+      canvasH: size.height + top + bottom,
+      originX: left,
+      originY: top,
+      imgW: size.width,
+      imgH: size.height,
+    };
+  }
+
+  try {
+    // 1. Outpaint the empty margins.
+    const expand = await runBriaExpand(row.generatedImageUrl!, {
+      ...box,
+      ...(d.prompt ? { prompt: d.prompt } : {}),
+    });
+    if (!expand.success || !expand.imageUrl) {
+      res.status(502).json({ error: "expand_failed", detail: expand.error });
+      return;
+    }
+
+    // 2. Auto 2x upscale (recovers quality lost in outpaint). On failure, fall
+    //    back to the expanded image so the user still gets the wider frame.
+    const up = await runSeedvrUpscale(expand.imageUrl, 2);
+    const finalUrl = up.success && up.imageUrl ? up.imageUrl : expand.imageUrl;
+
+    const secureUrl = await storeReplacement(row, finalUrl, "scaled");
+    if (!secureUrl) {
+      res.status(502).json({ error: "upload_failed" });
+      return;
+    }
+    res.json({ generationId: row.id, generatedImageUrl: secureUrl });
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : "error";
+    res.status(500).json({ error: "scale_failed", detail: msg });
+  }
+});
+
+// ---- Inpaint one image: mask-based fill/erase via Bria (TASK §1 Scale) ----
+// Synchronous. The client paints a binary mask (white = target area) at the SOURCE
+// resolution and sends it as a data URL. mode="fill" → bria/genfill (needs a
+// prompt); mode="erase" → bria/eraser. Result replaces the source in place.
+const inpaintSchema = z.object({
+  generationId: z.string(),
+  maskDataUrl: z.string().min(1), // data:image/png;base64,...
+  mode: z.enum(["fill", "erase"]),
+  prompt: z.string().optional(),
+});
+
+generateRouter.post("/generate/inpaint", async (req: Request, res: Response) => {
+  const parsed = inpaintSchema.safeParse(req.body);
+  if (!parsed.success) {
+    res.status(400).json({ error: "invalid_body", details: parsed.error.flatten().fieldErrors });
+    return;
+  }
+  if (!editPipelineReady) {
+    res.status(503).json({ error: "scale_pipeline_not_configured" });
+    return;
+  }
+  const d = parsed.data;
+  if (d.mode === "fill" && !d.prompt?.trim()) {
+    res.status(400).json({ error: "empty_prompt" });
+    return;
+  }
+  const userId = req.user!.sub;
+
+  const row = await prisma.generation.findFirst({
+    where: { id: d.generationId, userId, status: "DONE", generatedImageUrl: { not: null } },
+    select: { id: true, generatedImageUrl: true, brandName: true },
+  });
+  if (!row) {
+    res.status(404).json({ error: "no_editable_image" });
+    return;
+  }
+
+  try {
+    // Bria needs a mask URL — upload the painted mask to Cloudinary first.
+    const maskUpload = await withRetry(
+      () => uploadBase64(d.maskDataUrl, `mask_${row.id}_${Date.now()}.png`, `masks/${row.brandName}`),
+      `mask ${row.id}`,
+    );
+    if (!maskUpload.success || !maskUpload.secure_url) {
+      res.status(502).json({ error: "mask_upload_failed" });
+      return;
+    }
+
+    const result =
+      d.mode === "fill"
+        ? await runBriaGenfill(row.generatedImageUrl!, maskUpload.secure_url, d.prompt!.trim())
+        : await runBriaEraser(row.generatedImageUrl!, maskUpload.secure_url);
+    if (!result.success || !result.imageUrl) {
+      res.status(502).json({ error: "inpaint_failed", detail: result.error });
+      return;
+    }
+
+    const secureUrl = await storeReplacement(row, result.imageUrl, "inpainted");
+    if (!secureUrl) {
+      res.status(502).json({ error: "upload_failed" });
+      return;
+    }
+    res.json({ generationId: row.id, generatedImageUrl: secureUrl });
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : "error";
+    res.status(500).json({ error: "inpaint_failed", detail: msg });
   }
 });
 

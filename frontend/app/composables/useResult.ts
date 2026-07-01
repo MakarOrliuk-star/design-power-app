@@ -59,21 +59,33 @@ const LIMIT = 50;
 // ---------------------------------------------------------------------------
 
 /**
+ * Drop the gender suffix from a brand name (TASK §2): "Goldzino(Men)" and
+ * "Goldzino(Women)" both display as "Goldzino". Display-ONLY — the DB keeps the
+ * original brandName; only the shown label is normalized. Other parenthesised
+ * variants ((Monkey)/(Duck)/(Panda)) and non-parenthesised names are untouched.
+ */
+export function stripGender(name: string): string {
+  return name.replace(/\s*\((?:men|women)\)\s*$/i, "").trim();
+}
+
+/**
  * Group images into labelled rows by content type + brand (style) + prompt
- * (TASK §3 "style indication"). State badge is "Edited" for edited images, else
- * "Generated"; the order of first appearance is preserved.
+ * (TASK §3 "style indication"). The brand is gender-normalized (TASK §2) so a
+ * brand's (Men)/(Women) results merge into one row. State badge is "Edited" for
+ * edited images, else "Generated"; the order of first appearance is preserved.
  */
 export function groupImages(images: GalleryImage[]): Group[] {
   const map = new Map<string, Group>();
   for (const img of images) {
-    const key = `${img.contentType}__${img.brandName}__${img.description ?? ""}`;
+    const brand = stripGender(img.brandName);
+    const key = `${img.contentType}__${brand}__${img.description ?? ""}`;
     let g = map.get(key);
     if (!g) {
       g = {
         id: key,
         type: img.contentType,
         state: img.isEdit ? "Edited" : "Generated",
-        brand: img.brandName,
+        brand,
         prompt: img.description ?? "",
         images: [],
       };
@@ -110,6 +122,70 @@ export function mergeNewImages(
   const have = new Set(existing.map((i) => i.id));
   const added = incoming.filter((i) => !have.has(i.id));
   return { images: added.length ? [...added, ...existing] : existing, added: added.length };
+}
+
+/** Extra pixels to outpaint on each side (in SOURCE-image pixels). */
+export interface Pad {
+  top: number;
+  right: number;
+  bottom: number;
+  left: number;
+}
+
+/**
+ * Clamp each side of a pad to [0, dimension] — matches the backend cap (a side
+ * may grow by at most 100% of that dimension). Used while dragging the Scale
+ * canvas so the preview never promises more than the server will honour.
+ */
+export function capPad(pad: Pad, natural: { width: number; height: number }): Pad {
+  const clamp = (v: number, max: number) => Math.min(Math.max(v, 0), max);
+  return {
+    top: clamp(pad.top, natural.height),
+    bottom: clamp(pad.bottom, natural.height),
+    left: clamp(pad.left, natural.width),
+    right: clamp(pad.right, natural.width),
+  };
+}
+
+/** Append a cache-busting query param so a replaced image reloads fresh bytes. */
+export function bustCache(url: string): string {
+  return `${url}${url.includes("?") ? "&" : "?"}v=${Date.now()}`;
+}
+
+/** Free move/zoom outpaint: target canvas + scaled image size + position (source px). */
+export interface Placement {
+  canvasW: number;
+  canvasH: number;
+  imgW: number;
+  imgH: number;
+  imgX: number;
+  imgY: number;
+}
+
+/** Inpaint request: a painted binary mask (data URL) + what to do with it. */
+export interface InpaintPayload {
+  maskDataUrl: string;
+  mode: "fill" | "erase";
+  prompt?: string;
+}
+
+/** Map a Scale/Inpaint backend error code to a user-facing message. */
+export function mapScaleError(code: string | undefined): string {
+  switch (code) {
+    case "scale_pipeline_not_configured":
+      return "Scale не настроен (нет ключей fal / Cloudinary).";
+    case "expand_failed":
+      return "Не удалось дорисовать изображение — попробуйте меньшее расширение.";
+    case "inpaint_failed":
+      return "Не удалось обработать область — попробуйте другую маску.";
+    case "empty_prompt":
+      return "Введите промпт для дорисовки области.";
+    case "mask_upload_failed":
+    case "upload_failed":
+      return "Не удалось сохранить результат.";
+    default:
+      return "Не удалось выполнить операцию.";
+  }
 }
 
 export type EditBuildResult =
@@ -271,6 +347,77 @@ export function useResult(deps: { api: ResultApi; gen: ResultGen }) {
     }
   }
 
+  // ---- Scale editor (TASK §1): outpaint (expand/transform) + inpaint (fill/erase) ----
+  // Enabled only when EXACTLY one image is selected. The ScalePanel owns the Konva
+  // canvas and hands back either an outpaint payload (`pad` OR `placement`) or an
+  // inpaint payload (mask + mode). On success we swap the source image's URL in
+  // place (cache-busted) so the gallery shows the result without a reload.
+  const scaleTarget = computed(() => (selectedImages.value.length === 1 ? selectedImages.value[0]! : null));
+  const canScale = computed(() => selectedImages.value.length === 1);
+  const scaling = ref(false);
+  const scaleError = ref("");
+  const scaleMsg = ref("");
+
+  // Replace the target's URL in place (cache-busted) from a POST result.
+  function applyReplacement(res: { generationId: string; generatedImageUrl: string }) {
+    const bust = bustCache(res.generatedImageUrl);
+    images.value = images.value.map((i) =>
+      i.id === res.generationId ? { ...i, generatedImageUrl: bust } : i,
+    );
+  }
+
+  async function runScale(payload: { pad?: Pad; placement?: Placement; prompt?: string }) {
+    const target = scaleTarget.value;
+    if (!target || scaling.value) return;
+    scaleError.value = "";
+    scaleMsg.value = "";
+    scaling.value = true;
+    try {
+      const prompt = payload.prompt?.trim();
+      const res = await api<{ generationId: string; generatedImageUrl: string }>("/api/generate/scale", {
+        method: "POST",
+        body: {
+          generationId: target.id,
+          ...(payload.pad ? { pad: payload.pad } : {}),
+          ...(payload.placement ? { placement: payload.placement } : {}),
+          ...(prompt ? { prompt } : {}),
+        },
+      });
+      applyReplacement(res);
+      scaleMsg.value = "Готово! Изображение расширено и улучшено.";
+    } catch (e: unknown) {
+      scaleError.value = mapScaleError((e as { data?: { error?: string } })?.data?.error);
+    } finally {
+      scaling.value = false;
+    }
+  }
+
+  async function runInpaint(payload: InpaintPayload) {
+    const target = scaleTarget.value;
+    if (!target || scaling.value) return;
+    scaleError.value = "";
+    scaleMsg.value = "";
+    scaling.value = true;
+    try {
+      const prompt = payload.prompt?.trim();
+      const res = await api<{ generationId: string; generatedImageUrl: string }>("/api/generate/inpaint", {
+        method: "POST",
+        body: {
+          generationId: target.id,
+          maskDataUrl: payload.maskDataUrl,
+          mode: payload.mode,
+          ...(prompt ? { prompt } : {}),
+        },
+      });
+      applyReplacement(res);
+      scaleMsg.value = payload.mode === "erase" ? "Готово! Объект удалён." : "Готово! Область дорисована.";
+    } catch (e: unknown) {
+      scaleError.value = mapScaleError((e as { data?: { error?: string } })?.data?.error);
+    } finally {
+      scaling.value = false;
+    }
+  }
+
   // ---- Image viewer (Phase 3) ----
   // Navigate in display order (grouped), wrapping with ←/→; Esc closes. Tracked by
   // image id (not index) so auto-refresh prepending new images never makes the open
@@ -308,6 +455,15 @@ export function useResult(deps: { api: ResultApi; gen: ResultGen }) {
   watch(viewerOpen, (open) => {
     if (import.meta.client) document.body.style.overflow = open ? "hidden" : "";
   });
+
+  // Clear Scale feedback whenever the target image changes (or is deselected).
+  watch(
+    () => scaleTarget.value?.id ?? null,
+    () => {
+      scaleError.value = "";
+      scaleMsg.value = "";
+    },
+  );
 
   // ---- Real-time auto-refresh (Phase 5, TASK §6) ----
   // While any batch is in flight, poll the current tab and merge freshly-finished
@@ -394,6 +550,14 @@ export function useResult(deps: { api: ResultApi; gen: ResultGen }) {
     editError,
     editMsg,
     runEdit,
+    // scale / inpaint editor
+    scaleTarget,
+    canScale,
+    scaling,
+    scaleError,
+    scaleMsg,
+    runScale,
+    runInpaint,
     // viewer
     flatImages,
     viewerId,

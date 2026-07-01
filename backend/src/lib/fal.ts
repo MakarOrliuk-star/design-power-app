@@ -84,6 +84,64 @@ export async function runSeedvrUpscale(
   });
 }
 
+/**
+ * Midjourney-style outpaint via `fal-ai/bria/expand` (Scale window, TASK §1).
+ * The original image is placed at `[originX, originY]` inside a larger
+ * `[canvasW, canvasH]` canvas; bria generates only the surrounding empty margins.
+ * Unlike the pixel-margin outpaint model, bria takes an arbitrary target canvas
+ * (no 700px/side cap) and is trained on licensed data. Returns the expanded URL.
+ */
+export async function runBriaExpand(
+  imageUrl: string,
+  opts: {
+    canvasW: number;
+    canvasH: number;
+    originX: number;
+    originY: number;
+    imgW: number;
+    imgH: number;
+    prompt?: string;
+  },
+): Promise<FalRunResult> {
+  if (!imageUrl) return { success: false, error: "no image_url" };
+  const body: Record<string, unknown> = {
+    image_url: imageUrl,
+    canvas_size: [opts.canvasW, opts.canvasH],
+    original_image_size: [opts.imgW, opts.imgH],
+    original_image_location: [opts.originX, opts.originY],
+  };
+  if (opts.prompt) body.prompt = opts.prompt;
+  return callFalSync("fal-ai/bria/expand", body);
+}
+
+/**
+ * Inpaint by prompt in a masked region via `fal-ai/bria/genfill` (Scale window →
+ * Inpaint tool). The mask is a binary image (white = area to regenerate) at the
+ * SAME dimensions as the source. `prompt` describes what to fill in.
+ */
+export async function runBriaGenfill(
+  imageUrl: string,
+  maskUrl: string,
+  prompt: string,
+): Promise<FalRunResult> {
+  if (!imageUrl || !maskUrl) return { success: false, error: "no image_url / mask_url" };
+  return callFalSync("fal-ai/bria/genfill", { image_url: imageUrl, mask_url: maskUrl, prompt });
+}
+
+/**
+ * Remove content in a masked region via `fal-ai/bria/eraser` (Scale window →
+ * Erase tool). No prompt — the model cleans the masked area. Mask is binary
+ * (white = area to erase) at the same dimensions as the source.
+ */
+export async function runBriaEraser(imageUrl: string, maskUrl: string): Promise<FalRunResult> {
+  if (!imageUrl || !maskUrl) return { success: false, error: "no image_url / mask_url" };
+  return callFalSync("fal-ai/bria/eraser", {
+    image_url: imageUrl,
+    mask_url: maskUrl,
+    mask_type: "manual",
+  });
+}
+
 /** Extract the generated image URL from a fal response (handles known shapes). */
 export function extractFalImageUrl(body: unknown): string {
   const root = body as Record<string, unknown> | null;

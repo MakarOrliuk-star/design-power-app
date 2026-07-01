@@ -4,7 +4,7 @@
 // TheToolbar. Content-type tabs + time-period filter + brand search + 5-up grid
 // + ZIP export.
 import { useArchive } from "~/composables/useArchive";
-import type { GalleryImage } from "~/composables/useResult";
+import { stripGender, type GalleryImage } from "~/composables/useResult";
 
 useHead({ title: "Design Power — Archive" });
 
@@ -212,7 +212,7 @@ function onCopySelected() {
             :key="img.id"
             :class="['card', { 'card--selected': isSelected(img.id) }]"
           >
-            <span class="card__label">{{ img.brandName }}</span>
+            <span class="card__label">{{ stripGender(img.brandName) }}</span>
 
             <div class="card__tools">
               <button
