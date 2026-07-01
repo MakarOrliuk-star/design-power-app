@@ -604,8 +604,8 @@ function copyImage(img: { id: string; generatedImageUrl: string }) {
 .card__img {
   display: block;
   width: 100%;
-  aspect-ratio: 1;
-  object-fit: cover;
+  height: auto;
+  object-fit: contain;
   background: var(--color-bubble);
   cursor: pointer;
 }
