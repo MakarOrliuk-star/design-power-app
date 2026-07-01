@@ -324,13 +324,17 @@ async def audit_stream(request: AuditRequest):
                                         variations = res_details.get("variations", [])
                                         body_text = res_details.get("body", body_text)
                                         
-                                        qa_personas = core.get_qa_personas()
-                                        for desc, uid in qa_personas.items():
-                                            send_event({'type': 'progress', 'percent': 60, 'msg': f'📸 Resolving SMS macros for persona: {desc}...'})
-                                            pers_text = core.get_personalized_email_preview(body_text, uid)
-                                            if pers_text:
-                                                clean_text = re.sub(r'<[^>]+>', '', pers_text).strip()
-                                                email_previews.append({"desc": desc, "uid": uid, "text": clean_text})
+                                        if r_id in rendered_emails_cache:
+                                            email_previews = rendered_emails_cache[r_id]
+                                        else:
+                                            qa_personas = core.get_qa_personas()
+                                            for desc, uid in qa_personas.items():
+                                                send_event({'type': 'progress', 'percent': 60, 'msg': f'📸 Resolving SMS macros for persona: {desc}...'})
+                                                pers_text = core.get_personalized_email_preview(body_text, uid)
+                                                if pers_text:
+                                                    clean_text = re.sub(r'<[^>]+>', '', pers_text).strip()
+                                                    email_previews.append({"desc": desc, "uid": uid, "text": clean_text})
+                                            rendered_emails_cache[r_id] = email_previews
                                 
                                 elif n_type == "WebHook" and r_id:
                                     ext_details = core.get_push_details(r_id)

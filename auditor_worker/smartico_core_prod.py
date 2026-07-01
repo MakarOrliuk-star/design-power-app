@@ -923,7 +923,7 @@ class SmarticoCore:
         for short_url in sampled_urls:
             try:
                 # Идем по ссылке сквозь все редиректы
-                resp = requests.get(short_url, allow_redirects=True, stream=True, timeout=10)
+                resp = requests.get(short_url, allow_redirects=True, stream=True, timeout=5)
                 final_url = resp.url
                 is_working = resp.ok
                 
@@ -1937,13 +1937,11 @@ class SmarticoCore:
                             clean_mac = self.normalize_label_name(macro_key)
                             if not clean_mac: return "5000"
                             
-                            # ⚡ ФИКС 2: Гарантируем, что макрос скачивается, если его нет или это просто строка
+                          
                             if clean_mac not in labels_store or not isinstance(labels_store.get(clean_mac), dict) or "default" not in labels_store.get(clean_mac):
-                                fetched = self.get_label_data_with_variations(clean_mac)
-                                if fetched: labels_store[clean_mac] = fetched
+                                return "5000"
                                 
                             m_data = labels_store.get(clean_mac)
-                            if not isinstance(m_data, dict): return "5000"
                             
                             m_type = str(m_data.get("tag_type_name", "")).strip().lower()
                             m_def = str(m_data.get("default", ""))
@@ -2915,10 +2913,10 @@ class SmarticoCore:
                 def resolve_macro_smart(mac, target_lang="EN"):
                     if self.is_ignored_label(mac): return ""
                     clean = self.normalize_label_name(mac)
+                    
                     if clean not in labels_store or not isinstance(labels_store.get(clean), dict) or "default" not in labels_store.get(clean):
-                        fetched = self.get_label_data_with_variations(clean)
-                        if fetched: labels_store[clean] = fetched
-                        else: return "5000"
+                        return "5000"
+                        
                     m_data = labels_store.get(clean)
                     if not m_data: return "5000"
                     m_def = str(m_data.get("default", ""))
