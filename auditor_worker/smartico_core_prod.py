@@ -923,7 +923,7 @@ class SmarticoCore:
         for short_url in sampled_urls:
             try:
                 # Идем по ссылке сквозь все редиректы
-                resp = requests.get(short_url, allow_redirects=True, stream=True, timeout=10)
+                resp = requests.get(short_url, allow_redirects=True, stream=True, timeout=5)
                 final_url = resp.url
                 is_working = resp.ok
                 
@@ -1524,7 +1524,6 @@ class SmarticoCore:
             node_obj = nodes_by_id.get(node_id, {})
             node_name = node_obj.get("activity_name") or node_obj.get("name") or f"Node {node_id}"
             
-            # 🚨 Вызываем без лишних аргументов
             html = get_node_box_html(node_obj, node_name.lower())
             
             children = graph.get(node_id, [])
@@ -1533,7 +1532,9 @@ class SmarticoCore:
             p_count_raw = node_obj.get("report_activities_count")
             p_count = int(p_count_raw) if p_count_raw is not None else 0
             
-            child_html = "<div style='display: flex; flex-direction: column; gap: 12px; border-left: 2px solid #cbd5e1; padding-top: 10px; padding-bottom: 10px;'>"
+            
+            child_html = "<div style='display: flex; flex-direction: row; gap: 12px; border-top: 2px solid #cbd5e1; padding-left: 15px; padding-right: 15px; margin-top: 0; align-items: flex-start;'>"
+            
             for cond, child_id in children:
                 cond_print = esc(cond.replace("(MATCHING) ", ""))
                 
@@ -1543,23 +1544,23 @@ class SmarticoCore:
                 
                 stats_html = f"<div class='flow-stats' style='font-size: 10px; color: #64748b; margin-top: 2px; font-weight: normal;'>{c_count} / {p_count}</div>"
                 
-                child_html += f"<div style='display: flex; align-items: center;'>"
-                child_html += f"<div style='width: 25px; height: 2px; background: #cbd5e1;'></div>"
-                child_html += f"<div style='color: #475569; font-size: 11px; background: #f8fafc; padding: 4px 10px; border-radius: 12px; border: 1px solid #cbd5e1; white-space: nowrap; user-select: none; text-align: center; line-height: 1.2;'>{cond_print}{stats_html}</div>"
-                child_html += f"<div style='width: 25px; height: 2px; background: #cbd5e1;'></div>"
+                # 🔄 ВЕТКИ: column вместо row. Линии теперь вертикальные (width: 2px, height: 25px)
+                child_html += f"<div style='display: flex; flex-direction: column; align-items: center;'>"
+                child_html += f"<div style='width: 2px; height: 25px; background: #cbd5e1;'></div>"
+                child_html += f"<div style='color: #475569; font-size: 11px; background: #f8fafc; padding: 4px 10px; border-radius: 12px; border: 1px solid #cbd5e1; white-space: nowrap; user-select: none; text-align: center; line-height: 1.2; margin: 4px 0;'>{cond_print}{stats_html}</div>"
+                child_html += f"<div style='width: 2px; height: 25px; background: #cbd5e1;'></div>"
                 
                 if child_id in visited:
                     child_low = (child_obj.get('name') or '').lower()
-                    
-                    # 🚨 Вызываем без лишних аргументов
                     child_html += f"<div style='opacity: 0.6;'>{get_node_box_html(child_obj, child_low)}</div>"
                 else:
                     visited.add(child_id)
                     child_html += generate_tree_html(child_id, visited)
                 child_html += "</div>"
             child_html += "</div>"
-            return f"<div style='display: flex; align-items: center;'>{html}<div style='width: 25px; height: 2px; background: #cbd5e1;'></div>{child_html}</div>"
-
+            
+            # 🔄 РОДИТЕЛЬ: column вместо row
+            return f"<div style='display: flex; flex-direction: column; align-items: center;'>{html}<div style='width: 2px; height: 25px; background: #cbd5e1;'></div>{child_html}</div>"
         flow_trees = ""
         global_visited = set()
         for r in roots:
@@ -1584,8 +1585,7 @@ class SmarticoCore:
                     </div>
                 </div>
                 <div class='drag-scroll' style='overflow: auto; max-height: 800px; cursor: grab; user-select: none; position: relative;'>
-                    <div class="zoom-wrapper" style="zoom: 0.75; width: max-content; padding: 350px 300px 300px 300px; min-width: 100%;">
-                        {generate_tree_html(r, global_visited)}
+<div class="zoom-wrapper" style="zoom: 0.75; width: max-content; padding: 350px 300px 300px 300px; min-width: 100%; display: flex; justify-content: center;">                        {generate_tree_html(r, global_visited)}
                     </div>
                 </div>
             </div>
@@ -1594,10 +1594,10 @@ class SmarticoCore:
         if flow_trees:
             return f"""
             <style>
-            .flow-node-clickable .flow-tooltip {{ visibility: hidden; opacity: 0; position: absolute; bottom: 140%; left: 50%; transform: translateX(-50%); width: max-content; max-width: 450px; background: #ffffff; border: 1px solid #cbd5e1; border-radius: 12px; padding: 15px; box-shadow: 0 10px 25px -5px rgba(0,0,0,0.1), 0 8px 10px -6px rgba(0,0,0,0.1); z-index: 10000; transition: opacity 0.2s ease, visibility 0.2s ease; white-space: normal; text-align: left; pointer-events: none; }}
+            .flow-node-clickable .flow-tooltip {{ visibility: hidden; opacity: 0; position: absolute; top: 50%; left: 110%; transform: translateY(-50%); width: max-content; max-width: 450px; background: #ffffff; border: 1px solid #cbd5e1; border-radius: 12px; padding: 15px; box-shadow: 0 10px 25px -5px rgba(0,0,0,0.1), 0 8px 10px -6px rgba(0,0,0,0.1); z-index: 10000; transition: opacity 0.2s ease, visibility 0.2s ease; white-space: normal; text-align: left; pointer-events: none; }}
             .flow-node-clickable:hover .flow-tooltip {{ visibility: visible; opacity: 1; }}
-            .flow-node-clickable .flow-tooltip::after {{ content: ''; position: absolute; top: 100%; left: 50%; margin-left: -8px; border-width: 8px; border-style: solid; border-color: #ffffff transparent transparent transparent; z-index: 10001; }}
-            .flow-node-clickable .flow-tooltip::before {{ content: ''; position: absolute; top: 100%; left: 50%; margin-left: -9px; border-width: 9px; border-style: solid; border-color: #cbd5e1 transparent transparent transparent; z-index: 10000; }}
+            .flow-node-clickable .flow-tooltip::after {{ content: ''; position: absolute; top: 50%; right: 100%; left: auto; transform: translateY(-5px); border-width: 8px; border-style: solid; border-color: transparent #ffffff transparent transparent; z-index: 10001; margin: 0; }}
+            .flow-node-clickable .flow-tooltip::before {{ content: ''; position: absolute; top: 50%; right: 100%; left: auto; transform: translateY(-6px); border-width: 9px; border-style: solid; border-color: transparent #cbd5e1 transparent transparent; z-index: 10000; margin: 0; }}
             
             /* ✅ ФИНАЛЬНЫЙ ФИКС РАСКРЫТОГО РЕЖИМА */
             .flow-map-expanded .flow-node-clickable {{ 
@@ -1937,13 +1937,11 @@ class SmarticoCore:
                             clean_mac = self.normalize_label_name(macro_key)
                             if not clean_mac: return "5000"
                             
-                            # ⚡ ФИКС 2: Гарантируем, что макрос скачивается, если его нет или это просто строка
+                          
                             if clean_mac not in labels_store or not isinstance(labels_store.get(clean_mac), dict) or "default" not in labels_store.get(clean_mac):
-                                fetched = self.get_label_data_with_variations(clean_mac)
-                                if fetched: labels_store[clean_mac] = fetched
+                                return "5000"
                                 
                             m_data = labels_store.get(clean_mac)
-                            if not isinstance(m_data, dict): return "5000"
                             
                             m_type = str(m_data.get("tag_type_name", "")).strip().lower()
                             m_def = str(m_data.get("default", ""))
@@ -2883,9 +2881,12 @@ class SmarticoCore:
                     if previews:
                         preview_html = "<div><div style='display:flex; flex-wrap:nowrap; gap:20px; overflow-x:auto; padding:5px 5px 15px 5px;'>"
                         for prev in previews:
-                            tier_badge = "<span style='background:#fef08a; color:#854d0e; padding:2px 8px; border-radius:12px; font-size:11px; margin-left:8px; font-weight:bold;'>👑 VIP</span>" if "VIP" in prev['desc'] else f"<span style='background:#e2e8f0; color:#334155; padding:2px 8px; border-radius:12px; font-size:11px; margin-left:8px; font-weight:bold;'>🏷️ {esc(prev['desc'])}</span>"
+                            #Removing UID from previews in SMS
+                            sender_name = str(prev['desc']).split('(')[0].strip()
+                            tier_badge = "<span style='background:#fef08a; color:#854d0e; padding:2px 8px; border-radius:12px; font-size:11px; margin-left:8px; font-weight:bold;'>👑 VIP</span>" if "VIP" in prev['desc'] else ""
+                            
                             preview_html += f"<div style='flex: 0 0 auto; text-align:center; border: 1px solid #D1D5DB; padding: 15px; border-radius: 8px; background: #FFFFFF; width: 350px; box-shadow: 0 4px 12px rgba(0,0,0,0.05);'>"
-                            preview_html += f"<div style='display:flex; justify-content:center; align-items:center; margin-bottom:12px;'><strong style='color:#111827; font-size:15px;'>👤 User ID: {esc(prev['uid'])}</strong> {tier_badge}</div>"
+                            preview_html += f"<div style='display:flex; justify-content:center; align-items:center; margin-bottom:12px; border-bottom:1px dashed #e2e8f0; padding-bottom:8px;'><strong style='color:#64748b; font-size:13px;'>💬 Sender: <span style='color:#0f172a; font-size:14px;'>{esc(sender_name)}</span></strong> {tier_badge}</div>"
                             preview_html += f"<div style='background:#f8fafc; padding:12px; border-radius:6px; font-family:monospace; font-size:13px; white-space:pre-wrap; text-align:left; color:#334155; border:1px solid #e2e8f0;'>{esc(prev.get('text', ''))}</div>"
                             preview_html += "</div>"
                         preview_html += "</div></div>"
@@ -2915,10 +2916,10 @@ class SmarticoCore:
                 def resolve_macro_smart(mac, target_lang="EN"):
                     if self.is_ignored_label(mac): return ""
                     clean = self.normalize_label_name(mac)
+                    
                     if clean not in labels_store or not isinstance(labels_store.get(clean), dict) or "default" not in labels_store.get(clean):
-                        fetched = self.get_label_data_with_variations(clean)
-                        if fetched: labels_store[clean] = fetched
-                        else: return "5000"
+                        return "5000"
+                        
                     m_data = labels_store.get(clean)
                     if not m_data: return "5000"
                     m_def = str(m_data.get("default", ""))
@@ -3067,6 +3068,8 @@ class SmarticoCore:
             </section>
         </div>
         """
+
+        campaign_name_title = esc((data.get('general_main', {}).get('Name', '') or data.get('general_pop', {}).get('Name', '') or f"Campaign {brand_id}").strip())
 
         if is_mass_audit:
             return html_blocks
