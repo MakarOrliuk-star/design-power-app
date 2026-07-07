@@ -174,6 +174,7 @@ function openAssets() {
   background: none;
   padding: 0;
   margin-left: auto; /* mock: wide gap between the search box and Clear all */
+  margin-right: 32px; /* nudge left of the tabs (mock: ~34px gap) */
   font-family: inherit;
   font-size: var(--fs-btn);
   color: var(--color-text);
