@@ -180,6 +180,8 @@ export function mapScaleError(code: string | undefined): string {
       return "Не удалось обработать область — попробуйте другую маску.";
     case "empty_prompt":
       return "Введите промпт для дорисовки области.";
+    case "prompt_translation_failed":
+      return "Не удалось перевести промпт — попробуйте написать его по-английски.";
     case "mask_upload_failed":
     case "upload_failed":
       return "Не удалось сохранить результат.";
