@@ -56,7 +56,7 @@ const gen = useGeneratorStore();
   border: 1px solid var(--color-border);
   border-radius: var(--radius-pill);
   background: var(--color-white);
-  font-size: 14px;
+  font-size: var(--fs-bubble); /* 13px — Bubble Title */
   color: var(--color-text);
   white-space: nowrap;
 }

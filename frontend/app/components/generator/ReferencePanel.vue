@@ -153,17 +153,18 @@ const example = "Neon casino banner, purple & gold";
   gap: 12px;
   margin-top: 16px;
 }
+/* mock: 38px light-grey tiles (#F7F7F7), dark content, no visible border */
 .fmt {
   display: inline-flex;
   align-items: center;
   gap: 8px;
-  height: 44px;
+  height: 38px;
   padding: 0 16px;
-  border-radius: var(--radius-pill);
-  background: var(--color-white);
-  border: 1px solid var(--color-border);
+  border-radius: var(--radius-sm);
+  background: var(--color-window);
+  border: 1px solid transparent;
   font-family: inherit;
-  font-size: 13px;
+  font-size: var(--fs-btn);
   color: var(--color-grey);
   cursor: pointer;
 }
@@ -184,18 +185,18 @@ const example = "Neon casino banner, purple & gold";
   align-items: center;
   justify-content: space-between;
   gap: 10px;
-  height: 44px;
+  height: 38px;
   flex: 0 1 220px;
-  padding: 0 6px;
-  border: 1px solid var(--color-border);
-  border-radius: var(--radius-pill);
-  background: var(--color-white);
+  padding: 0 5px;
+  border: 1px solid transparent;
+  border-radius: var(--radius-sm);
+  background: var(--color-window);
 }
 .qty__btn {
   display: grid;
   place-items: center;
-  width: 30px;
-  height: 30px;
+  width: 28px;
+  height: 28px;
   border: none;
   border-radius: 50%;
   background: var(--color-bubble);
@@ -214,7 +215,7 @@ const example = "Neon casino banner, purple & gold";
 .qty__val {
   min-width: 18px;
   text-align: center;
-  font-size: 14px;
+  font-size: var(--fs-btn);
   color: var(--color-text);
 }
 
@@ -224,13 +225,13 @@ const example = "Neon casino banner, purple & gold";
   align-items: center;
   justify-content: center;
   gap: 10px;
-  height: 44px;
+  height: 38px;
   border: none;
   border-radius: var(--radius-md);
   background: var(--gradient-active);
   color: #ffffff;
   font-family: inherit;
-  font-size: 15px;
+  font-size: 14px;
   font-weight: 600;
 }
 .generate:hover {

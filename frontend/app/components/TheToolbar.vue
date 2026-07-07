@@ -2,12 +2,20 @@
 // Top toolbar (the row of white cards from the Figma Home). The progress card
 // reflects live generation batches from the store (R3): one bar per launched
 // batch, each with its own cancel/dismiss; the stop action cancels all running.
-// Metrics sampled from figma/icons/*.svg: cards 71px tall, radius 20,
-// 1px #CFCFCF border, ~20px gap; progress bars 190x4, radius 2.
+// Metrics sampled from figma/правки/макаронка 2.0 — Home.png (design 1920 @1.5x):
+// cards 55px tall, radius 20, 1px #CFCFCF border, 16px gap; icons 20px;
+// nav icons per figma/правки/Header — Pages — Icons.png — outline normally,
+// purple-gradient fill for the active page.
 import type { ActiveBatch } from "~/stores/generator";
 
 const gen = useGeneratorStore();
 const { theme, toggle: toggleTheme } = useTheme();
+const route = useRoute();
+
+// Active page → gradient icon (Header — Pages — Icons reference).
+const isHome = computed(() => route.path === "/");
+const isResult = computed(() => route.path.startsWith("/result"));
+const isArchive = computed(() => route.path.startsWith("/archive"));
 
 // Unified progress: ALWAYS 3 status slots — one per content group
 // (Person / Item / Background) — each reflecting the current (running) or last
@@ -77,34 +85,19 @@ const userInitials = computed(() => {
       title="На главную"
       @click="navigateTo('/')"
     >
-      <span class="logo">
-        <span class="logo__letter">m</span>
-        <svg
-          class="logo__wave"
-          width="46"
-          height="22"
-          viewBox="0 0 46 22"
-          fill="none"
-          aria-hidden="true"
-        >
-          <defs>
-            <linearGradient id="logoWave" x1="0" y1="11" x2="46" y2="11" gradientUnits="userSpaceOnUse">
-              <stop stop-color="#6A72D9" />
-              <stop offset="0.51" stop-color="#8151AA" />
-              <stop offset="1" stop-color="#DD88ED" />
-            </linearGradient>
-          </defs>
-          <path
-            d="M1 11 C 5 1, 11 1, 15 11 S 25 21, 29 11 S 39 1, 45 11"
-            stroke="url(#logoWave)"
-            stroke-width="3"
-            stroke-linecap="round"
-            fill="none"
-          />
-        </svg>
-        <span class="logo__letter">k</span>
-      </span>
+      <img class="logo" src="/logo.png" alt="m∿k" />
     </button>
+
+    <!-- Shared gradient for active nav icons (mock: the brand 3-stop gradient). -->
+    <svg width="0" height="0" style="position: absolute" aria-hidden="true">
+      <defs>
+        <linearGradient id="navGrad" x1="0" y1="12" x2="24" y2="12" gradientUnits="userSpaceOnUse">
+          <stop stop-color="#6A72D9" />
+          <stop offset="0.51" stop-color="#8151AA" />
+          <stop offset="1" stop-color="#DD88ED" />
+        </linearGradient>
+      </defs>
+    </svg>
 
     <!-- Unified progress: always 3 status slots (Person / Item / Background),
          each showing the current/last generation of that group. -->
@@ -114,18 +107,20 @@ const userInitials = computed(() => {
         :key="g.kind"
         :class="['job', { 'job--idle': !g.running && !g.done }]"
       >
-        <span class="ic ic--muted" aria-hidden="true">
+        <span class="ic ic--group" aria-hidden="true">
+          <!-- Solid dark group icons, as in the mock progress card. -->
           <svg v-if="g.kind === 'person'" viewBox="0 0 24 24" width="20" height="20" fill="none">
-            <path d="M12 3l1.6 3.6L17.5 7l-2.7 2.7.7 3.9L12 11.8 8.5 13.6l.7-3.9L6.5 7l3.9-.4L12 3z" stroke="currentColor" stroke-width="1.5" stroke-linejoin="round" />
+            <circle cx="12" cy="7.6" r="3.8" fill="currentColor" />
+            <path d="M4.6 19.4c.3-3.9 3.5-5.8 7.4-5.8s7.1 1.9 7.4 5.8c0 .3-.2.6-.6.6H5.2c-.4 0-.6-.3-.6-.6z" fill="currentColor" />
           </svg>
           <svg v-else-if="g.kind === 'item'" viewBox="0 0 24 24" width="20" height="20" fill="none">
-            <path d="M7 4h10M8 4v2.5L6 9v9a2 2 0 002 2h8a2 2 0 002-2V9l-2-2.5V4" stroke="currentColor" stroke-width="1.5" stroke-linejoin="round" />
-            <path d="M6.5 13h11" stroke="currentColor" stroke-width="1.5" />
+            <path d="M13.6 4.9l1.5 3.1 3.4.5c.7.1 1 1 .5 1.5l-2.5 2.4.6 3.4c.1.7-.6 1.3-1.3 1l-3-1.6-3 1.6c-.7.3-1.4-.3-1.3-1l.6-3.4-2.5-2.4c-.5-.5-.2-1.4.5-1.5l3.4-.5 1.5-3.1c.3-.7 1.3-.7 1.6 0z" fill="currentColor" />
+            <path d="M4.2 6.9c.9-1.3 2.1-2.2 3.4-2.6M3.6 11.7c.7-.6 1.5-1 2.3-1.2" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" />
           </svg>
           <svg v-else viewBox="0 0 24 24" width="20" height="20" fill="none">
-            <rect x="3.5" y="5" width="17" height="14" rx="2.5" stroke="currentColor" stroke-width="1.5" />
-            <circle cx="8.5" cy="10" r="1.4" stroke="currentColor" stroke-width="1.3" />
-            <path d="M5 16l4-3.5 3 2.5 2.5-2L19 15.5" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" />
+            <rect x="3.5" y="5.5" width="17" height="15" rx="4" fill="currentColor" />
+            <circle cx="15.8" cy="10" r="1.5" fill="#fff" />
+            <path d="M6.8 16.2c1.5-1.8 3-1.8 4.4 0 1.2 1.4 2.7 1 4.9-1" stroke="#fff" stroke-width="1.5" stroke-linecap="round" fill="none" />
           </svg>
         </span>
 
@@ -154,14 +149,12 @@ const userInitials = computed(() => {
       </div>
     </div>
 
-    <!-- Stop / delete -->
+    <!-- Stop: solid red rounded square, as in the icons reference -->
     <div class="card card--actions">
-      <button class="act act--stop" type="button" aria-label="Stop all running" @click="gen.stopAllRunning()">
-        <span class="act__square" />
-      </button>
+      <button class="act act--stop" type="button" aria-label="Stop all running" @click="gen.stopAllRunning()" />
     </div>
 
-    <!-- Tool icons -->
+    <!-- Page nav icons (Header — Pages — Icons): outline, gradient when active -->
     <div class="card card--tools">
       <button
         v-if="auth.isAdmin"
@@ -171,40 +164,58 @@ const userInitials = computed(() => {
         title="Админка"
         @click="navigateTo('/admin')"
       >
-        <svg viewBox="0 0 24 24" width="22" height="22" fill="none">
-          <path d="M12 3l7 3v5c0 4.5-3 8-7 10-4-2-7-5.5-7-10V6l7-3z" stroke="currentColor" stroke-width="1.6" stroke-linejoin="round" />
-          <path d="M9 12l2 2 4-4" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" />
-        </svg>
-      </button>
-      <button class="tool" type="button" aria-label="Models">
-        <svg viewBox="0 0 24 24" width="22" height="22" fill="none">
-          <path d="M12 3l8 4.5v9L12 21l-8-4.5v-9L12 3z" stroke="currentColor" stroke-width="1.6" stroke-linejoin="round" />
-          <path d="M4 7.5l8 4.5 8-4.5M12 12v9" stroke="currentColor" stroke-width="1.6" stroke-linejoin="round" />
+        <svg viewBox="0 0 24 24" width="20" height="20" fill="none">
+          <path d="M12 3.2l6.4 2.7c.4.2.6.5.6.9v4.4c0 4.2-2.8 7.5-6.6 9.4a.9.9 0 01-.8 0C7.8 18.7 5 15.4 5 11.2V6.8c0-.4.2-.7.6-.9L12 3.2z" stroke="currentColor" stroke-width="1.7" stroke-linejoin="round" />
+          <path d="M9.2 11.9l2 2 3.6-3.8" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" />
         </svg>
       </button>
       <button
         class="tool"
+        :class="{ 'tool--on': isHome }"
+        type="button"
+        aria-label="Home"
+        title="Home"
+        @click="navigateTo('/')"
+      >
+        <svg v-if="!isHome" viewBox="0 0 24 24" width="20" height="20" fill="none">
+          <path d="M4 16.4v-5.5c0-1 .5-1.9 1.3-2.5l5.5-4.1a2 2 0 012.4 0l5.5 4.1c.8.6 1.3 1.5 1.3 2.5v5.5c0 2.3-1.6 4.1-3.9 4.1H7.9C5.6 20.5 4 18.7 4 16.4z" stroke="currentColor" stroke-width="1.7" stroke-linejoin="round" />
+          <path d="M9.2 15.6c1 .9 4.6.9 5.6 0" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" />
+        </svg>
+        <svg v-else viewBox="0 0 24 24" width="20" height="20" fill="none">
+          <path d="M3.5 16.4v-5.5c0-1.2.6-2.3 1.5-3L10.5 3.8a2.5 2.5 0 013 0l5.5 4.1c1 .7 1.5 1.8 1.5 3v5.5c0 2.5-1.8 4.6-4.4 4.6H7.9c-2.6 0-4.4-2.1-4.4-4.6z" fill="url(#navGrad)" />
+          <path d="M9.2 15.6c1 .9 4.6.9 5.6 0" stroke="#fff" stroke-width="1.7" stroke-linecap="round" />
+        </svg>
+      </button>
+      <button
+        class="tool"
+        :class="{ 'tool--on': isResult }"
         type="button"
         aria-label="Open Result"
         title="Result"
         @click="navigateTo('/result')"
       >
-        <svg viewBox="0 0 24 24" width="22" height="22" fill="none">
-          <path d="M12 3l1.8 4.2L18 9l-4.2 1.8L12 15l-1.8-4.2L6 9l4.2-1.8L12 3z" stroke="currentColor" stroke-width="1.6" stroke-linejoin="round" />
-          <path d="M18 14l.9 2.1L21 17l-2.1.9L18 20l-.9-2.1L15 17l2.1-.9L18 14z" stroke="currentColor" stroke-width="1.4" stroke-linejoin="round" />
+        <svg viewBox="0 0 24 24" width="20" height="20" fill="none">
+          <path d="M13.6 4.9l1.5 3.1 3.4.5c.7.1 1 1 .5 1.5l-2.5 2.4.6 3.4c.1.7-.6 1.3-1.3 1l-3-1.6-3 1.6c-.7.3-1.4-.3-1.3-1l.6-3.4-2.5-2.4c-.5-.5-.2-1.4.5-1.5l3.4-.5 1.5-3.1c.3-.7 1.3-.7 1.6 0z" :fill="isResult ? 'url(#navGrad)' : 'none'" :stroke="isResult ? 'none' : 'currentColor'" stroke-width="1.7" stroke-linejoin="round" />
+          <path d="M4.2 6.9c.9-1.3 2.1-2.2 3.4-2.6M3.6 11.7c.7-.6 1.5-1 2.3-1.2" :stroke="isResult ? 'url(#navGrad)' : 'currentColor'" stroke-width="1.7" stroke-linecap="round" />
         </svg>
       </button>
       <button
         class="tool"
+        :class="{ 'tool--on': isArchive }"
         type="button"
         aria-label="Images"
         title="Архив"
         @click="navigateTo('/archive')"
       >
-        <svg viewBox="0 0 24 24" width="22" height="22" fill="none">
-          <rect x="3.5" y="4.5" width="17" height="15" rx="2.5" stroke="currentColor" stroke-width="1.6" />
-          <circle cx="9" cy="10" r="1.6" stroke="currentColor" stroke-width="1.4" />
-          <path d="M5 17l4.5-4.5 3.5 3.5 3-3L19 16" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" />
+        <svg v-if="!isArchive" viewBox="0 0 24 24" width="20" height="20" fill="none">
+          <rect x="3.75" y="3.75" width="16.5" height="16.5" rx="5" stroke="currentColor" stroke-width="1.7" />
+          <circle cx="15.9" cy="8.1" r="1.5" stroke="currentColor" stroke-width="1.4" />
+          <path d="M6.9 15.3c1.6-2 3.2-2 4.7 0 1.3 1.6 2.9 1.1 5.2-1.1" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" />
+        </svg>
+        <svg v-else viewBox="0 0 24 24" width="20" height="20" fill="none">
+          <rect x="3.5" y="3.5" width="17" height="17" rx="5" fill="url(#navGrad)" />
+          <circle cx="15.9" cy="8.1" r="1.5" fill="#fff" />
+          <path d="M6.9 15.3c1.6-2 3.2-2 4.7 0 1.3 1.6 2.9 1.1 5.2-1.1" stroke="#fff" stroke-width="1.6" stroke-linecap="round" />
         </svg>
       </button>
       <button
@@ -213,12 +224,12 @@ const userInitials = computed(() => {
         :aria-label="theme === 'dark' ? 'Switch to light theme' : 'Switch to dark theme'"
         @click="toggleTheme"
       >
-        <svg v-if="theme === 'dark'" viewBox="0 0 24 24" width="22" height="22" fill="none">
-          <circle cx="12" cy="12" r="4.5" stroke="currentColor" stroke-width="1.6" />
-          <path d="M12 2v2M12 20v2M2 12h2M20 12h2M5 5l1.4 1.4M17.6 17.6L19 19M19 5l-1.4 1.4M6.4 17.6L5 19" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" />
+        <svg v-if="theme === 'dark'" viewBox="0 0 24 24" width="20" height="20" fill="none">
+          <circle cx="12" cy="12" r="4.3" stroke="currentColor" stroke-width="1.7" />
+          <path d="M12 2.5v2M12 19.5v2M2.5 12h2M19.5 12h2M5.3 5.3l1.4 1.4M17.3 17.3l1.4 1.4M18.7 5.3l-1.4 1.4M6.7 17.3l-1.4 1.4" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" />
         </svg>
-        <svg v-else viewBox="0 0 24 24" width="22" height="22" fill="none">
-          <path d="M20 14.5A8 8 0 119.5 4 6.5 6.5 0 0020 14.5z" stroke="currentColor" stroke-width="1.6" stroke-linejoin="round" />
+        <svg v-else viewBox="0 0 24 24" width="20" height="20" fill="none">
+          <path d="M20 14.5A8 8 0 119.5 4a6.5 6.5 0 0010.5 10.5z" stroke="currentColor" stroke-width="1.7" stroke-linejoin="round" />
         </svg>
       </button>
     </div>
@@ -245,11 +256,11 @@ const userInitials = computed(() => {
   width: 100%;
 }
 
-/* shared card shell — white, 1px border, 20px radius, 71px tall */
+/* shared card shell — white, 1px border, 20px radius, 55px tall (mock) */
 .card {
   display: flex;
   align-items: center;
-  min-height: 71px;
+  min-height: 55px;
   background: var(--color-white);
   border: 1px solid var(--color-border);
   border-radius: var(--radius-lg);
@@ -266,17 +277,16 @@ const userInitials = computed(() => {
 .card--logo:hover {
   border-color: var(--color-accent);
 }
+/* логотип.png content, trimmed to the glyph (126×28 → 24px tall in the mock) */
 .logo {
-  display: inline-flex;
-  align-items: center;
-  gap: 4px;
-  font-size: 30px;
-  font-weight: 500;
-  letter-spacing: 0.5px;
-  color: var(--color-text);
-}
-.logo__wave {
   display: block;
+  height: 24px;
+  width: auto;
+}
+/* Dark theme: the PNG letters are near-black — invert lifts them to white;
+   hue-rotate(180deg) restores the wave gradient hues after inversion. */
+html[data-theme="dark"] .logo {
+  filter: invert(1) hue-rotate(180deg);
 }
 
 /* --- unified progress (3 group slots) --- */
@@ -303,8 +313,8 @@ const userInitials = computed(() => {
   gap: 7px;
 }
 .job__label {
-  font-size: 12px;
-  color: var(--color-grey);
+  font-size: var(--fs-btn); /* mock: 12px, primary text color */
+  color: var(--color-text);
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -328,12 +338,17 @@ const userInitials = computed(() => {
   flex: 0 0 auto;
   display: grid;
   place-items: center;
-  width: 22px;
-  height: 22px;
+  width: 14px;
+  height: 14px;
   border: none;
-  border-radius: 7px;
+  border-radius: 4px;
+  padding: 0;
   background: var(--color-stop);
-  color: var(--color-white);
+  color: #fff;
+}
+.job__close svg {
+  width: 8px;
+  height: 8px;
 }
 .job__close:hover {
   background: var(--color-stop-hover);
@@ -344,49 +359,44 @@ const userInitials = computed(() => {
   flex: 0 0 auto;
   gap: var(--space-16);
 }
+/* solid red rounded square (icons reference), 20px in the mock */
 .act {
   display: grid;
   place-items: center;
-  width: 34px;
-  height: 34px;
   border: none;
-  background: transparent;
-  border-radius: 9px;
-  color: var(--color-grey);
-}
-.act:hover {
-  background: var(--color-bubble);
+  padding: 0;
 }
 .act--stop {
+  width: 22px;
+  height: 22px;
+  border-radius: 7px;
   background: var(--color-stop);
 }
 .act--stop:hover {
   background: var(--color-stop-hover);
 }
-.act__square {
-  width: 13px;
-  height: 13px;
-  border-radius: 3px;
-  background: var(--color-white);
-}
 
-/* --- tool icons --- */
+/* --- page nav icons: dark outline, gradient fill when active (reference) --- */
 .card--tools {
   flex: 0 0 auto;
-  gap: 14px;
+  gap: 10px;
+  padding: 0 22px;
 }
 .tool {
   display: grid;
   place-items: center;
-  width: 34px;
-  height: 34px;
+  width: 32px;
+  height: 32px;
   border: none;
   background: transparent;
   border-radius: 9px;
-  color: var(--color-accent);
+  color: var(--color-text);
 }
 .tool:hover {
-  background: rgba(138, 56, 245, 0.08);
+  background: var(--color-segment);
+}
+.tool--on:hover {
+  background: transparent;
 }
 
 /* --- user --- */
@@ -396,7 +406,7 @@ const userInitials = computed(() => {
   gap: 12px;
 }
 .user__email {
-  font-size: 14px;
+  font-size: var(--fs-user); /* 14px — User Title */
   font-weight: 500;
   color: var(--color-text);
   white-space: nowrap;
@@ -407,20 +417,20 @@ const userInitials = computed(() => {
   flex: 0 0 auto;
   display: grid;
   place-items: center;
-  width: 38px;
-  height: 38px;
+  width: 26px;
+  height: 26px;
   border-radius: 50%;
   background: var(--gradient-active);
-  color: var(--color-white);
-  font-size: 13px;
+  color: #fff;
+  font-size: var(--fs-desc-sm);
   font-weight: 700;
 }
 .user__logout {
   flex: 0 0 auto;
   display: grid;
   place-items: center;
-  width: 34px;
-  height: 34px;
+  width: 30px;
+  height: 30px;
   border: none;
   border-radius: 50%;
   background: none;
@@ -437,8 +447,8 @@ const userInitials = computed(() => {
   place-items: center;
   flex: 0 0 auto;
 }
-.ic--muted {
-  color: var(--color-grey);
+.ic--group {
+  color: var(--color-text); /* solid dark group icons, as in the mock */
 }
 
 /* --- basic responsive (refined in Phase 6) --- */
