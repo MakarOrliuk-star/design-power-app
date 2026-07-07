@@ -27,6 +27,7 @@ describe("scale helpers", () => {
   it("mapScaleError maps known codes and falls back", () => {
     expect(mapScaleError("scale_pipeline_not_configured")).toContain("не настроен");
     expect(mapScaleError("empty_prompt")).toContain("промпт");
+    expect(mapScaleError("prompt_translation_failed")).toContain("по-английски");
     expect(mapScaleError(undefined)).toContain("Не удалось");
   });
 });

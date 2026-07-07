@@ -18,6 +18,7 @@ const fal = vi.hoisted(() => ({
   runBriaEraser: vi.fn(),
 }));
 const img = vi.hoisted(() => ({ probeImageSize: vi.fn() }));
+const lang = vi.hoisted(() => ({ ensureEnglishPrompt: vi.fn() }));
 
 vi.mock("../src/env.js", () => ({
   personPipelineReady: true,
@@ -43,6 +44,9 @@ vi.mock("../src/lib/fal.js", () => ({
 vi.mock("../src/lib/imageSize.js", () => ({
   probeImageSize: img.probeImageSize,
   probeAspectRatio: vi.fn(),
+}));
+vi.mock("../src/lib/promptLang.js", () => ({
+  ensureEnglishPrompt: lang.ensureEnglishPrompt,
 }));
 vi.mock("../src/services/finalize.js", () => ({ recomputeBatchStatus: vi.fn() }));
 vi.mock("../src/queues/index.js", () => ({
@@ -76,6 +80,9 @@ beforeEach(() => {
   fal.runBriaGenfill.mockReset();
   fal.runBriaEraser.mockReset();
   img.probeImageSize.mockReset();
+  // Default: the ASCII passthrough path (translation is exercised explicitly).
+  lang.ensureEnglishPrompt.mockReset();
+  lang.ensureEnglishPrompt.mockImplementation(async (p: string) => ({ ok: true, prompt: p.trim() }));
 });
 
 /** POST /api/generate/scale guard rails (TASK §1 Scale). */
@@ -167,6 +174,53 @@ describe("POST /api/generate/scale — pipeline", () => {
       where: { id: "g1" },
       data: { generatedImageUrl: "https://cdn/scaled.png" },
     });
+  });
+
+  it("translates a Russian expand prompt to English before calling bria/expand", async () => {
+    db.findFirst.mockResolvedValue({ id: "g1", generatedImageUrl: "https://cdn/src.png", brandName: "X" });
+    img.probeImageSize.mockResolvedValue({ width: 512, height: 512 });
+    fal.runBriaExpand.mockResolvedValue({ success: true, imageUrl: "https://fal/expanded.png" });
+    fal.runSeedvrUpscale.mockResolvedValue({ success: true, imageUrl: "https://fal/upscaled.png" });
+    cloud.uploadFromUrl.mockResolvedValue({ success: true, secure_url: "https://cdn/scaled.png" });
+    db.update.mockResolvedValue({ id: "g1" });
+    lang.ensureEnglishPrompt.mockResolvedValue({ ok: true, prompt: "green grass" });
+
+    const res = await request(makeApp())
+      .post("/api/generate/scale")
+      .send({ ...okBody, prompt: "зелёная трава" });
+
+    expect(res.status).toBe(200);
+    expect(lang.ensureEnglishPrompt).toHaveBeenCalledWith("зелёная трава");
+    expect(fal.runBriaExpand.mock.calls[0][1].prompt).toBe("green grass");
+  });
+
+  it("returns 502 prompt_translation_failed when the expand prompt can't be translated", async () => {
+    db.findFirst.mockResolvedValue({ id: "g1", generatedImageUrl: "https://cdn/src.png", brandName: "X" });
+    img.probeImageSize.mockResolvedValue({ width: 512, height: 512 });
+    lang.ensureEnglishPrompt.mockResolvedValue({ ok: false });
+
+    const res = await request(makeApp())
+      .post("/api/generate/scale")
+      .send({ ...okBody, prompt: "зелёная трава" });
+
+    expect(res.status).toBe(502);
+    expect(res.body.error).toBe("prompt_translation_failed");
+    expect(fal.runBriaExpand).not.toHaveBeenCalled();
+  });
+
+  it("skips the translator entirely when no prompt is sent", async () => {
+    db.findFirst.mockResolvedValue({ id: "g1", generatedImageUrl: "https://cdn/src.png", brandName: "X" });
+    img.probeImageSize.mockResolvedValue({ width: 512, height: 512 });
+    fal.runBriaExpand.mockResolvedValue({ success: true, imageUrl: "https://fal/expanded.png" });
+    fal.runSeedvrUpscale.mockResolvedValue({ success: true, imageUrl: "https://fal/upscaled.png" });
+    cloud.uploadFromUrl.mockResolvedValue({ success: true, secure_url: "https://cdn/scaled.png" });
+    db.update.mockResolvedValue({ id: "g1" });
+
+    const res = await request(makeApp()).post("/api/generate/scale").send(okBody);
+
+    expect(res.status).toBe(200);
+    expect(lang.ensureEnglishPrompt).not.toHaveBeenCalled();
+    expect(fal.runBriaExpand.mock.calls[0][1].prompt).toBeUndefined();
   });
 
   it("falls back to the expanded image when upscale fails", async () => {
@@ -285,6 +339,53 @@ describe("POST /api/generate/inpaint", () => {
     expect(res.status).toBe(200);
     expect(fal.runBriaEraser).toHaveBeenCalledWith("https://cdn/src.png", "https://cdn/mask.png");
     expect(fal.runBriaGenfill).not.toHaveBeenCalled();
+  });
+
+  it("translates a Russian fill prompt to English before calling genfill", async () => {
+    db.findFirst.mockResolvedValue({ id: "g1", generatedImageUrl: "https://cdn/src.png", brandName: "X" });
+    cloud.uploadBase64.mockResolvedValue({ success: true, secure_url: "https://cdn/mask.png" });
+    fal.runBriaGenfill.mockResolvedValue({ success: true, imageUrl: "https://fal/filled.png" });
+    cloud.uploadFromUrl.mockResolvedValue({ success: true, secure_url: "https://cdn/inpainted.png" });
+    db.update.mockResolvedValue({ id: "g1" });
+    lang.ensureEnglishPrompt.mockResolvedValue({ ok: true, prompt: "a red car" });
+
+    const res = await request(makeApp())
+      .post("/api/generate/inpaint")
+      .send({ ...maskBody, prompt: "красная машина" });
+
+    expect(res.status).toBe(200);
+    expect(lang.ensureEnglishPrompt).toHaveBeenCalledWith("красная машина");
+    // Bria receives the TRANSLATED prompt, never the raw non-ASCII one.
+    expect(fal.runBriaGenfill).toHaveBeenCalledWith("https://cdn/src.png", "https://cdn/mask.png", "a red car");
+  });
+
+  it("returns 502 prompt_translation_failed when translation fails (before mask upload)", async () => {
+    db.findFirst.mockResolvedValue({ id: "g1", generatedImageUrl: "https://cdn/src.png", brandName: "X" });
+    lang.ensureEnglishPrompt.mockResolvedValue({ ok: false });
+
+    const res = await request(makeApp())
+      .post("/api/generate/inpaint")
+      .send({ ...maskBody, prompt: "красная машина" });
+
+    expect(res.status).toBe(502);
+    expect(res.body.error).toBe("prompt_translation_failed");
+    expect(cloud.uploadBase64).not.toHaveBeenCalled();
+    expect(fal.runBriaGenfill).not.toHaveBeenCalled();
+  });
+
+  it("does not consult the translator in erase mode (no prompt involved)", async () => {
+    db.findFirst.mockResolvedValue({ id: "g1", generatedImageUrl: "https://cdn/src.png", brandName: "X" });
+    cloud.uploadBase64.mockResolvedValue({ success: true, secure_url: "https://cdn/mask.png" });
+    fal.runBriaEraser.mockResolvedValue({ success: true, imageUrl: "https://fal/erased.png" });
+    cloud.uploadFromUrl.mockResolvedValue({ success: true, secure_url: "https://cdn/inpainted.png" });
+    db.update.mockResolvedValue({ id: "g1" });
+
+    const res = await request(makeApp())
+      .post("/api/generate/inpaint")
+      .send({ generationId: "g1", maskDataUrl: "data:image/png;base64,AAAA", mode: "erase" });
+
+    expect(res.status).toBe(200);
+    expect(lang.ensureEnglishPrompt).not.toHaveBeenCalled();
   });
 
   it("returns 502 when the mask upload fails", async () => {

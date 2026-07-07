@@ -10,6 +10,7 @@ import { createPersonBatch, createItemBatch, createEditBatch } from "../services
 import { recomputeBatchStatus } from "../services/finalize.js";
 import { probeAspectRatio, probeImageSize } from "../lib/imageSize.js";
 import { runBriaExpand, runSeedvrUpscale, runBriaGenfill, runBriaEraser } from "../lib/fal.js";
+import { ensureEnglishPrompt } from "../lib/promptLang.js";
 
 // Mounted behind loadUser + requireAuth (see index.ts).
 export const generateRouter: Router = Router();
@@ -348,10 +349,22 @@ generateRouter.post("/generate/scale", async (req: Request, res: Response) => {
   }
 
   try {
+    // Bria rejects non-ASCII prompts — translate a Russian prompt to English
+    // first (ASCII passes through untouched). Explicit failure beats a 422.
+    let prompt: string | undefined;
+    if (d.prompt?.trim()) {
+      const eng = await ensureEnglishPrompt(d.prompt);
+      if (!eng.ok) {
+        res.status(502).json({ error: "prompt_translation_failed" });
+        return;
+      }
+      prompt = eng.prompt;
+    }
+
     // 1. Outpaint the empty margins.
     const expand = await runBriaExpand(row.generatedImageUrl!, {
       ...box,
-      ...(d.prompt ? { prompt: d.prompt } : {}),
+      ...(prompt ? { prompt } : {}),
     });
     if (!expand.success || !expand.imageUrl) {
       res.status(502).json({ error: "expand_failed", detail: expand.error });
@@ -413,6 +426,19 @@ generateRouter.post("/generate/inpaint", async (req: Request, res: Response) => 
   }
 
   try {
+    // Bria genfill rejects non-ASCII prompts — translate a Russian prompt to
+    // English first (ASCII passes through untouched). Done before the mask
+    // upload so a translation failure costs nothing.
+    let prompt = "";
+    if (d.mode === "fill") {
+      const eng = await ensureEnglishPrompt(d.prompt!);
+      if (!eng.ok) {
+        res.status(502).json({ error: "prompt_translation_failed" });
+        return;
+      }
+      prompt = eng.prompt;
+    }
+
     // Bria needs a mask URL — upload the painted mask to Cloudinary first.
     const maskUpload = await withRetry(
       () => uploadBase64(d.maskDataUrl, `mask_${row.id}_${Date.now()}.png`, `masks/${row.brandName}`),
@@ -425,7 +451,7 @@ generateRouter.post("/generate/inpaint", async (req: Request, res: Response) => 
 
     const result =
       d.mode === "fill"
-        ? await runBriaGenfill(row.generatedImageUrl!, maskUpload.secure_url, d.prompt!.trim())
+        ? await runBriaGenfill(row.generatedImageUrl!, maskUpload.secure_url, prompt)
         : await runBriaEraser(row.generatedImageUrl!, maskUpload.secure_url);
     if (!result.success || !result.imageUrl) {
       res.status(502).json({ error: "inpaint_failed", detail: result.error });
