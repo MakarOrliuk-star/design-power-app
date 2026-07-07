@@ -37,9 +37,9 @@ const gen = useGeneratorStore();
   min-height: 0;
   overflow-y: auto;
   padding: 18px;
-  border: 1px solid var(--color-border);
+  border: 1px solid var(--color-bubble);
   border-radius: var(--radius-md);
-  background: var(--color-white);
+  background: var(--color-window); /* mock: grey #F7F7F7 box, white chips */
   display: flex;
   flex-wrap: wrap;
   align-content: flex-start;

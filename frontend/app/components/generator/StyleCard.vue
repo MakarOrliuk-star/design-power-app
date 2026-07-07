@@ -48,10 +48,13 @@ function removeRef(i: number) {
 
 <template>
   <div :class="['style', { 'style--flat': flat }]">
-    <span class="style__label">{{ title }}</span>
+    <!-- label + upload slots; in All mode this block sits on a grey panel
+         (mock: #F7F7F7 rounded box around Style Title + slot) -->
+    <div class="style__head">
+      <span class="style__label">{{ title }}</span>
 
-    <!-- reference images: previews + upload control -->
-    <div class="style__slots">
+      <!-- reference images: previews + upload control -->
+      <div class="style__slots">
       <div v-for="(src, i) in refs" :key="i" class="slot slot--filled">
         <img class="slot__img" :src="src" alt="reference" />
         <button
@@ -66,14 +69,15 @@ function removeRef(i: number) {
         </button>
       </div>
 
-      <label v-if="refs.length < MAX_REFS" class="slot slot--add">
-        <input class="slot__file" type="file" accept="image/*" multiple @change="onFiles" />
-        <span class="slot__plus" aria-hidden="true">
-          <svg viewBox="0 0 24 24" width="20" height="20" fill="none">
-            <path d="M12 5v14M5 12h14" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" />
-          </svg>
-        </span>
-      </label>
+        <label v-if="refs.length < MAX_REFS" class="slot slot--add">
+          <input class="slot__file" type="file" accept="image/*" multiple @change="onFiles" />
+          <span class="slot__plus" aria-hidden="true">
+            <svg viewBox="0 0 24 24" width="20" height="20" fill="none">
+              <path d="M12 5v14M5 12h14" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" />
+            </svg>
+          </span>
+        </label>
+      </div>
     </div>
 
     <!-- prompt -->
@@ -102,6 +106,18 @@ function removeRef(i: number) {
   padding: 0;
   background: none;
   min-height: 0;
+}
+.style__head {
+  display: flex;
+  flex-direction: column;
+}
+/* All mode: grey panel around the label + upload slots (mock: #F7F7F7,
+   1px #E5E5E5, radius 14) */
+.style--flat .style__head {
+  background: var(--color-window);
+  border: 1px solid var(--color-bubble);
+  border-radius: var(--radius-md);
+  padding: 14px 16px 16px;
 }
 .style__label {
   font-size: var(--fs-user); /* 14px, dark — as in the mock ("Style Title") */
@@ -150,7 +166,7 @@ function removeRef(i: number) {
   place-items: center;
   cursor: pointer;
   border: 1px solid var(--color-border);
-  background: var(--color-white);
+  background: var(--color-window); /* mock: slot blends with the grey panel */
   color: var(--color-grey);
 }
 .slot--add:hover {
@@ -174,7 +190,7 @@ function removeRef(i: number) {
   min-height: 56px;
   resize: vertical;
   padding: 12px 14px;
-  border: 1px solid var(--color-border);
+  border: 1px solid var(--color-bubble); /* mock: #E5E5E5 */
   border-radius: var(--radius-sm);
   background: var(--color-white);
   font-family: inherit;
