@@ -99,25 +99,18 @@ function removeRef(i: number) {
   padding: 16px;
   background: var(--color-white);
 }
-/* All mode: the single card sits directly on the board, no own frame */
+/* All mode: the whole card is a grey panel (mock: #F7F7F7, 1px #E5E5E5),
+   with the white prompt textarea inside */
 .style--flat {
-  border: none;
-  border-radius: 0;
-  padding: 0;
-  background: none;
+  border: 1px solid var(--color-bubble);
+  border-radius: var(--radius-md);
+  padding: 16px;
+  background: var(--color-window);
   min-height: 0;
 }
 .style__head {
   display: flex;
   flex-direction: column;
-}
-/* All mode: grey panel around the label + upload slots (mock: #F7F7F7,
-   1px #E5E5E5, radius 14) */
-.style--flat .style__head {
-  background: var(--color-window);
-  border: 1px solid var(--color-bubble);
-  border-radius: var(--radius-md);
-  padding: 14px 16px 16px;
 }
 .style__label {
   font-size: var(--fs-user); /* 14px, dark — as in the mock ("Style Title") */

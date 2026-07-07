@@ -134,14 +134,18 @@ const groups = computed(() => {
   color: var(--color-accent);
 }
 
-/* alphabetical list — borderless per home 2.0 new.png; takes the remaining
-   board height and is the only scroll area of the picker. Extra bottom
-   padding lets the last row scroll out from under the floating Assets button. */
+/* alphabetical list — grey box per макаронка 2.0 mock (#F7F7F7, 1px #E5E5E5);
+   takes the remaining board height and is the only scroll area of the picker.
+   Extra bottom padding lets the last row scroll out from under the floating
+   Assets button. */
 .list {
   flex: 1;
   min-height: 60px;
-  padding: 4px 12px 56px 4px;
+  padding: 4px 18px 56px;
   overflow-y: auto;
+  background: var(--color-window);
+  border: 1px solid var(--color-bubble);
+  border-radius: var(--radius-md);
 }
 .empty {
   margin: 0;
