@@ -104,8 +104,8 @@ function removeRef(i: number) {
   min-height: 0;
 }
 .style__label {
-  font-size: 13px;
-  color: var(--color-grey);
+  font-size: var(--fs-user); /* 14px, dark — as in the mock ("Style Title") */
+  color: var(--color-text);
   margin-bottom: 12px;
 }
 
@@ -116,8 +116,8 @@ function removeRef(i: number) {
 }
 .slot {
   position: relative;
-  width: 88px;
-  height: 88px;
+  width: 78px;
+  height: 78px;
   border-radius: var(--radius-sm);
   background: var(--color-bubble);
   overflow: hidden;
@@ -178,7 +178,7 @@ function removeRef(i: number) {
   border-radius: var(--radius-sm);
   background: var(--color-white);
   font-family: inherit;
-  font-size: 13px;
+  font-size: var(--fs-tab); /* 12px — Descriptor Large */
   line-height: 1.5;
   color: var(--color-text);
   outline: none;

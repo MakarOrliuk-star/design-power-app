@@ -58,7 +58,7 @@ function openAssets() {
             @click="gen.activeTab = t.value"
           >
             <span v-if="t.value === 'PERSON'" class="seg__ic" aria-hidden="true">
-              <svg viewBox="0 0 24 24" width="18" height="18" fill="none">
+              <svg viewBox="0 0 24 24" width="16" height="16" fill="none">
                 <circle cx="12" cy="8" r="3.4" stroke="currentColor" stroke-width="1.6" />
                 <path d="M5 19c0-3.3 3.1-5 7-5s7 1.7 7 5" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" />
               </svg>
@@ -131,20 +131,21 @@ function openAssets() {
   gap: var(--space-16);
   flex-wrap: wrap;
 }
+/* mock: 660×38, 1px #E5E5E5 border, dark magnifier 18px from the right */
 .search {
   position: relative;
   flex: 1 1 320px;
-  max-width: 880px;
+  max-width: 660px;
 }
 .search__input {
   width: 100%;
-  height: 44px;
+  height: 38px;
   padding: 0 44px 0 18px;
-  border: 1px solid var(--color-border);
+  border: 1px solid var(--color-bubble);
   border-radius: var(--radius-pill);
   background: var(--color-white);
   font-family: inherit;
-  font-size: 14px;
+  font-size: var(--fs-tab);
   color: var(--color-text);
   outline: none;
 }
@@ -156,35 +157,40 @@ function openAssets() {
 }
 .search__icon {
   position: absolute;
-  right: 16px;
+  right: 18px;
   top: 50%;
   transform: translateY(-50%);
   display: grid;
   place-items: center;
-  color: var(--color-grey);
+  color: var(--color-text);
   pointer-events: none;
+}
+.search__icon svg {
+  width: 16px;
+  height: 16px;
 }
 .clear {
   border: none;
   background: none;
   padding: 0;
+  margin-left: auto; /* mock: wide gap between the search box and Clear all */
   font-family: inherit;
-  font-size: 14px;
+  font-size: var(--fs-btn);
   color: var(--color-text);
 }
 .clear:hover {
   color: var(--color-accent);
 }
 
-/* segmented controls (Person/Item/Background + All/Each) */
+/* segmented controls (Person/Item/Background + All/Each) — 38px tall (mock) */
 .seg {
   display: inline-flex;
   background: var(--color-segment);
   border-radius: var(--radius-pill);
-  padding: 4px;
+  padding: 3px;
 }
 .seg--tabs {
-  flex: 0 1 480px;
+  flex: 0 1 530px;
 }
 .seg--mode {
   margin-left: auto;
@@ -200,7 +206,7 @@ function openAssets() {
   padding: 8px 22px;
   border-radius: var(--radius-pill);
   font-family: inherit;
-  font-size: 14px;
+  font-size: var(--fs-tab);
   font-weight: 500;
   color: var(--color-grey);
   white-space: nowrap;

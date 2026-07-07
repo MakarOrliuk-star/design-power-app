@@ -1,7 +1,8 @@
 /* Design Power — base tokens. Values sampled from the Figma SVG exports
    (figma/icons/*.svg) so the UI matches pixel-for-pixel. Light theme. */
 
-/* Typeface: a geometric grotesque sans-serif. Inter is loaded from Google Fonts
+/* Typeface: a geometric grotesque sans-serif. Figtree (closest free analogue
+   of Circular from figma/правки/шрифты.png) is loaded from Google Fonts
    (see nuxt.config app.head.link); the fallback chain prefers the platform
    geometric grotesque — San Francisco on Apple (-apple-system / BlinkMacSystemFont),
    Segoe UI on Windows, Roboto on Android. */
@@ -52,8 +53,19 @@
   --shadow-card: 0 1px 2px rgba(31, 31, 31, 0.04);
 
   --font-sans:
-    "Inter", -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto,
+    "Figtree", -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto,
     "Helvetica Neue", Arial, sans-serif;
+
+  /* Type scale (figma/правки/шрифты.png) — applied on Home + shared header;
+     other pages only inherit the family. */
+  --fs-alphabet: 24px; /* Alphabet — section letters in the brand picker */
+  --fs-title: 20px; /* Main Title */
+  --fs-user: 14px; /* User Title — email, search text */
+  --fs-bubble: 13px; /* Bubble Title — brand chips */
+  --fs-btn: 12px; /* Btn / Text Btn */
+  --fs-tab: 12px; /* Tab Large / Descriptor Large */
+  --fs-desc-sm: 10px; /* Descriptor Small / Promt Title / Statusbar Desc */
+  --fs-tag: 8px; /* Tab Small / Tag Title */
 }
 
 /* Dark theme — toggled via <html data-theme="dark">. Brand colors (accent,

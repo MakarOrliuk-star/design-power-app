@@ -102,16 +102,16 @@ const groups = computed(() => {
   gap: 4px;
   background: var(--color-segment);
   border-radius: var(--radius-pill);
-  padding: 5px;
+  padding: 4px;
   overflow-x: auto;
 }
 .cat {
   border: none;
   background: none;
-  padding: 9px 18px;
+  padding: 8px 18px;
   border-radius: var(--radius-pill);
   font-family: inherit;
-  font-size: 14px;
+  font-size: var(--fs-tab);
   color: var(--color-grey);
   white-space: nowrap;
 }
@@ -127,7 +127,7 @@ const groups = computed(() => {
   background: none;
   padding: 0;
   font-family: inherit;
-  font-size: 14px;
+  font-size: var(--fs-btn);
   color: var(--color-text);
 }
 .addall:hover {
@@ -161,10 +161,10 @@ const groups = computed(() => {
 }
 .group__letter {
   flex: 0 0 32px;
-  font-size: 26px;
+  font-size: var(--fs-alphabet); /* 24px — Alphabet */
   font-weight: 400;
-  line-height: 40px;
-  color: #c4c4c4;
+  line-height: 38px;
+  color: var(--color-grey);
 }
 .group__brands {
   flex: 1;
@@ -178,7 +178,7 @@ const groups = computed(() => {
   display: inline-flex;
   align-items: center;
   gap: 6px;
-  height: 40px;
+  height: 38px;
   padding: 0 16px 0 12px;
   border: 1px solid var(--color-border);
   border-radius: var(--radius-pill);
@@ -225,7 +225,7 @@ const groups = computed(() => {
   background: transparent;
   padding: 0;
   font-family: inherit;
-  font-size: 14px;
+  font-size: var(--fs-bubble); /* 13px — Bubble Title */
   color: var(--color-text);
   cursor: pointer;
   white-space: nowrap;
