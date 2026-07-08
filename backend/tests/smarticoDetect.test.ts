@@ -150,6 +150,53 @@ describe("resolveEntry — root-brand structure: [DES-123/]Brand/<channel>/file"
   });
 });
 
+describe("resolveEntry — root-brand structure without channel folders (DES-19697 case)", () => {
+  it("reads type tokens from files directly inside a root brand folder", () => {
+    expect(resolveEntry("NineCasino/Email 600х300.webp")).toEqual({
+      brand: "NineCasino",
+      type: "email",
+    });
+    expect(resolveEntry("NineCasino/Pop-up 400х300.webp")).toEqual({
+      brand: "NineCasino",
+      type: "pop-up_1",
+    });
+    expect(resolveEntry("NineCasino/Push 128х128.webp")).toEqual({
+      brand: "NineCasino",
+      type: "push",
+    });
+  });
+  it("never treats the DES-ticket wrapper itself as a brand", () => {
+    expect(resolveEntry("DES-19697/Email 600х300.webp")).toBeNull();
+    expect(resolveEntry("DES 19697/Push 128х128.webp")).toBeNull();
+  });
+  it("ignores non-image files and token-less names at the brand root", () => {
+    expect(resolveEntry("NineCasino/email notes.txt")).toBeNull();
+    expect(resolveEntry("NineCasino/promocard.webp")).toBeNull();
+  });
+});
+
+describe("parseStructure — DES-19697 layout (files with tokens in root brand folders)", () => {
+  const structure = parseStructure([
+    "NineCasino/Email 600х300.webp",
+    "NineCasino/Pop-up 400х300.webp",
+    "NineCasino/Push 128х128.webp",
+    "NineCasino/Push 1024х512.webp",
+    "BrunoCasino/Email 600х300.webp",
+  ]);
+  it("collects both root-level brands", () => {
+    expect(Object.keys(structure.brands).sort()).toEqual(["BrunoCasino", "NineCasino"]);
+  });
+  it("maps tokens to types (pop-up → pop-up_1)", () => {
+    expect(structure.brands["NineCasino"]!.email!.default).toBe("NineCasino/Email 600х300.webp");
+    expect(structure.brands["NineCasino"]!["pop-up_1"]!.default).toBe(
+      "NineCasino/Pop-up 400х300.webp",
+    );
+  });
+  it("picks the alphabetically first of the two Push files", () => {
+    expect(structure.brands["NineCasino"]!.push!.default).toBe("NineCasino/Push 1024х512.webp");
+  });
+});
+
 describe("resolveEntry — legacy structure (retained as fallback)", () => {
   it("reads DES-XXXXX / Brand / file with filename token", () => {
     expect(resolveEntry("DES-12345/Corgibet/corgibet email 600x266.webp")).toEqual({

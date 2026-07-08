@@ -67,6 +67,20 @@ describe("end-to-end: real ZIP with the new root-brand structure", () => {
     expect(structure.allBrandsDefault).toBe("All brands/main.png");
     expect(availableTypes(structure)).toEqual(["email", "push", "pop-up_1"]);
   });
+
+  it("parses the DES-19697 layout: token filenames directly in root brand folders", async () => {
+    const zip = await makeZip({
+      "NineCasino/Email 600х300.webp": "img1",
+      "NineCasino/Pop-up 400х300.webp": "img2",
+      "NineCasino/Push 128х128.webp": "img3",
+      "NineCasino/Push 1024х512.webp": "img4",
+      "BrunoCasino/Email 600х300.webp": "img5",
+    });
+    const structure = parseStructure(await listEntryPaths(zip));
+    expect(Object.keys(structure.brands).sort()).toEqual(["BrunoCasino", "NineCasino"]);
+    expect(availableTypes(structure)).toEqual(["email", "push", "pop-up_1"]);
+    expect(structure.brands["NineCasino"]!.push!.default).toBe("NineCasino/Push 1024х512.webp");
+  });
 });
 
 describe("extractAndProcess", () => {
