@@ -51,22 +51,42 @@ describe("generateOutputs", () => {
     expect(blocks[1]!.code).toContain("https://cdn/p2.png");
   });
 
-  it("renders All brands as a constant-return function (Сквозной)", () => {
+  it("uses the All brands image as the else-fallback (no separate Сквозной block)", () => {
     const urls: UrlMap = {
       "All brands": { email: { default: "https://cdn/all.png", KO: null } },
       corgibet: { email: { default: "https://cdn/corgi.png", KO: null } },
     };
     const blocks = generateOutputs(urls, ["email"], [nb("All brands"), nb("corgibet")]);
-    const all = blocks.find((b) => b.title.includes("All Brands"));
-    const fn = blocks.find((b) => b.title === "Email — Function");
-    expect(all?.kind).toBe("function");
-    expect(all?.title).toBe("Email — All Brands (Сквозной)");
-    expect(all?.code).toContain('return "https://cdn/all.png";');
-    expect(all?.code).toContain("Сквозной All brands");
-    expect(all?.code).not.toContain("core_sm_brand_id");
-    // the All-brands url must not leak into the individual-brand function
-    expect(fn?.code).not.toContain("https://cdn/all.png");
-    expect(fn?.code).toContain('"Corgibet": "https://cdn/corgi.png"');
+    expect(blocks).toHaveLength(1);
+    const fn = blocks[0]!;
+    expect(fn.title).toBe("Email — Function");
+    expect(fn.code).toContain('"Corgibet": "https://cdn/corgi.png"');
+    // the All brands image replaces the label placeholder in the else-branch
+    expect(fn.code).toContain('return "https://cdn/all.png";');
+    expect(fn.code).not.toContain("{{label.dynamic_image_default_unique}}");
+    // All brands must not appear as an individual brand key
+    expect(fn.code).not.toContain('"All brands"');
+  });
+
+  it("uses the type-less default image (new structure) as the else-fallback", () => {
+    const urls: UrlMap = {
+      corgibet: { email: { default: "https://cdn/corgi.png", KO: null } },
+    };
+    const blocks = generateOutputs(urls, ["email"], [nb("corgibet")], "https://cdn/default.png");
+    expect(blocks).toHaveLength(1);
+    expect(blocks[0]!.code).toContain('return "https://cdn/default.png";');
+    expect(blocks[0]!.code).not.toContain("{{label.dynamic_image_default_unique}}");
+  });
+
+  it("still emits the constant Сквозной function when only All brands is present", () => {
+    const urls: UrlMap = {
+      "All brands": { email: { default: "https://cdn/all.png", KO: null } },
+    };
+    const blocks = generateOutputs(urls, ["email"], [nb("All brands")]);
+    expect(blocks).toHaveLength(1);
+    expect(blocks[0]!.title).toBe("Email — All Brands (Сквозной)");
+    expect(blocks[0]!.code).toContain('return "https://cdn/all.png";');
+    expect(blocks[0]!.code).not.toContain("core_sm_brand_id");
   });
 
   it("emits Korea and Korea realistic as separate KO-guarded functions", () => {
@@ -98,6 +118,17 @@ describe("generateOutputs", () => {
     const fn = blocks.find((b) => b.title === "Email — Function")!;
     expect(fn.code).not.toContain("https://cdn/kr.png");
     expect(fn.code).not.toContain("Korea");
+  });
+
+  it("Korea function falls back to the All brands image when present", () => {
+    const urls: UrlMap = {
+      Korea: { email: { default: "https://cdn/kr.png", KO: null } },
+      corgibet: { email: { default: "https://cdn/corgi.png", KO: null } },
+    };
+    const blocks = generateOutputs(urls, ["email"], [nb("Korea"), nb("corgibet")], "https://cdn/default.png");
+    const korea = blocks.find((b) => b.title === "Email — Korea (KO)")!;
+    expect(korea.code).toContain('return "https://cdn/default.png";');
+    expect(korea.code).not.toContain("{{label.dynamic_image_default_unique}}");
   });
 
   it("keeps a brand with only a Korean image as a plain default string", () => {
@@ -132,19 +163,28 @@ describe("generateSmarticoCardOutputs (Tournament card.webp)", () => {
     expect(blocks[0]!.code).not.toContain("core_user_language"); // card has no KO
   });
 
-  it("renders All brands as a constant-return Smartico function", () => {
+  it("uses the All brands card as the else-fallback of the card function", () => {
     const cardUrls = {
       "All brands": "https://cdn/c/all.png",
       corgibet: "https://cdn/c/corgi.png",
     };
     const blocks = generateSmarticoCardOutputs(cardUrls, [nb("All brands"), nb("corgibet")]);
-    const all = blocks.find((b) => b.title.includes("All Brands"));
-    expect(all?.title).toBe("Smartico — All Brands (Сквозной)");
-    expect(all?.code).toContain('return "https://cdn/c/all.png";');
-    // the All-brands url must not leak into the per-brand card function
-    const fn = blocks.find((b) => b.title === "Smartico — Card")!;
-    expect(fn.code).not.toContain("https://cdn/c/all.png");
+    expect(blocks).toHaveLength(1);
+    const fn = blocks[0]!;
+    expect(fn.title).toBe("Smartico — Card");
     expect(fn.code).toContain('"Corgibet": "https://cdn/c/corgi.png"');
+    expect(fn.code).toContain('return "https://cdn/c/all.png";');
+    expect(fn.code).not.toContain("{{label.dynamic_image_default_unique}}");
+  });
+
+  it("emits the constant Сквозной card function when only All brands is present", () => {
+    const blocks = generateSmarticoCardOutputs(
+      { "All brands": "https://cdn/c/all.png" },
+      [nb("All brands")],
+    );
+    expect(blocks).toHaveLength(1);
+    expect(blocks[0]!.title).toBe("Smartico — All Brands (Сквозной)");
+    expect(blocks[0]!.code).toContain('return "https://cdn/c/all.png";');
   });
 
   it("emits Korea as a KO-guarded Smartico function", () => {

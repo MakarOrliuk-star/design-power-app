@@ -6,6 +6,7 @@ import { rm } from "node:fs/promises";
 import { randomUUID } from "node:crypto";
 import archiver from "archiver";
 import { listEntryPaths, extractAndProcess } from "../src/lib/smartico/zip.js";
+import { parseStructure, availableTypes } from "../src/lib/smartico/detect.js";
 
 const tmpFiles: string[] = [];
 
@@ -38,6 +39,33 @@ describe("listEntryPaths", () => {
     const paths = await listEntryPaths(zip);
     expect(paths).toContain("Nine/Summer/CRM/email/a.png");
     expect(paths).toContain("Nine/Summer/CRM/push/b.png");
+  });
+});
+
+describe("end-to-end: real ZIP with the new root-brand structure", () => {
+  it("parses DES-123.zip → Brand → {email, push, pop-up} + All brands default", async () => {
+    const zip = await makeZip({
+      "NineCasino/email/promo.png": "img1",
+      "NineCasino/email/second.png": "img2", // duplicate → first alphabetical wins
+      "NineCasino/push/promo.png": "img3",
+      "NineCasino/pop-up/promo.png": "img4",
+      "BrunoCasino/email/promo.png": "img5",
+      "All brands/main.png": "img6",
+      "NineCasino/email/notes.txt": "junk", // not an image
+      "__MACOSX/NineCasino/email/._promo.png": "junk",
+      "NineCasino/email/.DS_Store": "junk",
+    });
+    const structure = parseStructure(await listEntryPaths(zip));
+
+    expect(Object.keys(structure.brands).sort()).toEqual(["BrunoCasino", "NineCasino"]);
+    expect(structure.brands["NineCasino"]!.email!.default).toBe("NineCasino/email/promo.png");
+    expect(structure.brands["NineCasino"]!.push!.default).toBe("NineCasino/push/promo.png");
+    // plain pop-up folder is the default pop-up_1
+    expect(structure.brands["NineCasino"]!["pop-up_1"]!.default).toBe(
+      "NineCasino/pop-up/promo.png",
+    );
+    expect(structure.allBrandsDefault).toBe("All brands/main.png");
+    expect(availableTypes(structure)).toEqual(["email", "push", "pop-up_1"]);
   });
 });
 

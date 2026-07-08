@@ -547,9 +547,10 @@ onUnmounted(() => {
         {{ phase === "analyzing" ? "Загрузка и анализ…" : "Перетащите ZIP или нажмите, чтобы выбрать" }}
       </div>
       <div class="drop__hint">
-        Структура: <code>DES-XXXXX/Бренд/CRM/{email, pop-up_1, pop-up_2, push}</code>.
-        <code>All brands</code> → сквозная функция, <code>Korea</code> /
-        <code>Korea realistic</code> → отдельные KO-функции. До 100 МБ.
+        Структура: <code>DES-XXXXX/Бренд/CRM/{email, pop-up_1, pop-up_2, push}</code>
+        или <code>Бренд/{email, push, pop-up}</code> сразу в корне архива.
+        <code>All brands</code> → дефолтная картинка (подставляется в else каждой функции),
+        <code>Korea</code> / <code>Korea realistic</code> → отдельные KO-функции. До 100 МБ.
       </div>
       <input ref="fileInput" type="file" accept=".zip" hidden @change="onInputChange" />
 

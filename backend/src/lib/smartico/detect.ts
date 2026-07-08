@@ -12,6 +12,11 @@ export type BrandTypes = Partial<Record<TypeKey, TypeSlot>>;
 
 export interface ParsedStructure {
   brands: Record<string, BrandTypes>;
+  /**
+   * Single type-less image inside an "All brands" folder (default variation):
+   * used as the fallback of every brand function instead of the label placeholder.
+   */
+  allBrandsDefault: string | null;
 }
 
 const norm = (s: string): string => s.trim().toLowerCase().replace(/\s+/g, "");
@@ -35,13 +40,21 @@ function stripExt(name: string): string {
   return name.replace(/\.[^.]+$/, "");
 }
 
+const IMAGE_EXT_RE = /\.(webp|png|jpe?g|gif|avif)$/i;
+
+export function isImageFile(name: string): boolean {
+  return IMAGE_EXT_RE.test(name);
+}
+
 /** Map a clean leaf folder name (new structure) to a canonical type, or null. */
 export function typeFromFolder(name: string): TypeKey | null {
   const n = norm(name);
   if (n.includes("subitem")) return null;
   if (/^pop-?up_?1$/.test(n)) return "pop-up_1";
   if (/^pop-?up_?2$/.test(n)) return "pop-up_2";
-  if (/^pop-?up$/.test(n)) return "pop-up";
+  // Smartico is configured with pop-up_1 / pop-up_2 names, so a plain
+  // "pop-up" is treated as the default one: pop-up_1.
+  if (/^pop-?up$/.test(n)) return "pop-up_1";
   if (/^push$/.test(n)) return "push";
   if (/^email$/.test(n)) return "email";
   return null;
@@ -55,7 +68,8 @@ export function typeFromFilename(filename: string): TypeKey | null {
   if (/email[-_ ]?text/i.test(base)) return null;
   if (/(?:^|[^a-z0-9])pop[-_ ]?up[-_ ]?1(?:[^0-9]|$)/i.test(base)) return "pop-up_1";
   if (/(?:^|[^a-z0-9])pop[-_ ]?up[-_ ]?2(?:[^0-9]|$)/i.test(base)) return "pop-up_2";
-  if (/(?:^|[^a-z0-9])pop[-_ ]?up(?:[^a-z0-9]|$)/i.test(base)) return "pop-up";
+  // Plain "pop-up" token → default pop-up_1 (Smartico names are pop-up_1/_2).
+  if (/(?:^|[^a-z0-9])pop[-_ ]?up(?:[^a-z0-9]|$)/i.test(base)) return "pop-up_1";
   if (/(?:^|[^a-z0-9])push(?:[^a-z0-9]|$)/i.test(base)) return "push";
   if (/(?:^|[^a-z0-9])email(?:[^a-z0-9]|$)/i.test(base)) return "email";
   return null;
@@ -96,6 +110,20 @@ export function resolveEntry(path: string): { brand: string; type: TypeKey } | n
     return { brand, type };
   }
 
+  // ---- Root-brand structure: [wrapper?/]Brand/<channel>/file ----
+  // The file's parent folder names the channel (email / push / pop-up …) and the
+  // segment above it is the brand. Covers both brands directly at the archive
+  // root (NineCasino/email/x.png) and a single wrapper folder (DES-123/NineCasino/email/x.png).
+  if (segments.length >= 3) {
+    const parentType = typeFromFolder(segments[segments.length - 2]!);
+    if (parentType && isImageFile(filename)) {
+      const brand = segments[segments.length - 3]!.trim();
+      if (brand && !isOscarWrapper(brand) && norm(brand) !== "crm") {
+        return { brand, type: parentType };
+      }
+    }
+  }
+
   const oscar = segments.length >= 2 && isOscarWrapper(segments[1]!);
   let brand: string | undefined;
   if (oscar) {
@@ -112,15 +140,31 @@ export function resolveEntry(path: string): { brand: string; type: TypeKey } | n
 
 export function parseStructure(paths: string[]): ParsedStructure {
   const brands: Record<string, BrandTypes> = {};
+  let allBrandsDefault: string | null = null;
   for (const path of paths) {
     if (!path || path.endsWith("/")) continue; // directory entry
     if (isJunkPath(path) || isUnsafePath(path)) continue;
+
+    // "All brands/<image>" (optionally wrapped) with no type token in the name
+    // is the default variation — a single image outside the brand/type logic.
+    // Files with a type token (e.g. "all email.png") keep the per-type behavior.
+    const segments = path.split("/").filter((p) => p.length > 0);
+    const parent = segments.length >= 2 ? segments[segments.length - 2]! : null;
+    const filename = segments[segments.length - 1]!;
+    if (parent && isAllBrands(parent) && isImageFile(filename) && !typeFromFilename(filename)) {
+      if (allBrandsDefault === null || path < allBrandsDefault) allBrandsDefault = path;
+      continue;
+    }
+
     const resolved = resolveEntry(path);
     if (!resolved) continue;
     const slot = ensureSlot(brands, resolved.brand, resolved.type);
-    slot[localeOf(path)] = path;
+    const locale = localeOf(path);
+    // Several candidates for one slot: keep the alphabetically first path.
+    const current = slot[locale];
+    if (current === null || path < current) slot[locale] = path;
   }
-  return { brands };
+  return { brands, allBrandsDefault };
 }
 
 /** Union of detected types across all brands, in canonical order. */

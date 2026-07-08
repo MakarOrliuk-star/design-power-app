@@ -29,7 +29,12 @@ const JAVA_PREAMBLE =
   "    Int = Java.type('java.lang.Integer');\n" +
   "    Math = Java.type('java.lang.Math');\n";
 
-function buildFunction(entries: string[], hasLocalization: boolean, displayType: string): string {
+function buildFunction(
+  entries: string[],
+  hasLocalization: boolean,
+  displayType: string,
+  fallback: string = FALLBACK,
+): string {
   const subjectLineContent = entries.join(",\n");
 
   let output = "(function() {\n";
@@ -49,11 +54,11 @@ function buildFunction(entries: string[], hasLocalization: boolean, displayType:
     output += "    if (subjectLine[brand_id]) {\n";
     output += "        var entry = subjectLine[brand_id];\n";
     output += '        if (typeof entry === "object" && entry !== null) {\n';
-    output += `            return entry[language] || entry["default"] || "${FALLBACK}";\n`;
+    output += `            return entry[language] || entry["default"] || "${fallback}";\n`;
     output += "        }\n";
     output += "        return entry;\n";
     output += "    } else {\n";
-    output += `        return "${FALLBACK}";\n`;
+    output += `        return "${fallback}";\n`;
     output += "    }\n";
   } else {
     output += "    // Get the current brand_id\n";
@@ -63,7 +68,7 @@ function buildFunction(entries: string[], hasLocalization: boolean, displayType:
     output += "    if (subjectLine[brand_id]) {\n";
     output += "        return subjectLine[brand_id];\n";
     output += "    } else {\n";
-    output += `        return "${FALLBACK}";\n`;
+    output += `        return "${fallback}";\n`;
     output += "    }\n";
   }
   output += "})();";
@@ -82,7 +87,12 @@ function buildConstantFunction(url: string, displayType: string): string {
 }
 
 /** Korea / Korea realistic: KO-locale image, gated on the user language. */
-function buildKoreaFunction(url: string, displayType: string, label: string): string {
+function buildKoreaFunction(
+  url: string,
+  displayType: string,
+  label: string,
+  fallback: string = FALLBACK,
+): string {
   let output = "(function() {\n";
   output += JAVA_PREAMBLE;
   output += "\n";
@@ -91,7 +101,7 @@ function buildKoreaFunction(url: string, displayType: string, label: string): st
   output += '    if (language === "KO") {\n';
   output += `        return "${url}";\n`;
   output += "    }\n";
-  output += `    return "${FALLBACK}";\n`;
+  output += `    return "${fallback}";\n`;
   output += "})();";
   return output;
 }
@@ -119,6 +129,11 @@ export function generateSmarticoCardOutputs(
 
   const blocks: OutputBlock[] = [];
 
+  // Same default semantics as the CRM functions: the All brands card image
+  // becomes the fallback of the multi-brand function instead of its own block.
+  const allBrandsUrl = allBrandsRaw ? (cardUrls[allBrandsRaw] ?? null) : null;
+  const fallback = allBrandsUrl ?? FALLBACK;
+
   const entries: string[] = [];
   for (const raw of individualRaws) {
     const url = cardUrls[raw];
@@ -129,20 +144,15 @@ export function generateSmarticoCardOutputs(
   if (entries.length > 0) {
     blocks.push({
       title: `${displayType} — Card`,
-      code: buildFunction(entries, false, displayType),
+      code: buildFunction(entries, false, displayType, fallback),
       kind: "function",
     });
-  }
-
-  if (allBrandsRaw) {
-    const url = cardUrls[allBrandsRaw];
-    if (url) {
-      blocks.push({
-        title: `${displayType} — All Brands (Сквозной)`,
-        code: buildConstantFunction(url, displayType),
-        kind: "function",
-      });
-    }
+  } else if (allBrandsUrl) {
+    blocks.push({
+      title: `${displayType} — All Brands (Сквозной)`,
+      code: buildConstantFunction(allBrandsUrl, displayType),
+      kind: "function",
+    });
   }
 
   for (const k of koreaBrands) {
@@ -150,7 +160,7 @@ export function generateSmarticoCardOutputs(
     if (url) {
       blocks.push({
         title: `${displayType} — ${k.raw} (KO)`,
-        code: buildKoreaFunction(url, displayType, k.raw),
+        code: buildKoreaFunction(url, displayType, k.raw, fallback),
         kind: "function",
       });
     }
@@ -163,6 +173,7 @@ export function generateOutputs(
   urls: UrlMap,
   selectedTypes: TypeKey[],
   brands: NormalizedBrand[],
+  allBrandsDefaultUrl: string | null = null,
 ): OutputBlock[] {
   const canonicalByRaw = new Map<string, string>();
   let allBrandsRaw: string | null = null;
@@ -179,6 +190,13 @@ export function generateOutputs(
 
   for (const type of selectedTypes) {
     const displayType = DISPLAY[type] ?? type;
+
+    // "All brands" is the default variation: its image (per-type slot from the
+    // old structures, or the single type-less image from the new one) replaces
+    // the label placeholder in the else-branch of every function.
+    const allSlot = allBrandsRaw ? urls[allBrandsRaw]?.[type] : undefined;
+    const allBrandsUrl = (allSlot ? allSlot.default || allSlot.KO : null) || allBrandsDefaultUrl;
+    const fallback = allBrandsUrl ?? FALLBACK;
 
     const entries: string[] = [];
     let hasLocalization = false;
@@ -207,31 +225,27 @@ export function generateOutputs(
     if (entries.length > 0) {
       blocks.push({
         title: `${displayType} — Function`,
-        code: buildFunction(entries, hasLocalization, displayType),
+        code: buildFunction(entries, hasLocalization, displayType, fallback),
+        kind: "function",
+      });
+    } else if (allBrandsUrl) {
+      // Cross-brand-only archive: no individual brands to key on, so the
+      // shared image is emitted as the legacy constant function.
+      blocks.push({
+        title: `${displayType} — All Brands (Сквозной)`,
+        code: buildConstantFunction(allBrandsUrl, displayType),
         kind: "function",
       });
     }
 
-    if (allBrandsRaw) {
-      const slot = urls[allBrandsRaw]?.[type];
-      const allUrl = slot ? slot.default || slot.KO : null;
-      if (allUrl) {
-        blocks.push({
-          title: `${displayType} — All Brands (Сквозной)`,
-          code: buildConstantFunction(allUrl, displayType),
-          kind: "function",
-        });
-      }
-    }
-
-    // 3) Korea / Korea realistic — separate KO-guarded functions (manager picks one).
+    // Korea / Korea realistic — separate KO-guarded functions (manager picks one).
     for (const k of koreaBrands) {
       const slot = urls[k.raw]?.[type];
       const koreaUrl = slot ? slot.default || slot.KO : null;
       if (koreaUrl) {
         blocks.push({
           title: `${displayType} — ${k.raw} (KO)`,
-          code: buildKoreaFunction(koreaUrl, displayType, k.raw),
+          code: buildKoreaFunction(koreaUrl, displayType, k.raw, fallback),
           kind: "function",
         });
       }

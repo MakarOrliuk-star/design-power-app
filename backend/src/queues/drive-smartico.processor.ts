@@ -188,6 +188,7 @@ export async function processDriveSmarticoJob(
     selectedTypes,
     urls,
     brands,
+    allBrandsDefaultUrl: null, // Drive flow has no type-less "All brands" default image
     outputs,
     stats: { total: uploaded + reused + failed, uploaded, reused, failed, failedItems },
   };
