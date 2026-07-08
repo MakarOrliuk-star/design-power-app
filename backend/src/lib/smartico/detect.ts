@@ -90,6 +90,11 @@ function isOscarWrapper(seg: string): boolean {
   return n.includes("oscar") && n.includes("brand");
 }
 
+/** Does a folder look like a DES-ticket wrapper (DES-19697 …), not a brand? */
+function isDesTicket(seg: string): boolean {
+  return /^des[-_ ]?\d+/i.test(seg.trim());
+}
+
 export function resolveEntry(path: string): { brand: string; type: TypeKey } | null {
   const segments = path.split("/").filter((p) => p.length > 0);
   if (segments.length < 2) return null;
@@ -122,6 +127,19 @@ export function resolveEntry(path: string): { brand: string; type: TypeKey } | n
         return { brand, type: parentType };
       }
     }
+  }
+
+  // ---- Root-brand structure without channel folders: Brand/<file with token> ----
+  // Two segments means the brand folder sits at the archive root and the image
+  // (with a type token in its name, e.g. "Email 600x300.webp") lies directly in
+  // it. A DES-ticket folder is the archive wrapper, never a brand.
+  if (segments.length === 2) {
+    const brand = segments[0]!.trim();
+    const type = isImageFile(filename) ? typeFromFilename(filename) : null;
+    if (type && brand && !isDesTicket(brand) && !isOscarWrapper(brand) && norm(brand) !== "crm") {
+      return { brand, type };
+    }
+    return null;
   }
 
   const oscar = segments.length >= 2 && isOscarWrapper(segments[1]!);
