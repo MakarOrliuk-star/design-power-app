@@ -26,6 +26,8 @@ export interface SmarticoJobResult {
   selectedTypes: TypeKey[];
   urls: Record<string, Partial<Record<TypeKey, SmarticoUrlSlot>>>; // keyed by raw brand
   brands: NormalizedBrand[];
+  /** Uploaded "All brands" default image — becomes the fallback of every function. */
+  allBrandsDefaultUrl: string | null;
   outputs: OutputBlock[]; // ready-to-paste Smartico functions / labels
   stats: {
     total: number;
@@ -61,12 +63,16 @@ export async function processSmarticoJob(job: Job<SmarticoJobData>): Promise<Sma
         }
       }
     }
+    // The "All brands" default image is extracted alongside the typed assets.
+    const allBrandsPath = structure.allBrandsDefault;
+    if (allBrandsPath) wanted.add(allBrandsPath);
     const total = wanted.size;
 
     const rows = await prisma.smarticoBrand.findMany({ select: { name: true } });
     const brandMap = buildBrandMap(rows.map((r) => r.name));
 
     const urls: SmarticoJobResult["urls"] = {};
+    let allBrandsDefaultUrl: string | null = null;
     const failedItems: string[] = [];
     let uploaded = 0;
     let reused = 0;
@@ -81,8 +87,13 @@ export async function processSmarticoJob(job: Job<SmarticoJobData>): Promise<Sma
 
     if (total > 0) {
       await extractAndProcess(zipPath, wanted, UPLOAD_CONCURRENCY, async (path, buffer) => {
-        const m = meta.get(path)!;
-        const label = `${m.brand}/${m.type}${m.locale === "KO" ? "/KO" : ""}`;
+        const isDefault = path === allBrandsPath;
+        const m = isDefault
+          ? { brand: "All brands", type: "default" as const, locale: "default" as const }
+          : meta.get(path)!;
+        const label = isDefault
+          ? "All brands/default"
+          : `${m.brand}/${m.type}${m.locale === "KO" ? "/KO" : ""}`;
         try {
           const outcome = await uploadSmarticoAsset(buffer, {
             namespace: zipName,
@@ -90,7 +101,8 @@ export async function processSmarticoJob(job: Job<SmarticoJobData>): Promise<Sma
             type: m.type,
             locale: m.locale,
           });
-          setUrl(m.brand, m.type, m.locale, outcome.url);
+          if (isDefault) allBrandsDefaultUrl = outcome.url;
+          else setUrl(m.brand, m.type as TypeKey, m.locale, outcome.url);
           if (outcome.status === "uploaded") uploaded++;
           else if (outcome.status === "reused") reused++;
           else {
@@ -99,7 +111,7 @@ export async function processSmarticoJob(job: Job<SmarticoJobData>): Promise<Sma
             console.error(`⚠️ Smartico upload failed for ${label}: ${outcome.error ?? "unknown"}`);
           }
         } catch (e) {
-          setUrl(m.brand, m.type, m.locale, null);
+          if (!isDefault) setUrl(m.brand, m.type as TypeKey, m.locale, null);
           failed++;
           failedItems.push(label);
           console.error(`⚠️ Smartico upload error for ${label}:`, e);
@@ -112,7 +124,7 @@ export async function processSmarticoJob(job: Job<SmarticoJobData>): Promise<Sma
     }
 
     const brands = Object.keys(urls).map((raw) => normalizeBrand(raw, brandMap));
-    const outputs = generateOutputs(urls, selectedTypes, brands);
+    const outputs = generateOutputs(urls, selectedTypes, brands, allBrandsDefaultUrl);
 
     await job.updateProgress(100);
     return {
@@ -120,6 +132,7 @@ export async function processSmarticoJob(job: Job<SmarticoJobData>): Promise<Sma
       selectedTypes,
       urls,
       brands,
+      allBrandsDefaultUrl,
       outputs,
       stats: { total, uploaded, reused, failed, failedItems },
     };

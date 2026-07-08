@@ -18,7 +18,8 @@ describe("typeFromFolder", () => {
     expect(typeFromFolder("Push")).toBe("push");
     expect(typeFromFolder("pop-up_1")).toBe("pop-up_1");
     expect(typeFromFolder("popup2")).toBe("pop-up_2");
-    expect(typeFromFolder("pop-up")).toBe("pop-up");
+    // Plain pop-up is an alias of the default pop-up_1 (Smartico naming).
+    expect(typeFromFolder("pop-up")).toBe("pop-up_1");
   });
   it("ignores subitem and unknown folders", () => {
     expect(typeFromFolder("subitem")).toBeNull();
@@ -31,7 +32,7 @@ describe("typeFromFilename (token rule)", () => {
   it("detects a type token anywhere in the name", () => {
     expect(typeFromFilename("corgibet email 600x266.webp")).toBe("email");
     expect(typeFromFilename("img_push_kr.png")).toBe("push");
-    expect(typeFromFilename("brand pop-up 1080x1920.jpg")).toBe("pop-up");
+    expect(typeFromFilename("brand pop-up 1080x1920.jpg")).toBe("pop-up_1");
     expect(typeFromFilename("promo pop-up_1.png")).toBe("pop-up_1");
     expect(typeFromFilename("pop-up_1 .webp")).toBe("pop-up_1"); // trailing space
     expect(typeFromFilename("pop-up_2.webp")).toBe("pop-up_2");
@@ -95,6 +96,60 @@ describe("resolveEntry — new (CRM) structure: DES-XXXXX / Brand / CRM / file",
   });
 });
 
+describe("resolveEntry — root-brand structure: [DES-123/]Brand/<channel>/file", () => {
+  it("reads brand folders directly at the archive root", () => {
+    expect(resolveEntry("NineCasino/email/promo.png")).toEqual({
+      brand: "NineCasino",
+      type: "email",
+    });
+    expect(resolveEntry("NineCasino/push/promo.webp")).toEqual({
+      brand: "NineCasino",
+      type: "push",
+    });
+    // Plain pop-up folder maps to the default pop-up_1 (Smartico naming).
+    expect(resolveEntry("NineCasino/pop-up/promo.jpg")).toEqual({
+      brand: "NineCasino",
+      type: "pop-up_1",
+    });
+  });
+  it("honors a single wrapper folder above the brands", () => {
+    expect(resolveEntry("DES-123/NineCasino/email/promo.png")).toEqual({
+      brand: "NineCasino",
+      type: "email",
+    });
+  });
+  it("is case-insensitive on channel folder names", () => {
+    expect(resolveEntry("NineCasino/Email/promo.png")).toEqual({
+      brand: "NineCasino",
+      type: "email",
+    });
+    expect(resolveEntry("NineCasino/Pop-Up/promo.png")).toEqual({
+      brand: "NineCasino",
+      type: "pop-up_1",
+    });
+  });
+  it("no longer invents channel-named brands (the old mis-parse bug)", () => {
+    // Before the fix this resolved to { brand: "push", type: "push" }.
+    expect(resolveEntry("NineCasino/push/nine push.png")).toEqual({
+      brand: "NineCasino",
+      type: "push",
+    });
+  });
+  it("ignores non-image files in channel folders", () => {
+    expect(resolveEntry("NineCasino/email/readme.txt")).toBeNull();
+  });
+  it("does not clash with the CRM and Oscar structures", () => {
+    expect(resolveEntry("DES-10001/Bonuskong/CRM/email/banner.webp")).toEqual({
+      brand: "Bonuskong",
+      type: "email",
+    });
+    expect(resolveEntry("DES-12345/Oscar brands/Corgibet/push/img.png")).toEqual({
+      brand: "Corgibet",
+      type: "push",
+    });
+  });
+});
+
 describe("resolveEntry — legacy structure (retained as fallback)", () => {
   it("reads DES-XXXXX / Brand / file with filename token", () => {
     expect(resolveEntry("DES-12345/Corgibet/corgibet email 600x266.webp")).toEqual({
@@ -150,6 +205,57 @@ describe("parseStructure", () => {
   });
   it("computes available types in canonical order", () => {
     expect(availableTypes(structure)).toEqual(["email", "push", "pop-up_1"]);
+  });
+  it("has no All brands default image in the CRM structure", () => {
+    expect(structure.allBrandsDefault).toBeNull();
+  });
+});
+
+describe("parseStructure — root-brand structure + All brands default", () => {
+  const paths = [
+    "DES-123/NineCasino/email/a-promo.png",
+    "DES-123/NineCasino/email/b-promo.png", // duplicate slot → alphabetically first wins
+    "DES-123/NineCasino/push/promo.png",
+    "DES-123/BrunoCasino/pop-up/promo.webp",
+    "DES-123/NineCasino/pop-up/readme.txt", // not an image → ignored
+    "DES-123/All brands/main.png", // type-less default image
+    "DES-123/All brands/zzz.png", // second candidate → loses alphabetically
+    "__MACOSX/DES-123/NineCasino/email/._a-promo.png",
+    "DES-123/NineCasino/email/.DS_Store",
+  ];
+  const structure = parseStructure(paths);
+
+  it("collects brands from root-level folders with channel subfolders", () => {
+    expect(Object.keys(structure.brands).sort()).toEqual(["BrunoCasino", "NineCasino"]);
+    expect(structure.brands["NineCasino"]!.push!.default).toBe("DES-123/NineCasino/push/promo.png");
+    expect(structure.brands["BrunoCasino"]!["pop-up_1"]!.default).toBe(
+      "DES-123/BrunoCasino/pop-up/promo.webp",
+    );
+  });
+  it("keeps the alphabetically first image when a channel folder has several", () => {
+    expect(structure.brands["NineCasino"]!.email!.default).toBe(
+      "DES-123/NineCasino/email/a-promo.png",
+    );
+  });
+  it("captures the alphabetically first All brands default image", () => {
+    expect(structure.allBrandsDefault).toBe("DES-123/All brands/main.png");
+  });
+  it("skips non-image files so they never win a slot", () => {
+    expect(structure.brands["NineCasino"]!["pop-up_1"]).toBeUndefined();
+  });
+  it("also detects the default image without a wrapper folder", () => {
+    const s = parseStructure(["All brands/main.png", "NineCasino/email/promo.png"]);
+    expect(s.allBrandsDefault).toBe("All brands/main.png");
+    expect(s.brands["NineCasino"]!.email!.default).toBe("NineCasino/email/promo.png");
+  });
+  it("keeps per-type All brands entries out of the default", () => {
+    const s = parseStructure([
+      "DES-1/All brands/CRM/pop-up_1.webp", // CRM per-type
+      "DES-1/All brands/all email.png", // legacy filename token per-type
+    ]);
+    expect(s.allBrandsDefault).toBeNull();
+    expect(s.brands["All brands"]!["pop-up_1"]!.default).toBe("DES-1/All brands/CRM/pop-up_1.webp");
+    expect(s.brands["All brands"]!.email!.default).toBe("DES-1/All brands/all email.png");
   });
 });
 

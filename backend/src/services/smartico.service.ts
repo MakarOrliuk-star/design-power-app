@@ -33,6 +33,8 @@ export interface AnalyzeResult {
   brands: AnalyzedBrand[];
   suspiciousBrands: string[]; // raw names to highlight in the UI
   totalImages: number;
+  /** True when the ZIP has an "All brands" default image (fallback of every function). */
+  hasDefaultImage: boolean;
 }
 
 export async function analyzeZip(zipPath: string, zipName: string): Promise<AnalyzeResult> {
@@ -56,8 +58,16 @@ export async function analyzeZip(zipPath: string, zipName: string): Promise<Anal
         if (hasKO) imageCount++;
       }
       return { ...nb, types: typeFlags, imageCount };
-    })
-    .sort((a, b) => a.raw.localeCompare(b.raw));
+    });
+
+  // The type-less "All brands" default image is surfaced as a pseudo-brand row
+  // so the manager sees it in the analysis summary.
+  if (structure.allBrandsDefault) {
+    const existing = brands.find((b) => b.isAllBrands);
+    if (existing) existing.imageCount++;
+    else brands.push({ ...normalizeBrand("All brands", brandMap), types: {}, imageCount: 1 });
+  }
+  brands.sort((a, b) => a.raw.localeCompare(b.raw));
 
   return {
     zipName,
@@ -65,5 +75,6 @@ export async function analyzeZip(zipPath: string, zipName: string): Promise<Anal
     brands,
     suspiciousBrands: brands.filter((b) => b.suspicious).map((b) => b.raw),
     totalImages: brands.reduce((sum, b) => sum + b.imageCount, 0),
+    hasDefaultImage: Boolean(structure.allBrandsDefault),
   };
 }
