@@ -30,7 +30,7 @@ def get_global_state():
 global_lock = get_browser_lock()
 global_state = get_global_state()
 
-st.title("🚀 ДОШЛО ДО СЮДА!")
+st.title("🚀 ДОШЛО ДО СЮДА! 1")
 st.stop()
 
 from playwright.sync_api import sync_playwright
@@ -78,7 +78,8 @@ def test_general_info(MAIN_URL, POP_URL, auth_token, expected_data=None, progres
     rendered_emails_cache = {}
 
     log("🌐 Запуск виртуального браузера...", 5)
-
+    st.title("🚀 ДОШЛО ДО СЮДА! 2")
+    st.stop()
     with sync_playwright() as p:
         browser = p.chromium.launch()
         # Маскируем сервер под обычного пользователя iPhone, чтобы Cloudflare отдавал картинки
