@@ -333,8 +333,10 @@ enum TournamentMode {
   VIP
 }
 
-/// The 4 fixed categories (seeded; NOT admin-editable — the ZIP folder layout
-/// and the page columns are hard-wired to them). Admin manages elements only.
+/// Generation categories (the 4 base ones are seeded; admin can create more,
+/// rename and delete). `key` doubles as the ZIP folder name and is frozen at
+/// creation; deletion is HARD (cascades to elements/prompts/overrides) —
+/// Generation history keeps denormalized names, so old ZIP exports survive.
 model TournamentCategory {
   id        String          @id @default(cuid())
   key       String          @unique // "tournament" | "lotterie" | "provider" | "calendar_vip"

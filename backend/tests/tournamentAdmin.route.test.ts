@@ -7,6 +7,10 @@ import request from "supertest";
 const db = vi.hoisted(() => ({
   categoryFindUnique: vi.fn(),
   categoryFindMany: vi.fn(),
+  categoryFindFirst: vi.fn(),
+  categoryCreate: vi.fn(),
+  categoryUpdate: vi.fn(),
+  categoryDelete: vi.fn(),
   elementFindUnique: vi.fn(),
   elementFindFirst: vi.fn(),
   elementCreate: vi.fn(),
@@ -25,7 +29,14 @@ vi.mock("../src/env.js", () => ({
 }));
 vi.mock("../src/lib/prisma.js", () => ({
   prisma: {
-    tournamentCategory: { findUnique: db.categoryFindUnique, findMany: db.categoryFindMany },
+    tournamentCategory: {
+      findUnique: db.categoryFindUnique,
+      findMany: db.categoryFindMany,
+      findFirst: db.categoryFindFirst,
+      create: db.categoryCreate,
+      update: db.categoryUpdate,
+      delete: db.categoryDelete,
+    },
     tournamentElement: {
       findUnique: db.elementFindUnique,
       findFirst: db.elementFindFirst,
@@ -84,6 +95,96 @@ describe("requireAdminOrManager", () => {
     db.userFindUnique.mockResolvedValue({ role: "ADMIN", isActive: false });
     const res = await request(makeApp(true)).get("/api/tournament-admin/config");
     expect(res.status).toBe(401);
+  });
+});
+
+describe("POST /api/tournament-admin/categories", () => {
+  it("creates with a slugified key (ZIP folder) appended after the last order", async () => {
+    db.categoryFindUnique.mockResolvedValue(null); // key is free
+    db.categoryFindFirst.mockResolvedValue({ order: 3 });
+    db.categoryCreate.mockResolvedValue({
+      id: "c9",
+      key: "provider_2",
+      name: "Provider 2",
+      hasModes: false,
+      fixedMode: "BASE",
+      order: 4,
+    });
+
+    const res = await request(makeApp())
+      .post("/api/tournament-admin/categories")
+      .send({ name: "Provider 2", hasModes: false, fixedMode: "BASE" });
+
+    expect(res.status).toBe(201);
+    const data = db.categoryCreate.mock.calls[0]![0].data;
+    expect(data.key).toBe("provider_2"); // "Provider 2" -> slug
+    expect(data.order).toBe(4); // after the existing 0..3
+    expect(data.fixedMode).toBe("BASE");
+  });
+
+  it("suffixes the key on a collision (rename-safe ZIP folders)", async () => {
+    db.categoryFindUnique
+      .mockResolvedValueOnce({ id: "existing" }) // "tournament" taken
+      .mockResolvedValueOnce(null); // "tournament_2" free
+    db.categoryFindFirst.mockResolvedValue({ order: 3 });
+    db.categoryCreate.mockResolvedValue({ id: "c9" });
+
+    const res = await request(makeApp())
+      .post("/api/tournament-admin/categories")
+      .send({ name: "Tournament", hasModes: true, fixedMode: null });
+
+    expect(res.status).toBe(201);
+    expect(db.categoryCreate.mock.calls[0]![0].data.key).toBe("tournament_2");
+  });
+
+  it("nulls fixedMode for a Base+VIP category even if the client sends one", async () => {
+    db.categoryFindUnique.mockResolvedValue(null);
+    db.categoryFindFirst.mockResolvedValue(null); // first category ever
+    db.categoryCreate.mockResolvedValue({ id: "c1" });
+
+    const res = await request(makeApp())
+      .post("/api/tournament-admin/categories")
+      .send({ name: "Promo", hasModes: true, fixedMode: "VIP" });
+
+    expect(res.status).toBe(201);
+    const data = db.categoryCreate.mock.calls[0]![0].data;
+    expect(data.fixedMode).toBeNull();
+    expect(data.order).toBe(0);
+  });
+
+  it("400s a single-mode category without fixedMode", async () => {
+    const res = await request(makeApp())
+      .post("/api/tournament-admin/categories")
+      .send({ name: "Promo", hasModes: false, fixedMode: null });
+    expect(res.status).toBe(400);
+    expect(res.body.error).toBe("invalid_mode_config");
+    expect(db.categoryCreate).not.toHaveBeenCalled();
+  });
+});
+
+describe("PATCH /api/tournament-admin/categories/:id", () => {
+  it("renames without touching the key", async () => {
+    db.categoryUpdate.mockResolvedValue({ id: "c1", key: "tournament", name: "Tournament NEW" });
+    const res = await request(makeApp())
+      .patch("/api/tournament-admin/categories/c1")
+      .send({ name: "Tournament NEW" });
+    expect(res.status).toBe(200);
+    expect(db.categoryUpdate.mock.calls[0]![0].data).toEqual({ name: "Tournament NEW" });
+  });
+});
+
+describe("DELETE /api/tournament-admin/categories/:id", () => {
+  it("hard-deletes the category (cascade takes elements/prompts/overrides)", async () => {
+    db.categoryDelete.mockResolvedValue({});
+    const res = await request(makeApp()).delete("/api/tournament-admin/categories/c1");
+    expect(res.status).toBe(200);
+    expect(db.categoryDelete.mock.calls[0]![0]).toEqual({ where: { id: "c1" } });
+  });
+
+  it("404s an unknown id", async () => {
+    db.categoryDelete.mockRejectedValue(new Error("P2025"));
+    const res = await request(makeApp()).delete("/api/tournament-admin/categories/nope");
+    expect(res.status).toBe(404);
   });
 });
 

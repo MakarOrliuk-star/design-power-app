@@ -425,6 +425,61 @@ async function loadTournaments() {
   }
 }
 
+// ---- Category CRUD (key = ZIP folder, generated once from the name) ----
+const newCatName = ref("");
+const newCatMode = ref<"BOTH" | "BASE" | "VIP">("BOTH");
+
+async function addTourCategory() {
+  const name = newCatName.value.trim();
+  if (!name) return;
+  tourMsg.value.newcat = "";
+  try {
+    await api("/api/tournament-admin/categories", {
+      method: "POST",
+      body: {
+        name,
+        hasModes: newCatMode.value === "BOTH",
+        fixedMode: newCatMode.value === "BOTH" ? null : newCatMode.value,
+      },
+    });
+    newCatName.value = "";
+    tourMsg.value.newcat = "Категория создана ✓";
+    await loadTournaments();
+  } catch {
+    tourMsg.value.newcat = "Не удалось создать категорию.";
+  }
+}
+
+async function saveTourCategory(cat: TourCategory) {
+  tourMsg.value[cat.id] = "";
+  try {
+    await api(`/api/tournament-admin/categories/${cat.id}`, {
+      method: "PATCH",
+      body: { name: cat.name.trim() },
+    });
+    tourMsg.value[cat.id] = "Сохранено ✓";
+  } catch {
+    tourMsg.value[cat.id] = "Ошибка сохранения";
+  }
+}
+
+/** Hard delete: элементы, дефолты и локальные правки уходят; история генераций остаётся. */
+async function deleteTourCategory(cat: TourCategory) {
+  const n = cat.elements.length;
+  const ok = window.confirm(
+    `Удалить категорию «${cat.name}»${n ? ` вместе с ${n} элемент(ами)` : ""}?\n` +
+      "Дефолтные промпты и локальные правки дизайнеров по этим элементам будут удалены. " +
+      "История генераций и старые ZIP не пострадают.",
+  );
+  if (!ok) return;
+  try {
+    await api(`/api/tournament-admin/categories/${cat.id}`, { method: "DELETE" });
+    tourCategories.value = tourCategories.value.filter((c) => c.id !== cat.id);
+  } catch {
+    tourMsg.value[cat.id] = "Не удалось удалить категорию.";
+  }
+}
+
 async function addTourElement(cat: TourCategory) {
   const name = (newElementName.value[cat.id] ?? "").trim();
   if (!name) return;
@@ -799,8 +854,9 @@ onMounted(() => {
     <section class="panel">
       <h2>Tournaments</h2>
       <p class="muted small">
-        Элементы категорий, дефолтные промпты (Base/VIP) и референсы провайдеров
-        для страницы Tournaments. Дефолты видны всем дизайнерам; их локальные
+        Категории генерации (Tournament, Lotterie, Provider, Calendar…), их
+        элементы, дефолтные промпты (Base/VIP) и референсы провайдеров для
+        страницы Tournaments. Дефолты видны всем дизайнерам; их локальные
         правки не затрагиваются, но при изменении дефолта у них появится плашка.
       </p>
 
@@ -817,12 +873,29 @@ onMounted(() => {
         </div>
       </div>
 
+      <!-- New category: Base+VIP toggle or a single fixed mode -->
+      <form class="add-form" @submit.prevent="addTourCategory">
+        <input v-model="newCatName" type="text" placeholder="Новая категория (напр. Provider 2)…" />
+        <select v-model="newCatMode" class="field__input tour-cat__modepick">
+          <option value="BOTH">Base + VIP</option>
+          <option value="BASE">только Base</option>
+          <option value="VIP">только VIP</option>
+        </select>
+        <button type="submit" class="btn-primary">Создать категорию</button>
+        <span v-if="tourMsg.newcat" class="brand-card__msg">{{ tourMsg.newcat }}</span>
+      </form>
+
       <div v-for="cat in tourCategories" :key="cat.id" class="tour-cat">
         <div class="tour-cat__head">
-          <h3 class="tour-cat__title">{{ cat.name }}</h3>
+          <input v-model="cat.name" class="field__input tour-cat__name" type="text" />
           <span class="badge badge--off">
-            {{ cat.hasModes ? "Base + VIP" : cat.fixedMode === "VIP" ? "только VIP" : "один режим" }}
+            {{ cat.hasModes ? "Base + VIP" : cat.fixedMode === "VIP" ? "только VIP" : "только Base" }}
           </span>
+          <span class="badge badge--off" :title="'Папка в ZIP'">{{ cat.key }}</span>
+          <button class="btn-primary btn-small" @click="saveTourCategory(cat)">Сохранить</button>
+          <button class="btn-danger btn-small" @click="deleteTourCategory(cat)">
+            Удалить категорию
+          </button>
           <span v-if="tourMsg[cat.id]" class="brand-card__msg">{{ tourMsg[cat.id] }}</span>
         </div>
 
@@ -1288,9 +1361,19 @@ select {
   gap: 12px;
   margin-bottom: 12px;
 }
-.tour-cat__title {
-  margin: 0;
+.tour-cat__name {
+  max-width: 260px;
+  font-weight: 700;
   font-size: 15px;
+}
+.tour-cat__modepick {
+  max-width: 160px;
+}
+.tour-cat__head .btn-small {
+  margin-left: 0;
+}
+.tour-cat__head .btn-small:first-of-type {
+  margin-left: auto;
 }
 .tour-el--off {
   opacity: 0.55;
