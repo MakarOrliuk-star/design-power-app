@@ -44,8 +44,8 @@ describe("buildPackExportQuery", () => {
   });
 });
 
-describe("groupPack — the ZIP folders (category -> Element -> Brand)", () => {
-  it("groups by Element/Brand, preserving first-appearance order", () => {
+describe("groupPack — the flat ZIP layout ({Brand}/{Element}_N.png)", () => {
+  it("groups by brand folder, preserving first-appearance order", () => {
     const a1 = gen({ tourFileName: "Bonuskong_Tournament_1_1" });
     const b1 = gen({
       tourFileName: "Bonuskong_Lottery_2_1",
@@ -58,13 +58,13 @@ describe("groupPack — the ZIP folders (category -> Element -> Brand)", () => {
       brandName: "Spinogambino(Men)",
     });
     const groups = groupPack([a1, b1, a2, other]);
+    // One folder per brand; elements/categories mix inside it, like in the ZIP.
     expect(groups.map((g) => g.title)).toEqual([
-      "Tournament_1/Bonuskong",
-      "Lottery_2/Bonuskong",
-      "Tournament_1/SpinogambinoMen", // parens sanitized like in the ZIP
+      "Bonuskong",
+      "SpinogambinoMen", // parens sanitized like in the ZIP
     ]);
-    expect(groups[0]!.images).toEqual([a1, a2]);
-    expect(groups[1]!.categoryKey).toBe("lotterie");
+    expect(groups[0]!.images).toEqual([a1, b1, a2]);
+    expect(groups[1]!.images).toEqual([other]);
   });
 
   it("packDisplayName = element + per-brand index (the ZIP file name)", () => {

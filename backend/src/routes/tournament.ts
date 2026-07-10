@@ -337,7 +337,6 @@ tournamentRouter.get("/export.zip", async (req: Request, res: Response) => {
       id: true,
       generatedImageUrl: true,
       brandName: true,
-      tourCategoryKey: true,
       tourElementName: true,
       tourFileName: true,
     },
@@ -368,14 +367,13 @@ tournamentRouter.get("/export.zip", async (req: Request, res: Response) => {
   });
   archive.pipe(res);
 
-  // Folder layout (revised 2026-07-10): {category}/{Element}/{Brand}/{Element}_N.png
-  // — drill down category -> element -> brand; the file name repeats the element
-  // with the per-brand index. Old rows work too (element/brand are denormalized).
-  // Categories with no images simply never appear (Phase 0: no empty folders).
+  // Folder layout (revised 2026-07-10, flat): {Brand}/{Element}_N.png — brand
+  // folders right at the archive root, each holding that brand's images named
+  // by element + per-brand index. Old rows work too (element/brand are
+  // denormalized on Generation). Brands with no images never appear.
   const used = new Set<string>();
   for (const r of rows) {
     const fileName = r.tourFileName!;
-    const category = r.tourCategoryKey ?? "tournament";
     const element = sanitizeName(r.tourElementName ?? "") || packFolderOf(fileName);
     const brand = sanitizeName(r.brandName) || "Unknown";
     try {
@@ -384,7 +382,7 @@ tournamentRouter.get("/export.zip", async (req: Request, res: Response) => {
       const buf = Buffer.from(await resp.arrayBuffer());
       const path = uniqueEntryPath(
         used,
-        `${category}/${element}/${brand}/${element}_${trailingIndexOf(fileName)}.png`,
+        `${brand}/${element}_${trailingIndexOf(fileName)}.png`,
       );
       archive.append(buf, { name: path });
     } catch (err) {
