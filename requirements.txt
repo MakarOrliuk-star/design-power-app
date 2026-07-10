@@ -1,0 +1,4 @@
+streamlit
+requests
+playwright
+extra_streamlit_components
