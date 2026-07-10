@@ -30,9 +30,6 @@ def get_global_state():
 global_lock = get_browser_lock()
 global_state = get_global_state()
 
-st.title("🚀 ДОШЛО ДО СЮДА! 1")
-st.stop()
-
 from playwright.sync_api import sync_playwright
 
 @st.cache_resource(show_spinner=False)
