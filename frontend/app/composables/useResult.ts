@@ -15,16 +15,27 @@ import {
   type ComputedRef,
 } from "vue";
 
-export type TabKey = "generated" | "person" | "item" | "background" | "edited";
+export type TabKey = "generated" | "person" | "item" | "background" | "edited" | "tournament";
 export type SelectMode = "ALL" | "EACH";
 export type ContentType = "Person" | "Item" | "Background";
 
+/** Shared gallery tabs (Archive uses exactly these). */
 export const TABS: { key: TabKey; label: string; disabled?: boolean }[] = [
   { key: "generated", label: "Generated" },
   { key: "person", label: "Person" },
   { key: "item", label: "Item" },
   { key: "background", label: "Background", disabled: true }, // no pipeline yet (Phase 0 decision)
   { key: "edited", label: "Edited" },
+];
+
+/**
+ * Result page tabs = the shared ones + "Tournament Pack" (Phase 6). The
+ * tournament tab has its own data source (/api/tournament/packs, see
+ * useTournamentPack) — the generic gallery load skips it.
+ */
+export const RESULT_TABS: { key: TabKey; label: string; disabled?: boolean }[] = [
+  ...TABS,
+  { key: "tournament", label: "Tournament Pack" },
 ];
 
 export interface GalleryImage {
@@ -249,6 +260,9 @@ export function useResult(deps: { api: ResultApi; gen: ResultGen }) {
   const loading = ref(false);
 
   async function load(reset = true) {
+    // The Tournament Pack tab owns its data (useTournamentPack) — the generic
+    // gallery endpoint doesn't even accept tab=tournament.
+    if (activeTab.value === "tournament") return;
     loading.value = true;
     try {
       const offset = reset ? 0 : images.value.length;
@@ -474,6 +488,7 @@ export function useResult(deps: { api: ResultApi; gen: ResultGen }) {
   let pollTimer: ReturnType<typeof setInterval> | null = null;
 
   async function refresh() {
+    if (activeTab.value === "tournament") return; // owned by useTournamentPack
     try {
       const res = await api<GalleryResponse>("/api/generations", {
         query: { tab: activeTab.value, limit: LIMIT, offset: 0 },
@@ -527,7 +542,7 @@ export function useResult(deps: { api: ResultApi; gen: ResultGen }) {
 
   return {
     // tabs + mode
-    TABS,
+    TABS: RESULT_TABS,
     activeTab,
     selectMode,
     selectTab,

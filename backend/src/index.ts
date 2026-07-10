@@ -8,7 +8,15 @@ import { authRouter } from "./routes/auth.js";
 import { adminRouter } from "./routes/admin.js";
 import { catalogRouter } from "./routes/catalog.js";
 import { generateRouter } from "./routes/generate.js";
-import { loadUser, requireAdmin, requireAuth, requireZone } from "./middleware/auth.js";
+import { tournamentRouter } from "./routes/tournament.js";
+import { tournamentAdminRouter } from "./routes/tournamentAdmin.js";
+import {
+  loadUser,
+  requireAdmin,
+  requireAdminOrManager,
+  requireAuth,
+  requireZone,
+} from "./middleware/auth.js";
 import { calculatorRouter } from "./routes/calculator.js";
 import { auditorRouter } from "./routes/auditor.js";
 import { crmRouter } from "./routes/crm.js";
@@ -44,6 +52,8 @@ app.use("/api/calculator", loadUser, requireAuth, requireZone("CRM"), calculator
 app.use("/api/auditor", loadUser, requireAuth, requireZone("CRM"), auditorRouter);
 app.use("/api/smartico", loadUser, requireAuth, requireZone("CRM"), smarticoRouter);
 app.use("/api/crm", loadUser, requireAuth, requireZone("CRM"), crmRouter);
+app.use("/api/tournament-admin", loadUser, requireAuth, requireAdminOrManager, tournamentAdminRouter);
+app.use("/api/tournament", loadUser, requireAuth, requireZone("DESIGNER"), tournamentRouter);
 // Generic /api (generate) is a Design-zone route — keep it last so the more
 // specific prefixes above match first.
 app.use("/api", loadUser, requireAuth, requireZone("DESIGNER"), generateRouter);

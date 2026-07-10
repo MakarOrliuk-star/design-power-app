@@ -48,7 +48,9 @@ export interface BatchStatus {
 /** One launched generation, polled independently so runs stay concurrent. */
 export interface ActiveBatch {
   id: string;
-  kind: "person" | "item";
+  kind: "person" | "item" | "tournament";
+  /** Tournament batches: the category key ("tournament" | "lotterie" | ...). */
+  label?: string;
   createdAt: number;
   status: BatchStatus | null;
 }
@@ -358,12 +360,16 @@ export const useGeneratorStore = defineStore("generator", () => {
   }
 
   /**
-   * Register an externally-created batch (e.g. a Result-page edit run) so it shows
-   * up in the toolbar progress + completion toast and is polled like a RUN batch.
+   * Register an externally-created batch (e.g. a Result-page edit run or a
+   * Tournaments run) so it shows up in the toolbar progress + completion toast
+   * and is polled like a RUN batch. `label` = tournament category key.
    */
-  function addBatch(id: string, kind: "person" | "item") {
+  function addBatch(id: string, kind: "person" | "item" | "tournament", label?: string) {
     if (batches.value.some((b) => b.id === id)) return;
-    batches.value = [...batches.value, { id, kind, createdAt: Date.now(), status: null }];
+    batches.value = [
+      ...batches.value,
+      { id, kind, ...(label ? { label } : {}), createdAt: Date.now(), status: null },
+    ];
     startPolling(id);
   }
   async function pollOnce(id: string) {
@@ -420,12 +426,13 @@ export const useGeneratorStore = defineStore("generator", () => {
     dismiss(id);
   }
 
-  /** Toolbar global stop: cancel every still-running batch. */
+  /** Toolbar global stop: cancel every still-running batch (+ a toast). */
   async function stopAllRunning() {
     const ids = batches.value
       .filter((b) => b.status === null || !b.status.isComplete)
       .map((b) => b.id);
     await Promise.all(ids.map((id) => stop(id)));
+    if (ids.length > 0) pushToast("Все генерации успешно остановлены");
   }
 
   return {

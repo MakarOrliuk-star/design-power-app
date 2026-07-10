@@ -364,10 +364,182 @@ async function removeSmarticoBrand(b: SmarticoBrand) {
   }
 }
 
+// ---- Tournaments (Phase 4): elements, default prompts, provider refs ----
+// ADMIN and MANAGER both edit this section; every other panel is ADMIN-only
+// (mirrors the backend: /api/tournament-admin vs /api/admin).
+type TourMode = "BASE" | "VIP";
+interface TourPrompt {
+  mode: TourMode;
+  content: string;
+  updatedAt: string;
+}
+interface TourElement {
+  id: string;
+  name: string;
+  order: number;
+  isActive: boolean;
+  referenceImages: string[];
+  prompts: TourPrompt[];
+}
+interface TourCategory {
+  id: string;
+  key: string;
+  name: string;
+  hasModes: boolean;
+  fixedMode: TourMode | null;
+  order: number;
+  elements: TourElement[];
+}
+
+const tourCategories = ref<TourCategory[]>([]);
+const tourSystemPrompt = ref("");
+const tourMsg = ref<Record<string, string>>({}); // element id | "system" | category id
+const newElementName = ref<Record<string, string>>({}); // per category id
+
+function padTo2(arr: string[]): string[] {
+  const a = [...arr];
+  while (a.length < 2) a.push("");
+  return a.slice(0, 2);
+}
+
+/** Stable BASE→VIP order for the prompt textareas of a moded category. */
+function sortedPrompts(el: TourElement): TourPrompt[] {
+  return [...el.prompts].sort((a, b) => (a.mode === b.mode ? 0 : a.mode === "BASE" ? -1 : 1));
+}
+
+async function loadTournaments() {
+  try {
+    const res = await api<{ categories: TourCategory[]; systemPrompt: string }>(
+      "/api/tournament-admin/config",
+    );
+    tourCategories.value = res.categories.map((c) => ({
+      ...c,
+      elements: c.elements.map((e) => ({
+        ...e,
+        referenceImages: c.key === "provider" ? padTo2(e.referenceImages) : e.referenceImages,
+      })),
+    }));
+    tourSystemPrompt.value = res.systemPrompt;
+  } catch {
+    error.value = "Не удалось загрузить турниры.";
+  }
+}
+
+async function addTourElement(cat: TourCategory) {
+  const name = (newElementName.value[cat.id] ?? "").trim();
+  if (!name) return;
+  tourMsg.value[cat.id] = "";
+  try {
+    await api("/api/tournament-admin/elements", {
+      method: "POST",
+      body: { categoryId: cat.id, name },
+    });
+    newElementName.value[cat.id] = "";
+    tourMsg.value[cat.id] = "Элемент добавлен ✓";
+    await loadTournaments();
+  } catch (e: unknown) {
+    const code = (e as { data?: { error?: string } })?.data?.error;
+    tourMsg.value[cat.id] =
+      code === "already_exists" ? "Такой элемент уже есть." : "Не удалось добавить элемент.";
+  }
+}
+
+async function saveTourPrompt(el: TourElement, p: TourPrompt) {
+  tourMsg.value[el.id] = "";
+  try {
+    await api("/api/tournament-admin/prompts", {
+      method: "PUT",
+      body: { elementId: el.id, mode: p.mode, content: p.content },
+    });
+    tourMsg.value[el.id] = "Промпт сохранён ✓ (у пользователей с правкой появится плашка)";
+  } catch {
+    tourMsg.value[el.id] = "Ошибка сохранения промпта";
+  }
+}
+
+/** Save the element's name (+ provider refs) — the card's Сохранить button. */
+async function saveTourElement(cat: TourCategory, el: TourElement) {
+  tourMsg.value[el.id] = "";
+  try {
+    const body: { name: string; referenceImages?: string[] } = { name: el.name.trim() };
+    if (cat.key === "provider")
+      body.referenceImages = el.referenceImages.map((s) => s.trim()).filter(Boolean);
+    await api(`/api/tournament-admin/elements/${el.id}`, { method: "PATCH", body });
+    tourMsg.value[el.id] = "Сохранено ✓";
+  } catch (e: unknown) {
+    const code = (e as { data?: { error?: string } })?.data?.error;
+    tourMsg.value[el.id] =
+      code === "already_exists" ? "Имя уже занято в этой категории." : "Ошибка сохранения";
+  }
+}
+
+async function toggleTourActive(el: TourElement) {
+  tourMsg.value[el.id] = "";
+  try {
+    await api(`/api/tournament-admin/elements/${el.id}`, {
+      method: "PATCH",
+      body: { isActive: !el.isActive },
+    });
+    el.isActive = !el.isActive;
+    tourMsg.value[el.id] = el.isActive ? "Включён ✓" : "Выключен (скрыт у дизайнеров)";
+  } catch {
+    tourMsg.value[el.id] = "Ошибка";
+  }
+}
+
+/** Removal is soft (isActive=false) — generation history keeps the name. */
+async function deleteTourElement(el: TourElement) {
+  tourMsg.value[el.id] = "";
+  try {
+    await api(`/api/tournament-admin/elements/${el.id}`, { method: "DELETE" });
+    el.isActive = false;
+    tourMsg.value[el.id] = "Выключен (скрыт у дизайнеров)";
+  } catch {
+    tourMsg.value[el.id] = "Ошибка";
+  }
+}
+
+async function uploadTourRef(el: TourElement, slot: number, e: Event) {
+  const input = e.target as HTMLInputElement;
+  const file = input.files?.[0];
+  input.value = "";
+  if (!file) return;
+  tourMsg.value[el.id] = "Загрузка картинки…";
+  try {
+    const dataUrl = await fileToDataUrl(file);
+    const res = await api<{ secure_url: string }>("/api/tournament-admin/upload", {
+      method: "POST",
+      body: { dataUrl },
+    });
+    el.referenceImages[slot] = res.secure_url;
+    tourMsg.value[el.id] = "Картинка загружена — нажми Сохранить";
+  } catch {
+    tourMsg.value[el.id] = "Ошибка загрузки картинки";
+  }
+}
+
+async function saveTourSystemPrompt() {
+  tourMsg.value.system = "";
+  try {
+    await api("/api/tournament-admin/system-prompt", {
+      method: "PUT",
+      body: { content: tourSystemPrompt.value },
+    });
+    tourMsg.value.system = "Сохранено ✓";
+  } catch {
+    tourMsg.value.system = "Ошибка сохранения";
+  }
+}
+
 onMounted(() => {
-  void load();
-  void loadCatalog();
-  void loadSmarticoBrands();
+  // MANAGER only reaches the Tournaments section — the ADMIN-only loads would
+  // just 403 on /api/admin, so they are skipped entirely.
+  if (auth.isAdmin) {
+    void load();
+    void loadCatalog();
+    void loadSmarticoBrands();
+  }
+  void loadTournaments();
 });
 </script>
 
@@ -376,7 +548,7 @@ onMounted(() => {
     <h1>Администрирование</h1>
     <p v-if="error" class="error">{{ error }}</p>
 
-    <section class="panel">
+    <section v-if="auth.isAdmin" class="panel">
       <h2>Белый список email</h2>
       <form class="add-form" @submit.prevent="addEmail">
         <input v-model="newEmail" type="email" placeholder="email@example.com" required />
@@ -402,7 +574,7 @@ onMounted(() => {
       </table>
     </section>
 
-    <section class="panel">
+    <section v-if="auth.isAdmin" class="panel">
       <h2>Пользователи</h2>
       <table class="table">
         <thead>
@@ -442,7 +614,7 @@ onMounted(() => {
     </section>
 
     <!-- Create brand -->
-    <section class="panel">
+    <section v-if="auth.isAdmin" class="panel">
       <h2>Создать бренд</h2>
       <p class="muted small">
         Имя бренда, категории, базовый промпт (PERSON) и специфичный стиль.
@@ -529,7 +701,7 @@ onMounted(() => {
     </section>
 
     <!-- Brand references + Person prompts -->
-    <section class="panel">
+    <section v-if="auth.isAdmin" class="panel">
       <h2>Референсы и промпты брендов (Person)</h2>
       <p class="muted small">
         Ref1/Ref2/Ref3 — заготовленные картинки бренда (Cloudinary URL или загрузка файла).
@@ -607,7 +779,7 @@ onMounted(() => {
     </section>
 
     <!-- Item style prompts -->
-    <section class="panel">
+    <section v-if="auth.isAdmin" class="panel">
       <h2>Промпты Item-стилей</h2>
       <div v-for="p in itemPrompts" :key="p.key" class="item-prompt">
         <div class="brand-card__head">
@@ -622,8 +794,110 @@ onMounted(() => {
       <p v-if="!itemPrompts.length" class="muted">Стилей нет.</p>
     </section>
 
-    <!-- Smartico brands (Unique-Image-Smartico) -->
+    <!-- Tournaments (Phase 4): elements, default prompts, provider refs.
+         Visible to ADMIN and MANAGER — the only section MANAGER sees. -->
     <section class="panel">
+      <h2>Tournaments</h2>
+      <p class="muted small">
+        Элементы категорий, дефолтные промпты (Base/VIP) и референсы провайдеров
+        для страницы Tournaments. Дефолты видны всем дизайнерам; их локальные
+        правки не затрагиваются, но при изменении дефолта у них появится плашка.
+      </p>
+
+      <!-- System wrapper -->
+      <div class="item-prompt">
+        <div class="brand-card__head">
+          <span class="brand-card__name">Системная обёртка</span>
+          <span class="badge badge--off" v-text="'{{prompt}} = промпт элемента'" />
+          <span v-if="tourMsg.system" class="brand-card__msg">{{ tourMsg.system }}</span>
+        </div>
+        <textarea v-model="tourSystemPrompt" class="prompt" rows="3" />
+        <div class="brand-card__foot">
+          <button class="btn-primary" @click="saveTourSystemPrompt">Сохранить</button>
+        </div>
+      </div>
+
+      <div v-for="cat in tourCategories" :key="cat.id" class="tour-cat">
+        <div class="tour-cat__head">
+          <h3 class="tour-cat__title">{{ cat.name }}</h3>
+          <span class="badge badge--off">
+            {{ cat.hasModes ? "Base + VIP" : cat.fixedMode === "VIP" ? "только VIP" : "один режим" }}
+          </span>
+          <span v-if="tourMsg[cat.id]" class="brand-card__msg">{{ tourMsg[cat.id] }}</span>
+        </div>
+
+        <form class="add-form" @submit.prevent="addTourElement(cat)">
+          <input
+            v-model="newElementName[cat.id]"
+            type="text"
+            :placeholder="cat.key === 'provider' ? 'Новый провайдер…' : 'Новый элемент…'"
+          />
+          <button type="submit" class="btn-primary">Добавить</button>
+        </form>
+
+        <div class="brand-list">
+          <div
+            v-for="el in cat.elements"
+            :key="el.id"
+            :class="['brand-card', { 'tour-el--off': !el.isActive }]"
+          >
+            <div class="brand-card__head">
+              <input v-model="el.name" class="field__input tour-el__name" type="text" />
+              <span v-if="!el.isActive" class="badge badge--warn">выключен</span>
+              <span v-if="tourMsg[el.id]" class="brand-card__msg">{{ tourMsg[el.id] }}</span>
+            </div>
+
+            <!-- Provider refs: the 2 images baked into this provider's generations -->
+            <div v-if="cat.key === 'provider'" class="refs refs--two">
+              <div v-for="(url, i) in el.referenceImages" :key="i" class="ref">
+                <div class="ref__preview">
+                  <img v-if="url" :src="url" alt="" />
+                  <span v-else class="ref__ph">Ref{{ i + 1 }}</span>
+                </div>
+                <input
+                  v-model="el.referenceImages[i]"
+                  class="ref__url"
+                  type="text"
+                  :placeholder="`Ref${i + 1} URL`"
+                />
+                <label class="ref__upload">
+                  Загрузить
+                  <input type="file" accept="image/*" hidden @change="(e) => uploadTourRef(el, i, e)" />
+                </label>
+              </div>
+            </div>
+
+            <!-- Default prompts (one textarea per mode) -->
+            <div v-for="p in sortedPrompts(el)" :key="p.mode" class="tour-prompt">
+              <div class="tour-prompt__row">
+                <span :class="['badge', p.mode === 'VIP' ? 'badge--warn' : 'badge--ok']">
+                  {{ cat.hasModes ? p.mode : cat.name }}
+                </span>
+                <button class="btn-primary btn-small" @click="saveTourPrompt(el, p)">
+                  Сохранить промпт
+                </button>
+              </div>
+              <textarea v-model="p.content" class="prompt" rows="3" />
+            </div>
+
+            <div class="brand-card__foot">
+              <label class="checkbox" title="Выключенный элемент скрыт на странице Tournaments">
+                <input type="checkbox" :checked="el.isActive" @change="toggleTourActive(el)" />
+                Активен
+              </label>
+              <button v-if="el.isActive" class="btn-danger" @click="deleteTourElement(el)">
+                Удалить
+              </button>
+              <button class="btn-primary" @click="saveTourElement(cat, el)">Сохранить</button>
+            </div>
+          </div>
+          <p v-if="!cat.elements.length" class="muted">Элементов нет.</p>
+        </div>
+      </div>
+    </section>
+
+    <!-- Smartico brands (Unique-Image-Smartico) -->
+    <section v-if="auth.isAdmin" class="panel">
       <h2>Smartico-бренды</h2>
       <p class="muted small">
         Канонический список brand_id для сервиса Unique Image Smartico. По нему
@@ -1002,5 +1276,44 @@ select {
   display: flex;
   gap: 8px;
   justify-content: flex-end;
+}
+
+/* ---- tournaments ---- */
+.tour-cat {
+  margin-top: 24px;
+}
+.tour-cat__head {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin-bottom: 12px;
+}
+.tour-cat__title {
+  margin: 0;
+  font-size: 15px;
+}
+.tour-el--off {
+  opacity: 0.55;
+}
+.tour-el__name {
+  max-width: 320px;
+  font-weight: 600;
+}
+.refs--two {
+  grid-template-columns: repeat(2, minmax(0, 220px));
+}
+.tour-prompt {
+  margin-bottom: 12px;
+}
+.tour-prompt__row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-bottom: 6px;
+}
+.btn-small {
+  padding: 4px 12px;
+  font-size: 12px;
+  margin-left: auto;
 }
 </style>

@@ -36,6 +36,41 @@ export function requireAdmin(req: Request, res: Response, next: NextFunction): v
 }
 
 /**
+ * 403 unless the user is ADMIN or MANAGER (tournament admin, Phase 0 decision:
+ * MANAGER also edits defaults/references). Like requireZone, the role is read
+ * FRESH from the DB so a promotion takes effect without re-login.
+ */
+export async function requireAdminOrManager(
+  req: Request,
+  res: Response,
+  next: NextFunction,
+): Promise<void> {
+  if (!req.user) {
+    res.status(401).json({ error: "unauthorized" });
+    return;
+  }
+  try {
+    const user = await prisma.user.findUnique({
+      where: { id: req.user.sub },
+      select: { role: true, isActive: true },
+    });
+    if (!user || !user.isActive) {
+      res.status(401).json({ error: "unauthorized" });
+      return;
+    }
+    if (user.role !== "ADMIN" && user.role !== "MANAGER") {
+      res.status(403).json({ error: "forbidden" });
+      return;
+    }
+    req.user.role = user.role;
+    next();
+  } catch (err) {
+    console.error("requireAdminOrManager DB lookup failed:", err);
+    res.status(500).json({ error: "server_error" });
+  }
+}
+
+/**
  * 403 unless the authenticated user's role is in `roles`. ADMIN always passes
  * (full access across zones). Used to wall off the Design zone from CRM-only
  * users and vice-versa. Assumes loadUser + requireAuth ran earlier.

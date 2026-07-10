@@ -20,6 +20,13 @@ export const useAuthStore = defineStore("auth", () => {
   const isAdmin = computed(() => user.value?.role === "ADMIN");
   const isCrm = computed(() => user.value?.role === "CRM");
   const isDesigner = computed(() => user.value?.role === "DESIGNER");
+  const isManager = computed(() => user.value?.role === "MANAGER");
+  // /admin access: ADMIN sees everything; MANAGER sees ONLY the Tournaments
+  // section there (the other panels stay ADMIN-only, mirrored by the backend
+  // guards requireAdmin vs requireAdminOrManager).
+  const canAdminPanel = computed(
+    () => user.value?.role === "ADMIN" || user.value?.role === "MANAGER",
+  );
   // Zone access — ADMIN and MANAGER reach both zones; DESIGNER/CRM are walled off
   // to their own. (MANAGER = Design + CRM, but not /admin → see isAdmin.)
   const canDesign = computed(
@@ -48,5 +55,18 @@ export const useAuthStore = defineStore("auth", () => {
     }
   }
 
-  return { user, ready, isAuthenticated, isAdmin, isCrm, isDesigner, canDesign, canCrm, fetchMe, logout };
+  return {
+    user,
+    ready,
+    isAuthenticated,
+    isAdmin,
+    isCrm,
+    isDesigner,
+    isManager,
+    canAdminPanel,
+    canDesign,
+    canCrm,
+    fetchMe,
+    logout,
+  };
 });
