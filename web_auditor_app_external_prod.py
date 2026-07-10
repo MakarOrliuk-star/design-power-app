@@ -38,10 +38,11 @@ def install_playwright_cloud():
     os.system("playwright install chromium")
     os.system("playwright install-deps chromium") # Критично для Linux-серверов Streamlit!
 
-st.title("🚀 ДОШЛО ДО СЮДА! 2")
-st.stop()
 
 install_playwright_cloud()
+
+st.title("🚀 ДОШЛО ДО СЮДА! 2")
+st.stop()
 
 def test_general_info(MAIN_URL, POP_URL, auth_token, expected_data=None, progress_cb=None):
     step_timer = [time.time()]
