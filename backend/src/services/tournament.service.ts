@@ -54,11 +54,17 @@ export function buildTournamentPrompt(
  * RETURNING makes concurrent downloads collision-free.
  */
 export async function nextDesNumber(): Promise<number> {
-  const rows = await prisma.$queryRaw<{ value: number }[]>`
-    UPDATE "DesCounter" SET value = value + 1 WHERE id = 1 RETURNING value`;
-  const value = rows[0]?.value;
-  if (value === undefined) throw new Error("des_counter_missing"); // not seeded
-  return value;
+  for (let attempt = 0; attempt < 2; attempt++) {
+    const rows = await prisma.$queryRaw<{ value: number }[]>`
+      UPDATE "DesCounter" SET value = value + 1 WHERE id = 1 RETURNING value`;
+    const value = rows[0]?.value;
+    if (value !== undefined) return value;
+    // Unseeded DB (config built via the admin panel, seed script never run):
+    // create the row once and retry; skipDuplicates keeps a concurrent first
+    // download from failing on the unique id.
+    await prisma.desCounter.createMany({ data: [{ id: 1, value: 100000 }], skipDuplicates: true });
+  }
+  throw new Error("des_counter_missing");
 }
 
 export interface TournamentSelection {

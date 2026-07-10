@@ -10,7 +10,8 @@ const props = defineProps<{ element: TourElement; category: TourCategory }>();
 const tour = useTournamentStore();
 
 const mode = computed<TourMode>(() => tour.modeOf(props.category));
-const checked = computed(() => tour.isChecked(props.element.id));
+// Checked state is per element:MODE — the Base tick does not select VIP.
+const checked = computed(() => tour.isChecked(props.element.id, mode.value));
 const overridden = computed(() => tour.isOverridden(props.element, mode.value));
 const changed = computed(() => tour.defaultChanged(props.element, mode.value));
 
@@ -38,7 +39,7 @@ function onBlur() {
         role="checkbox"
         :aria-checked="checked"
         :aria-label="element.name"
-        @click="tour.toggleElement(element.id)"
+        @click="tour.toggleElement(element.id, mode)"
       >
         <svg v-if="checked" viewBox="0 0 12 12" width="10" height="10" fill="none" aria-hidden="true">
           <path d="M2 6.2l2.6 2.6L10 3.6" stroke="#fff" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" />

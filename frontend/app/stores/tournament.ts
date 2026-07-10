@@ -3,10 +3,10 @@ import { defineStore } from "pinia";
 /**
  * Tournaments page state (Phase 5). Selection model:
  *  - up to 4 brands (hard cap, mirrored by the backend);
- *  - element checkboxes across the 4 categories (category checkbox = all its
- *    elements; partial selection -> indeterminate);
- *  - an independent Base/VIP toggle per moded category — switching KEEPS the
- *    checked elements (Phase 0 decision);
+ *  - element checkboxes are PER MODE: the unit of selection is "element:MODE",
+ *    so ticking Tournament_1 under Base does not tick it under VIP (revised
+ *    2026-07-10; the toggle switches which mode's checks are shown, both can
+ *    be generated in one run);
  *  - one global image count (1..4).
  * Prompt inputs resolve override ?? default; edits are saved per user to the
  * backend (DB, not localStorage). Generate creates one batch per category and
@@ -63,6 +63,17 @@ export function effectiveMode(cat: TourCategory, modeByCategory: Record<string, 
   return cat.hasModes ? (modeByCategory[cat.key] ?? "BASE") : (cat.fixedMode ?? "BASE");
 }
 
+/** Selection unit: an element under a specific mode (cuids never contain ":"). */
+export function selectionKey(elementId: string, mode: TourMode): string {
+  return `${elementId}:${mode}`;
+}
+
+/** "e1:VIP" -> { elementId: "e1", mode: "VIP" } — the generate payload shape. */
+export function parseSelectionKey(key: string): { elementId: string; mode: TourMode } {
+  const i = key.lastIndexOf(":");
+  return { elementId: key.slice(0, i), mode: key.slice(i + 1) as TourMode };
+}
+
 /** "all" | "some" | "none" — drives the category checkbox + indeterminate dash. */
 export function categoryStateOf(
   elementIds: string[],
@@ -104,7 +115,7 @@ export const useTournamentStore = defineStore("tournament", () => {
 
   // Selection state
   const selectedBrandIds = ref<string[]>([]); // ≤ 4
-  const checkedElementIds = ref<string[]>([]);
+  const checkedKeys = ref<string[]>([]); // "elementId:MODE" — Base/VIP independent
   const modeByCategory = ref<Record<string, TourMode>>({}); // per moded category
   const count = ref(1); // global stepper, 1..4
 
@@ -129,9 +140,9 @@ export const useTournamentStore = defineStore("tournament", () => {
       // Default every moded category to Base (the mock's initial state).
       for (const c of res.categories)
         if (c.hasModes && !modeByCategory.value[c.key]) modeByCategory.value[c.key] = "BASE";
-      // Drop checked ids that no longer exist (admin removed an element).
+      // Drop checked keys whose element no longer exists (admin removed it).
       const known = new Set(res.categories.flatMap((c) => c.elements.map((e) => e.id)));
-      checkedElementIds.value = checkedElementIds.value.filter((id) => known.has(id));
+      checkedKeys.value = checkedKeys.value.filter((k) => known.has(parseSelectionKey(k).elementId));
       loaded.value = true;
     } catch {
       loadError.value = "Не удалось загрузить конфигурацию турниров.";
@@ -151,40 +162,44 @@ export const useTournamentStore = defineStore("tournament", () => {
     selectedBrandIds.value = selectedBrandIds.value.filter((b) => b !== id);
   }
 
-  // ---- Element checkboxes ----
-  function isChecked(elementId: string): boolean {
-    return checkedElementIds.value.includes(elementId);
-  }
-  function toggleElement(elementId: string) {
-    checkedElementIds.value = isChecked(elementId)
-      ? checkedElementIds.value.filter((id) => id !== elementId)
-      : [...checkedElementIds.value, elementId];
+  // ---- Element checkboxes (per element:MODE — Base and VIP are independent) ----
+  /** Keys of a category's elements under its CURRENT toggle mode. */
+  function categoryKeys(cat: TourCategory): string[] {
+    const mode = modeOf(cat);
+    return cat.elements.map((e) => selectionKey(e.id, mode));
   }
 
-  /** "all" | "some" | "none" — drives the category checkbox + indeterminate. */
+  function isChecked(elementId: string, mode: TourMode): boolean {
+    return checkedKeys.value.includes(selectionKey(elementId, mode));
+  }
+  function toggleElement(elementId: string, mode: TourMode) {
+    const key = selectionKey(elementId, mode);
+    checkedKeys.value = checkedKeys.value.includes(key)
+      ? checkedKeys.value.filter((k) => k !== key)
+      : [...checkedKeys.value, key];
+  }
+
+  /** "all" | "some" | "none" for the CURRENT mode — drives the category checkbox. */
   function categoryState(cat: TourCategory): "all" | "some" | "none" {
-    return categoryStateOf(cat.elements.map((e) => e.id), checkedElementIds.value);
+    return categoryStateOf(categoryKeys(cat), checkedKeys.value);
   }
 
-  /** Category checkbox: none/some -> select all its elements; all -> clear. */
+  /** Category checkbox: none/some -> select all (current mode); all -> clear. */
   function toggleCategory(cat: TourCategory) {
-    checkedElementIds.value = toggleCategoryIds(
-      cat.elements.map((e) => e.id),
-      checkedElementIds.value,
-    );
+    checkedKeys.value = toggleCategoryIds(categoryKeys(cat), checkedKeys.value);
   }
 
-  /** Header "Select all": every element of every category. */
+  /** Header "Select all": every element of every category in its current mode. */
   function selectAll() {
-    checkedElementIds.value = categories.value.flatMap((c) => c.elements.map((e) => e.id));
+    checkedKeys.value = categories.value.flatMap((c) => categoryKeys(c));
   }
   function clearSelection() {
-    checkedElementIds.value = [];
+    checkedKeys.value = [];
   }
 
   function setMode(cat: TourCategory, mode: TourMode) {
-    // Switching Base/VIP keeps the checked elements (Phase 0 decision) — the
-    // toggle only changes WHICH prompt set is shown/generated.
+    // The toggle switches which mode's prompts AND checks are shown; each
+    // mode's checks are kept independently (revised from the Phase 0 model).
     modeByCategory.value = { ...modeByCategory.value, [cat.key]: mode };
   }
   function modeOf(cat: TourCategory): TourMode {
@@ -263,9 +278,7 @@ export const useTournamentStore = defineStore("tournament", () => {
   // ---- Generate ----
   const canGenerate = computed(
     () =>
-      selectedBrandIds.value.length > 0 &&
-      checkedElementIds.value.length > 0 &&
-      !submitting.value,
+      selectedBrandIds.value.length > 0 && checkedKeys.value.length > 0 && !submitting.value,
   );
 
   async function generate() {
@@ -279,10 +292,11 @@ export const useTournamentStore = defineStore("tournament", () => {
     }
     submitting.value = true;
     try {
-      const selections = checkedElementIds.value
-        .map((id) => elementById.value.get(id))
-        .filter((x): x is { el: TourElement; cat: TourCategory } => x !== undefined)
-        .map(({ el, cat }) => ({ elementId: el.id, mode: modeOf(cat) }));
+      // One selection per checked element:mode key — Base and VIP of the same
+      // element can go in the same run, each with its own prompt set.
+      const selections = checkedKeys.value
+        .map(parseSelectionKey)
+        .filter((s) => elementById.value.has(s.elementId));
       const res = await useApi()<{
         batches: { batchId: string; categoryKey: string; count: number }[];
       }>("/api/tournament/generate", {
@@ -307,7 +321,7 @@ export const useTournamentStore = defineStore("tournament", () => {
     loading,
     loadError,
     selectedBrandIds,
-    checkedElementIds,
+    checkedKeys,
     modeByCategory,
     count,
     submitting,

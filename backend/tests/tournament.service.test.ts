@@ -8,6 +8,7 @@ const db = vi.hoisted(() => ({
   batchCreate: vi.fn(),
   generationCreate: vi.fn(),
   promptTemplateFindFirst: vi.fn(),
+  desCounterCreateMany: vi.fn(),
   queryRaw: vi.fn(),
 }));
 const queue = vi.hoisted(() => ({ addBulk: vi.fn() }));
@@ -25,6 +26,7 @@ vi.mock("../src/lib/prisma.js", () => ({
     batch: { create: db.batchCreate },
     generation: { create: db.generationCreate },
     promptTemplate: { findFirst: db.promptTemplateFindFirst },
+    desCounter: { createMany: db.desCounterCreateMany },
     $queryRaw: db.queryRaw,
   },
 }));
@@ -70,8 +72,21 @@ describe("nextDesNumber", () => {
     db.queryRaw.mockResolvedValue([{ value: 100001 }]);
     expect(await nextDesNumber()).toBe(100001);
   });
-  it("throws when the counter row is missing (not seeded)", async () => {
+  it("self-seeds the counter on an unseeded DB and retries (first number = 100001)", async () => {
+    db.queryRaw
+      .mockResolvedValueOnce([]) // row missing
+      .mockResolvedValueOnce([{ value: 100001 }]); // after createMany
+    db.desCounterCreateMany.mockResolvedValue({ count: 1 });
+    expect(await nextDesNumber()).toBe(100001);
+    expect(db.desCounterCreateMany).toHaveBeenCalledWith({
+      data: [{ id: 1, value: 100000 }],
+      skipDuplicates: true,
+    });
+  });
+
+  it("throws only if the row is still missing after self-seed", async () => {
     db.queryRaw.mockResolvedValue([]);
+    db.desCounterCreateMany.mockResolvedValue({ count: 0 });
     await expect(nextDesNumber()).rejects.toThrow("des_counter_missing");
   });
 });
