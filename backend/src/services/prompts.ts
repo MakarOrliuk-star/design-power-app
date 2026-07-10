@@ -11,7 +11,10 @@ export const DEFAULT_PERSON_SYSTEM_PROMPT = `You are an image edit prompt writer
  * Prompt config (legacy "Prompts" tab → PromptTemplate). Lookup is
  * case-insensitive on the key (brand for PERSON, style for ITEM).
  */
-export async function getPrompt(type: "PERSON" | "ITEM", key: string): Promise<string> {
+export async function getPrompt(
+  type: "PERSON" | "ITEM" | "TOURNAMENT",
+  key: string,
+): Promise<string> {
   const row = await prisma.promptTemplate.findFirst({
     where: { type, key: { equals: key, mode: "insensitive" } },
     select: { content: true },

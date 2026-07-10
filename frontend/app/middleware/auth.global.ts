@@ -18,8 +18,9 @@ export default defineNuxtRouteMiddleware(async (to) => {
   if (to.path === "/forbidden") return;
 
   // Access violations land on /forbidden (a calm message + a button back to the
-  // user's own zone) instead of a silent redirect.
-  if (to.path.startsWith("/admin") && !auth.isAdmin) {
+  // user's own zone) instead of a silent redirect. MANAGER reaches /admin too,
+  // but only sees the Tournaments section there (the page hides the rest).
+  if (to.path.startsWith("/admin") && !auth.canAdminPanel) {
     return navigateTo("/forbidden");
   }
 

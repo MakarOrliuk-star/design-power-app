@@ -18,6 +18,7 @@ export async function processItemJob(generationId: string, aspectRatio = "1:1"):
       description: true,
       referenceImages: true,
       isEdit: true,
+      actionType: true,
       job: { select: { id: true, cloudinaryFolder: true } },
     },
   });
@@ -33,9 +34,12 @@ export async function processItemJob(generationId: string, aspectRatio = "1:1"):
 
   // Edits (Result page) run nano-banana-2/edit on the source image with the user's
   // raw instruction — no ITEM style template, so the edit isn't re-styled.
-  const finalPrompt = gen.isEdit
-    ? (gen.description ?? "").trim()
-    : await buildItemPrompt(gen.brandName, gen.description ?? "");
+  // Tournament rows arrive with the FULL prompt pre-built at batch creation
+  // (system wrapper + element prompt + brand style) — also used raw.
+  const finalPrompt =
+    gen.isEdit || gen.actionType === "TOURNAMENT"
+      ? (gen.description ?? "").trim()
+      : await buildItemPrompt(gen.brandName, gen.description ?? "");
 
   // Per-brand fal model override (admin-managed); null → default nano-banana-2.
   // Applies to Item generation and Result-page edits alike.

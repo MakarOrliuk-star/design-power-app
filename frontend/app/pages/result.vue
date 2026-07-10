@@ -101,7 +101,7 @@ function copyImage(img: { id: string; generatedImageUrl: string }) {
           </button>
         </nav>
 
-        <div class="bar__right">
+        <div v-if="activeTab !== 'tournament'" class="bar__right">
           <button class="select-all" type="button" @click="toggleSelectAll">Select all</button>
           <div class="seg" role="group" aria-label="Selection mode">
             <button
@@ -118,8 +118,11 @@ function copyImage(img: { id: string; generatedImageUrl: string }) {
         </div>
       </div>
 
+      <!-- Tournament Pack (Phase 6): its own batch-grouped body + DES ZIP export -->
+      <ResultTournamentPack v-if="activeTab === 'tournament'" />
+
       <!-- Gallery lane + Edit panel -->
-      <div class="content">
+      <div v-else class="content">
         <div class="lane">
           <p v-if="!groups.length && loading" class="lane__state">Загрузка…</p>
           <p v-else-if="!groups.length" class="lane__state">

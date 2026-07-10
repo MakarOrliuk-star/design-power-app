@@ -476,7 +476,7 @@ generateRouter.post("/generate/inpaint", async (req: Request, res: Response) => 
 //   pipeline yet, so that tab returns nothing (Phase 0 decision). Edited images
 //   (isEdit=true) live only in the "edited" tab and are excluded elsewhere.
 type ContentType = "Person" | "Item" | "Background";
-function contentTypeOf(actionType: "FULL" | "CREATE_ITEM" | "NANO_REF"): ContentType {
+function contentTypeOf(actionType: "FULL" | "CREATE_ITEM" | "NANO_REF" | "TOURNAMENT"): ContentType {
   return actionType === "CREATE_ITEM" ? "Item" : "Person";
 }
 
@@ -496,7 +496,9 @@ function tabWhere(
       return { isEdit: true };
     case "generated":
     default:
-      return { isEdit: false };
+      // Tournament results live in their own Result tab ("Tournament Pack",
+      // Phase 6) — keep them out of the generic gallery tabs.
+      return { isEdit: false, actionType: { not: "TOURNAMENT" } };
   }
 }
 

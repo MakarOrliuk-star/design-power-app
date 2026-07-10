@@ -29,21 +29,22 @@ enum Role {
 }
 
 model User {
-  id          String          @id @default(cuid())
-  email       String          @unique
+  id          String    @id @default(cuid())
+  email       String    @unique
   name        String?
   avatarUrl   String?
-  googleId    String?         @unique
-  role        Role            @default(DESIGNER)
-  isActive    Boolean         @default(true)
-  createdAt   DateTime        @default(now())
+  googleId    String?   @unique
+  role        Role      @default(DESIGNER)
+  isActive    Boolean   @default(true)
+  createdAt   DateTime  @default(now())
   lastLoginAt DateTime?
 
-  generations   Generation[]
-  batches       Batch[]
-  favorites     BrandFavorite[]
-  itemFavorites ItemStyleFavorite[]
-  crmFavorites  CrmServiceFavorite[]
+  generations         Generation[]
+  batches             Batch[]
+  favorites           BrandFavorite[]
+  itemFavorites       ItemStyleFavorite[]
+  crmFavorites        CrmServiceFavorite[]
+  tournamentOverrides UserTournamentPromptOverride[]
 
   @@index([email])
 }
@@ -62,10 +63,10 @@ model AllowedEmail {
 // ============================================================
 
 model Brand {
-  id           String              @id @default(cuid())
-  name         String              @unique // e.g. "Spinogambino(Men)"
-  smarticoName String? // canonical Smartico name (unused in v1)
-  isActive     Boolean             @default(true)
+  id                String   @id @default(cuid())
+  name              String   @unique // e.g. "Spinogambino(Men)"
+  smarticoName      String? // canonical Smartico name (unused in v1)
+  isActive          Boolean  @default(true)
   // Forced output format (TASK §7): "9:16" → every generation of this brand is
   // 9:16 regardless of the user's 1:1/9:16 pick; null → honour the pick.
   // Edits follow automatically — the edit flow probes the source image pixels.
@@ -74,12 +75,12 @@ model Brand {
   // otherwise a MODEL_REGISTRY key (e.g. "xai/grok-imagine-image"). The endpoint
   // (/edit vs text-to-image) and request body are derived from the registry.
   imageModel        String?
-  createdAt    DateTime            @default(now())
+  createdAt         DateTime @default(now())
 
-  categories   BrandCategoryLink[]
-  nanoRef      BrandNanoRef?
-  prompts      PromptTemplate[]
-  favorites    BrandFavorite[]
+  categories BrandCategoryLink[]
+  nanoRef    BrandNanoRef?
+  prompts    PromptTemplate[]
+  favorites  BrandFavorite[]
 }
 
 /// Brand tabs in the picker: Favorites / All Aramuz / Korea / Sport / ...
@@ -150,6 +151,10 @@ model BrandNanoRef {
 enum PromptType {
   PERSON
   ITEM
+  // Tournaments page (TASK feature/tournament-page): the system wrapper that
+  // every tournament element prompt is injected into via {{prompt}}. Single
+  // row: key="system". Editable by ADMIN/MANAGER via the tournament admin.
+  TOURNAMENT
 }
 
 /// System prompts (legacy "Prompts" tab).
@@ -188,6 +193,7 @@ enum ActionType {
   FULL // Person full generation
   CREATE_ITEM // Create Items (nano-gpt)
   NANO_REF // Brand-locked Person generation
+  TOURNAMENT // Tournaments page batch (one batch per category)
 }
 
 enum GenerationStatus {
@@ -213,19 +219,19 @@ enum JobStatus {
 }
 
 model Batch {
-  id            String       @id @default(cuid())
-  legacyBatchId String?      @unique // e.g. "PERSON_20260601_120000_ABC123"
+  id            String      @id @default(cuid())
+  legacyBatchId String?     @unique // e.g. "PERSON_20260601_120000_ABC123"
   userId        String
-  user          User         @relation(fields: [userId], references: [id])
+  user          User        @relation(fields: [userId], references: [id])
   actionType    ActionType
   theme         String?
   description   String?
-  status        BatchStatus  @default(IN_PROGRESS)
+  status        BatchStatus @default(IN_PROGRESS)
   refMode       RefMode? // Person only
-  createdAt     DateTime     @default(now())
+  createdAt     DateTime    @default(now())
 
-  generations   Generation[]
-  jobs          Job[]
+  generations Generation[]
+  jobs        Job[]
 
   @@index([userId, createdAt])
 }
@@ -246,10 +252,17 @@ model Generation {
   statusMessage     String? // human-readable status text
   actionType        ActionType
   isEdit            Boolean          @default(false)
+  // Tournaments page (actionType=TOURNAMENT only, null elsewhere). The final
+  // prompt is pre-built at batch creation and stored in `description`; the file
+  // name is fixed here too so the ZIP/Result tab never re-derive it.
+  tourCategoryKey   String? // "tournament" | "lotterie" | "provider" | "calendar_vip"
+  tourElementName   String? // e.g. "Tournament_1", "Playson & Booongo"
+  tourMode          TournamentMode?
+  tourFileName      String? // e.g. "Bonuskong_Tournament_1_2" (no extension)
   createdAt         DateTime         @default(now())
   updatedAt         DateTime         @updatedAt
 
-  job               Job?
+  job Job?
 
   @@index([userId, createdAt])
   @@index([brandName])
@@ -309,4 +322,99 @@ model SmarticoAsset {
   updatedAt DateTime @updatedAt
 
   @@unique([zipName, brand, type, locale])
+}
+
+// ============================================================
+// Tournaments page (TASK feature/tournament-page)
+// ============================================================
+
+enum TournamentMode {
+  BASE
+  VIP
+}
+
+/// The 4 fixed categories (seeded; NOT admin-editable — the ZIP folder layout
+/// and the page columns are hard-wired to them). Admin manages elements only.
+model TournamentCategory {
+  id        String          @id @default(cuid())
+  key       String          @unique // "tournament" | "lotterie" | "provider" | "calendar_vip"
+  name      String // column title, e.g. "Tournament (Bs)"
+  // true (tournament/lotterie): the column has a Base/VIP toggle, each element
+  // keeps TWO prompts. false: single prompt in `fixedMode`.
+  hasModes  Boolean         @default(false)
+  fixedMode TournamentMode? // provider -> BASE, calendar_vip -> VIP; null when hasModes
+  order     Int             @default(0)
+
+  elements TournamentElement[]
+}
+
+/// Elements inside a category (Tournament_1, Lottery_2, providers...). Admin
+/// adds/removes; removal is soft (isActive=false) — Generation history keeps
+/// the denormalized element name.
+model TournamentElement {
+  id              String             @id @default(cuid())
+  categoryId      String
+  category        TournamentCategory @relation(fields: [categoryId], references: [id], onDelete: Cascade)
+  name            String // "Tournament_1", "Playson & Booongo"
+  order           Int                @default(0)
+  isActive        Boolean            @default(true)
+  // Provider category only: the 2 provider reference images (Cloudinary URLs)
+  // baked into every generation of this element. Empty for other categories.
+  referenceImages String[]
+  createdAt       DateTime           @default(now())
+
+  prompts   TournamentPrompt[]
+  overrides UserTournamentPromptOverride[]
+
+  @@unique([categoryId, name])
+}
+
+/// Global default prompts, visible to every designer. tournament/lotterie
+/// elements have a BASE and a VIP row; provider -> BASE only; calendar_vip ->
+/// VIP only. `updatedAt` drives the "default changed" banner on overrides.
+model TournamentPrompt {
+  id        String            @id @default(cuid())
+  elementId String
+  element   TournamentElement @relation(fields: [elementId], references: [id], onDelete: Cascade)
+  mode      TournamentMode
+  content   String
+  updatedAt DateTime          @updatedAt
+
+  @@unique([elementId, mode])
+}
+
+/// Per-user local prompt edits (Phase 0 decision: DB, not localStorage; live
+/// until reset). baseUpdatedAt snapshots the default's updatedAt at edit/ack
+/// time: default.updatedAt > baseUpdatedAt -> the UI shows "default changed:
+/// keep mine / take new default".
+model UserTournamentPromptOverride {
+  userId        String
+  elementId     String
+  mode          TournamentMode
+  content       String
+  baseUpdatedAt DateTime
+  updatedAt     DateTime       @updatedAt
+
+  user    User              @relation(fields: [userId], references: [id], onDelete: Cascade)
+  element TournamentElement @relation(fields: [elementId], references: [id], onDelete: Cascade)
+
+  @@id([userId, elementId, mode])
+}
+
+/// Single-row global DES counter (seeded id=1, value=100000). Incremented
+/// atomically (UPDATE ... RETURNING) BEFORE each ZIP download, so the first
+/// issued archive is DES-100001 (per the spec's own example).
+model DesCounter {
+  id    Int @id @default(1)
+  value Int
+}
+
+/// One row per issued ZIP download (a new DES number on EVERY download).
+model ZipExport {
+  id        String   @id @default(cuid())
+  desNumber Int      @unique
+  userId    String
+  batchId   String? // set for whole-batch exports
+  imageIds  String[] // Generation ids that went into the archive
+  createdAt DateTime @default(now())
 }

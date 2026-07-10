@@ -214,7 +214,7 @@ export async function createItemBatch(p: ItemParams): Promise<CreateBatchResult>
   return { batchId: batch.id, count: created.length };
 }
 
-type ActionType = "FULL" | "CREATE_ITEM" | "NANO_REF";
+type ActionType = "FULL" | "CREATE_ITEM" | "NANO_REF" | "TOURNAMENT";
 
 interface EditSource {
   sourceImageUrl: string; // the existing generated image to edit (fal image_urls)
