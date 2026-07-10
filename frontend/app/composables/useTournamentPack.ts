@@ -52,9 +52,9 @@ export function buildPackExportQuery(p: { batchId?: string; ids?: string[] }): s
 }
 
 export interface PackGroup {
-  key: string; // "tournament/Bonuskong_Tournament_1"
+  key: string; // "tournament/Tournament_1/Bonuskong"
   categoryKey: string;
-  title: string; // "Bonuskong_Tournament_1" (the ZIP pack folder)
+  title: string; // "Tournament_1/Bonuskong" (the ZIP folder path inside the category)
   images: PackGeneration[];
 }
 
@@ -63,16 +63,38 @@ export function packFolderOf(fileName: string): string {
   return fileName.replace(/_\d+$/, "");
 }
 
+/** Mirror of the backend sanitizeName: parens dropped, spaces -> "_". */
+export function sanitizeName(s: string): string {
+  return s.replace(/[()]/g, "").trim().replace(/\s+/g, "_");
+}
+
+/** Per-brand image index: trailing number of the fixed file name ("…_2" -> "2"). */
+export function trailingIndexOf(fileName: string): string {
+  const m = /_(\d+)$/.exec(fileName);
+  return m ? m[1]! : "1";
+}
+
+/** The element part of a row's ZIP path ("Tournament_1"), robust to old rows. */
+function elementFolderOf(g: PackGeneration): string {
+  return sanitizeName(g.tourElementName ?? "") || (g.tourFileName ? packFolderOf(g.tourFileName) : "");
+}
+
+/** The file name inside the ZIP brand folder: "Tournament_1_2" (element + index). */
+export function packDisplayName(g: PackGeneration): string {
+  if (!g.tourFileName) return "";
+  return `${elementFolderOf(g)}_${trailingIndexOf(g.tourFileName)}`;
+}
+
 /**
- * Group a batch's generations into the ZIP pack folders (Brand_Element), in
- * order of first appearance — the tab mirrors the archive structure exactly.
+ * Group a batch's generations into the ZIP folders (category -> Element ->
+ * Brand), in order of first appearance — the tab mirrors the archive exactly.
  */
 export function groupPack(generations: PackGeneration[]): PackGroup[] {
   const map = new Map<string, PackGroup>();
   for (const g of generations) {
     if (!g.tourFileName) continue;
-    const title = packFolderOf(g.tourFileName);
     const categoryKey = g.tourCategoryKey ?? "tournament";
+    const title = `${elementFolderOf(g)}/${sanitizeName(g.brandName) || "Unknown"}`;
     const key = `${categoryKey}/${title}`;
     let group = map.get(key);
     if (!group) {
@@ -124,12 +146,15 @@ export interface PackApi {
 }
 export interface PackGen {
   runningCount: number;
+  addBatch(id: string, kind: "person" | "item"): void;
 }
 export interface PackDeps {
   api: PackApi;
   apiBase: string;
   download: (url: string) => void;
   gen: PackGen;
+  /** Called after an edit batch is queued (the page switches to Edited). */
+  onEdited?: () => void;
 }
 
 export function useTournamentPack(deps: PackDeps) {
@@ -178,6 +203,54 @@ export function useTournamentPack(deps: PackDeps) {
   const selectedCount = computed(() => selected.value.size);
   function clearSelection() {
     selected.value = new Set();
+  }
+
+  // ---- Whole-batch (session) checkbox ----
+  function batchState(b: PackBatch): "all" | "some" | "none" {
+    const ids = exportableIds([b]);
+    if (!ids.length) return "none";
+    const n = ids.filter((id) => selected.value.has(id)).length;
+    return n === 0 ? "none" : n === ids.length ? "all" : "some";
+  }
+  /** Tick/untick every exportable image of the batch at once. */
+  function toggleBatch(b: PackBatch) {
+    const ids = exportableIds([b]);
+    const next = new Set(selected.value);
+    if (batchState(b) === "all") for (const id of ids) next.delete(id);
+    else for (const id of ids) next.add(id);
+    selected.value = next;
+  }
+
+  // ---- Edit the ticked images (same /api/generate/edit as the other tabs; the
+  // results land in the Edited tab as a regular edit batch) ----
+  const editPrompt = ref("");
+  const editing = ref(false);
+  const editError = ref("");
+  async function runEdit() {
+    const ids = [...selected.value];
+    const prompt = editPrompt.value.trim();
+    if (!ids.length || !prompt || editing.value) return;
+    editError.value = "";
+    editing.value = true;
+    try {
+      const res = await api<{ batchId: string; count: number }>("/api/generate/edit", {
+        method: "POST",
+        body: { generationIds: ids, prompt },
+      });
+      // Toolbar progress + completion toast, like every other edit.
+      gen.addBatch(res.batchId, "item");
+      editPrompt.value = "";
+      clearSelection();
+      deps.onEdited?.();
+    } catch (e: unknown) {
+      const code = (e as { data?: { error?: string } })?.data?.error;
+      editError.value =
+        code === "edit_pipeline_not_configured"
+          ? "Редактирование не настроено (нет ключей fal / Cloudinary)."
+          : "Не удалось запустить редактирование.";
+    } finally {
+      editing.value = false;
+    }
   }
 
   // ---- ZIP export (a NEW DES number is issued on every download) ----
@@ -250,6 +323,12 @@ export function useTournamentPack(deps: PackDeps) {
     isSelected,
     selectedCount,
     clearSelection,
+    batchState,
+    toggleBatch,
+    editPrompt,
+    editing,
+    editError,
+    runEdit,
     exporting,
     exportBatch,
     exportSelected,

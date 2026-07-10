@@ -7,10 +7,13 @@
 import {
   useTournamentPack,
   groupPack,
+  packDisplayName,
   batchStatusLabel,
   packCounts,
   type PackApi,
 } from "~/composables/useTournamentPack";
+
+const emit = defineEmits<{ (e: "edited"): void }>();
 
 const config = useRuntimeConfig();
 const gen = useGeneratorStore();
@@ -34,6 +37,12 @@ const {
   isSelected,
   selectedCount,
   clearSelection,
+  batchState,
+  toggleBatch,
+  editPrompt,
+  editing,
+  editError,
+  runEdit,
   exporting,
   exportBatch,
   exportSelected,
@@ -42,6 +51,7 @@ const {
   apiBase: config.public.apiBase as string,
   download,
   gen,
+  onEdited: () => emit("edited"),
 });
 
 function fmtDate(iso: string): string {
@@ -92,6 +102,26 @@ onBeforeUnmount(() => window.removeEventListener("keydown", onKey));
       </button>
     </div>
 
+    <!-- Edit the ticked images — same flow as the other tabs, lands in Edited -->
+    <div v-if="selectedCount" class="editbar">
+      <input
+        v-model="editPrompt"
+        class="editbar__input"
+        type="text"
+        placeholder="Промпт: что изменить в выбранных картинках…"
+        @keyup.enter="runEdit"
+      />
+      <button
+        class="editbar__btn"
+        type="button"
+        :disabled="editing || !editPrompt.trim()"
+        @click="runEdit"
+      >
+        {{ editing ? "Отправка…" : `Edit (${selectedCount})` }}
+      </button>
+      <span v-if="editError" class="editbar__error">{{ editError }}</span>
+    </div>
+
     <!-- states -->
     <p v-if="!batches.length && loading" class="pack__state">Загрузка…</p>
     <p v-else-if="!batches.length" class="pack__state">
@@ -101,6 +131,23 @@ onBeforeUnmount(() => window.removeEventListener("keydown", onKey));
     <!-- batches, newest first -->
     <div v-for="b in batches" :key="b.id" class="batch">
       <div class="batch__head">
+        <!-- whole-session checkbox: ticks every finished image of the batch -->
+        <button
+          :class="['batch__cb', { 'batch__cb--on': batchState(b) !== 'none' }]"
+          type="button"
+          role="checkbox"
+          :aria-checked="batchState(b) === 'all' ? 'true' : batchState(b) === 'some' ? 'mixed' : 'false'"
+          :disabled="packCounts(b).done === 0"
+          title="Выбрать все картинки батча"
+          @click="toggleBatch(b)"
+        >
+          <svg v-if="batchState(b) === 'all'" viewBox="0 0 12 12" width="10" height="10" fill="none" aria-hidden="true">
+            <path d="M2 6.2l2.6 2.6L10 3.6" stroke="#fff" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" />
+          </svg>
+          <svg v-else-if="batchState(b) === 'some'" viewBox="0 0 12 12" width="10" height="10" fill="none" aria-hidden="true">
+            <path d="M2.5 6h7" stroke="#fff" stroke-width="1.8" stroke-linecap="round" />
+          </svg>
+        </button>
         <span class="batch__date">{{ fmtDate(b.createdAt) }}</span>
         <span
           :class="['batch__status', {
@@ -149,7 +196,7 @@ onBeforeUnmount(() => window.removeEventListener("keydown", onKey));
                 :src="img.generatedImageUrl"
                 :alt="img.tourFileName ?? ''"
                 loading="lazy"
-                @click="openViewer(img.generatedImageUrl, img.tourFileName ?? '')"
+                @click="openViewer(img.generatedImageUrl, packDisplayName(img))"
               />
             </template>
             <div v-else class="card__pending">
@@ -158,7 +205,7 @@ onBeforeUnmount(() => window.removeEventListener("keydown", onKey));
                 {{ img.statusMessage || img.status }}
               </span>
             </div>
-            <span class="card__name" :title="img.tourFileName ?? ''">{{ img.tourFileName }}</span>
+            <span class="card__name" :title="packDisplayName(img)">{{ packDisplayName(img) }}</span>
           </div>
         </div>
       </div>
@@ -245,6 +292,48 @@ onBeforeUnmount(() => window.removeEventListener("keydown", onKey));
   cursor: not-allowed;
 }
 
+/* edit bar (shown when something is ticked) */
+.editbar {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+.editbar__input {
+  flex: 1;
+  min-width: 0;
+  height: 34px;
+  padding: 0 14px;
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-pill);
+  background: var(--color-white);
+  font-family: inherit;
+  font-size: var(--fs-tab);
+  color: var(--color-text);
+  outline: none;
+}
+.editbar__input:focus {
+  border-color: var(--color-accent);
+}
+.editbar__btn {
+  flex: none;
+  height: 34px;
+  padding: 0 20px;
+  border: none;
+  border-radius: var(--radius-pill);
+  background: var(--gradient-active);
+  color: #fff;
+  font-size: var(--fs-tab);
+  font-weight: 600;
+}
+.editbar__btn:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+.editbar__error {
+  font-size: var(--fs-tab);
+  color: var(--color-stop-hover);
+}
+
 .pack__state {
   margin: 24px 0;
   text-align: center;
@@ -266,6 +355,25 @@ onBeforeUnmount(() => window.removeEventListener("keydown", onKey));
   display: flex;
   align-items: center;
   gap: 12px;
+}
+.batch__cb {
+  flex: none;
+  display: grid;
+  place-items: center;
+  width: 18px;
+  height: 18px;
+  padding: 0;
+  border: 1.5px solid var(--color-border);
+  border-radius: 5px;
+  background: var(--color-white);
+}
+.batch__cb--on {
+  border-color: transparent;
+  background: var(--gradient-active);
+}
+.batch__cb:disabled {
+  opacity: 0.45;
+  cursor: default;
 }
 .batch__date {
   font-size: var(--fs-user);

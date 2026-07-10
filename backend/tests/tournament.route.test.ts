@@ -266,7 +266,9 @@ function tourRow(over: Record<string, unknown> = {}) {
   return {
     id: "g1",
     generatedImageUrl: "https://res.cloudinary.com/d/image/upload/v1/x/a.png",
+    brandName: "Bonuskong",
     tourCategoryKey: "tournament",
+    tourElementName: "Tournament_1",
     tourFileName: "Bonuskong_Tournament_1_1",
     ...over,
   };
@@ -276,18 +278,21 @@ function tourRow(over: Record<string, unknown> = {}) {
 const FAKE_IMG = Buffer.from("fake-png-bytes");
 
 describe("GET /api/tournament/export.zip — real archive structure (QA)", () => {
-  it("streams DES-<n>.zip with the exact {category}/{Brand_Element}/{file}.png layout", async () => {
+  it("streams DES-<n>.zip with the {category}/{Element}/{Brand}/{Element}_N.png layout", async () => {
     db.generationFindMany.mockResolvedValue([
       tourRow(),
       tourRow({ id: "g2", tourFileName: "Bonuskong_Tournament_1_2" }),
       tourRow({
         id: "g3",
+        brandName: "Spinogambino(Men)",
         tourCategoryKey: "lotterie",
+        tourElementName: "Lottery_2",
         tourFileName: "SpinogambinoMen_Lottery_2_1",
       }),
       tourRow({
         id: "g4",
         tourCategoryKey: "provider",
+        tourElementName: "Playson & Booongo",
         tourFileName: "Bonuskong_Playson_&_Booongo_1",
       }),
     ]);
@@ -310,10 +315,10 @@ describe("GET /api/tournament/export.zip — real archive structure (QA)", () =>
     const entries = await zipEntries(res.body as Buffer);
     expect(entries.sort()).toEqual(
       [
-        "tournament/Bonuskong_Tournament_1/Bonuskong_Tournament_1_1.png",
-        "tournament/Bonuskong_Tournament_1/Bonuskong_Tournament_1_2.png",
-        "lotterie/SpinogambinoMen_Lottery_2/SpinogambinoMen_Lottery_2_1.png",
-        "provider/Bonuskong_Playson_&_Booongo/Bonuskong_Playson_&_Booongo_1.png",
+        "tournament/Tournament_1/Bonuskong/Tournament_1_1.png",
+        "tournament/Tournament_1/Bonuskong/Tournament_1_2.png",
+        "lotterie/Lottery_2/SpinogambinoMen/Lottery_2_1.png",
+        "provider/Playson_&_Booongo/Bonuskong/Playson_&_Booongo_1.png",
       ].sort(),
     );
     // No empty category folders: calendar_vip was not generated -> absent.

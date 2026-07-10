@@ -7,6 +7,7 @@ import { itemPipelineReady } from "../env.js";
 import {
   createTournamentBatches,
   nextDesNumber,
+  sanitizeName,
   MAX_TOURNAMENT_BRANDS,
   MAX_TOURNAMENT_COUNT,
 } from "../services/tournament.service.js";
@@ -273,6 +274,12 @@ export function packFolderOf(fileName: string): string {
   return fileName.replace(/_\d+$/, "");
 }
 
+/** Per-brand image index: trailing number of the fixed file name ("…_2" -> "2"). */
+export function trailingIndexOf(fileName: string): string {
+  const m = /_(\d+)$/.exec(fileName);
+  return m ? m[1]! : "1";
+}
+
 /** Collision-free archive path: appends "-2", "-3"... before the extension. */
 export function uniqueEntryPath(used: Set<string>, path: string): string {
   if (!used.has(path)) {
@@ -326,7 +333,14 @@ tournamentRouter.get("/export.zip", async (req: Request, res: Response) => {
     },
     orderBy: { createdAt: "asc" },
     take: MAX_EXPORT,
-    select: { id: true, generatedImageUrl: true, tourCategoryKey: true, tourFileName: true },
+    select: {
+      id: true,
+      generatedImageUrl: true,
+      brandName: true,
+      tourCategoryKey: true,
+      tourElementName: true,
+      tourFileName: true,
+    },
   });
   if (rows.length === 0) {
     res.status(404).json({ error: "no_images" });
@@ -354,17 +368,24 @@ tournamentRouter.get("/export.zip", async (req: Request, res: Response) => {
   });
   archive.pipe(res);
 
-  // Folder layout (spec): {category}/{Brand_Element}/{Brand_Element_N}.png.
+  // Folder layout (revised 2026-07-10): {category}/{Element}/{Brand}/{Element}_N.png
+  // — drill down category -> element -> brand; the file name repeats the element
+  // with the per-brand index. Old rows work too (element/brand are denormalized).
   // Categories with no images simply never appear (Phase 0: no empty folders).
   const used = new Set<string>();
   for (const r of rows) {
     const fileName = r.tourFileName!;
     const category = r.tourCategoryKey ?? "tournament";
+    const element = sanitizeName(r.tourElementName ?? "") || packFolderOf(fileName);
+    const brand = sanitizeName(r.brandName) || "Unknown";
     try {
       const resp = await fetch(toPngUrl(r.generatedImageUrl!));
       if (!resp.ok) continue;
       const buf = Buffer.from(await resp.arrayBuffer());
-      const path = uniqueEntryPath(used, `${category}/${packFolderOf(fileName)}/${fileName}.png`);
+      const path = uniqueEntryPath(
+        used,
+        `${category}/${element}/${brand}/${element}_${trailingIndexOf(fileName)}.png`,
+      );
       archive.append(buf, { name: path });
     } catch (err) {
       console.warn(`Tournament ZIP export: skipped ${r.id}`, err);
