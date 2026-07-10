@@ -328,19 +328,25 @@ function closeEditor() {
 }
 
 // ---- Lifecycle ----
+let probeSeq = 0; // drops a late onload from a previous URL (e.g. mid-load reselect)
 function probe() {
+  const seq = ++probeSeq;
   natural.value = null;
   htmlImg.value = null;
   if (!import.meta.client || !props.image) return;
   const im = new Image();
   im.onload = () => {
+    if (seq !== probeSeq) return;
     natural.value = { width: im.naturalWidth, height: im.naturalHeight };
     htmlImg.value = im;
     if (open.value) resetScene();
   };
   im.src = props.image.generatedImageUrl;
 }
-watch(() => props.image?.id ?? null, () => {
+// Re-probe on URL change too, not only id: a successful Scale/inpaint swaps the
+// URL in place on the SAME generation id (applyReplacement), and the next editor
+// session must see the new bitmap + its new natural size, not the stale one.
+watch(() => [props.image?.id ?? null, props.image?.generatedImageUrl ?? null], () => {
   if (!props.image && open.value) closeEditor();
   probe();
 }, { immediate: true });
