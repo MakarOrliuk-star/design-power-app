@@ -278,7 +278,7 @@ function tourRow(over: Record<string, unknown> = {}) {
 const FAKE_IMG = Buffer.from("fake-png-bytes");
 
 describe("GET /api/tournament/export.zip — real archive structure (QA)", () => {
-  it("streams DES-<n>.zip with the flat {Brand}/{Element}_N.png layout", async () => {
+  it("streams DES-<n>.zip: flat {Brand}/{Element}_N[_gender].png, Men/Women share a folder", async () => {
     db.generationFindMany.mockResolvedValue([
       tourRow(),
       tourRow({ id: "g2", tourFileName: "Bonuskong_Tournament_1_2" }),
@@ -288,6 +288,13 @@ describe("GET /api/tournament/export.zip — real archive structure (QA)", () =>
         tourCategoryKey: "lotterie",
         tourElementName: "Lottery_2",
         tourFileName: "SpinogambinoMen_Lottery_2_1",
+      }),
+      tourRow({
+        id: "g5",
+        brandName: "Spinogambino (Women)",
+        tourElementName: "Lottery_2",
+        tourCategoryKey: "lotterie",
+        tourFileName: "SpinogambinoWomen_Lottery_2_1",
       }),
       tourRow({
         id: "g4",
@@ -317,7 +324,9 @@ describe("GET /api/tournament/export.zip — real archive structure (QA)", () =>
       [
         "Bonuskong/Tournament_1_1.png",
         "Bonuskong/Tournament_1_2.png",
-        "SpinogambinoMen/Lottery_2_1.png",
+        // (Men)/(Women) merge into ONE folder; gender -> file-name suffix.
+        "Spinogambino/Lottery_2_1_men.png",
+        "Spinogambino/Lottery_2_1_women.png",
         "Bonuskong/Playson_&_Booongo_1.png", // provider element, same brand folder
       ].sort(),
     );
@@ -327,7 +336,7 @@ describe("GET /api/tournament/export.zip — real archive structure (QA)", () =>
       desNumber: 100001,
       userId: "user1",
       batchId: "b1",
-      imageIds: ["g1", "g2", "g3", "g4"],
+      imageIds: ["g1", "g2", "g3", "g5", "g4"],
     });
     vi.unstubAllGlobals();
   });
