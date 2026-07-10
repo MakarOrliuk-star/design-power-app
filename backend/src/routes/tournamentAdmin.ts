@@ -55,6 +55,103 @@ tournamentAdminRouter.get("/config", async (_req: Request, res: Response) => {
   res.json({ categories, systemPrompt: wrapper?.content ?? "" });
 });
 
+// ---- Categories CRUD ----
+
+/**
+ * "Calendar (VIP)" -> "calendar_vip". The key doubles as the ZIP folder name
+ * and is frozen at creation (renames keep it, so old archives stay coherent).
+ */
+export function slugifyKey(name: string): string {
+  const s = name
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, "_")
+    .replace(/^_+|_+$/g, "");
+  return s || "category";
+}
+
+const createCategorySchema = z.object({
+  name: z.string().trim().min(1).max(120),
+  hasModes: z.boolean(),
+  fixedMode: z.enum(MODES).nullable().optional(),
+});
+
+tournamentAdminRouter.post("/categories", async (req: Request, res: Response) => {
+  const parsed = createCategorySchema.safeParse(req.body);
+  if (!parsed.success) {
+    res.status(400).json({ error: "invalid_body", details: parsed.error.flatten().fieldErrors });
+    return;
+  }
+  const { name, hasModes } = parsed.data;
+  // Base+VIP categories never carry fixedMode; single-mode ones must say which.
+  const fixedMode = hasModes ? null : (parsed.data.fixedMode ?? null);
+  if (!hasModes && !fixedMode) {
+    res.status(400).json({ error: "invalid_mode_config" });
+    return;
+  }
+
+  let key = slugifyKey(name);
+  for (
+    let n = 2;
+    await prisma.tournamentCategory.findUnique({ where: { key }, select: { id: true } });
+    n++
+  ) {
+    key = `${slugifyKey(name)}_${n}`;
+  }
+
+  const last = await prisma.tournamentCategory.findFirst({
+    orderBy: { order: "desc" },
+    select: { order: true },
+  });
+  const category = await prisma.tournamentCategory.create({
+    data: { key, name, hasModes, fixedMode, order: (last?.order ?? -1) + 1 },
+    select: { id: true, key: true, name: true, hasModes: true, fixedMode: true, order: true },
+  });
+  res.status(201).json({ category });
+});
+
+const patchCategorySchema = z.object({
+  name: z.string().trim().min(1).max(120).optional(),
+  order: z.number().int().min(0).optional(),
+});
+
+/** Rename/reorder only — key and the Base/VIP config are frozen at creation. */
+tournamentAdminRouter.patch("/categories/:id", async (req: Request, res: Response) => {
+  const id = String(req.params.id ?? "");
+  const parsed = patchCategorySchema.safeParse(req.body);
+  if (!parsed.success) {
+    res.status(400).json({ error: "invalid_body", details: parsed.error.flatten().fieldErrors });
+    return;
+  }
+  const data: { name?: string; order?: number } = {};
+  if (parsed.data.name !== undefined) data.name = parsed.data.name;
+  if (parsed.data.order !== undefined) data.order = parsed.data.order;
+  try {
+    const category = await prisma.tournamentCategory.update({
+      where: { id },
+      data,
+      select: { id: true, key: true, name: true, hasModes: true, fixedMode: true, order: true },
+    });
+    res.json({ category });
+  } catch {
+    res.status(404).json({ error: "not_found" });
+  }
+});
+
+/**
+ * HARD delete (unlike elements): cascades to elements, default prompts and
+ * user overrides. Generation history is untouched — it keeps the denormalized
+ * tourCategoryKey/tourElementName, so old batches and their ZIPs still work.
+ */
+tournamentAdminRouter.delete("/categories/:id", async (req: Request, res: Response) => {
+  const id = String(req.params.id ?? "");
+  try {
+    await prisma.tournamentCategory.delete({ where: { id } });
+    res.json({ ok: true });
+  } catch {
+    res.status(404).json({ error: "not_found" });
+  }
+});
+
 // ---- Elements CRUD ----
 
 const createElementSchema = z.object({

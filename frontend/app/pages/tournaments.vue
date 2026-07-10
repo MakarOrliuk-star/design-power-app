@@ -218,13 +218,17 @@ function bumpCount(delta: number) {
   font-size: var(--fs-tab);
 }
 
-/* 4 columns; each column's grey body scrolls locally */
+/* 4 columns per row; each column's grey body scrolls locally. With more than
+   4 admin-created categories the extra ones wrap to a second row and the
+   whole grid scrolls vertically (with exactly 4 nothing changes). */
 .cols {
   flex: 1;
   min-height: 0;
   display: grid;
   grid-template-columns: repeat(4, minmax(0, 1fr));
+  grid-auto-rows: minmax(340px, 1fr);
   gap: var(--space-20);
+  overflow-y: auto;
 }
 
 @media (max-width: 1200px) {
