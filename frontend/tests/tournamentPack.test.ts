@@ -57,20 +57,26 @@ describe("groupPack — the flat ZIP layout ({Brand}/{Element}_N.png)", () => {
       tourFileName: "SpinogambinoMen_Tournament_1_1",
       brandName: "Spinogambino(Men)",
     });
-    const groups = groupPack([a1, b1, a2, other]);
-    // One folder per brand; elements/categories mix inside it, like in the ZIP.
-    expect(groups.map((g) => g.title)).toEqual([
-      "Bonuskong",
-      "SpinogambinoMen", // parens sanitized like in the ZIP
-    ]);
+    const women = gen({
+      tourFileName: "SpinogambinoWomen_Tournament_1_1",
+      brandName: "Spinogambino (Women)",
+    });
+    const groups = groupPack([a1, b1, a2, other, women]);
+    // One folder per brand; (Men)/(Women) merge, elements mix — like the ZIP.
+    expect(groups.map((g) => g.title)).toEqual(["Bonuskong", "Spinogambino"]);
     expect(groups[0]!.images).toEqual([a1, b1, a2]);
-    expect(groups[1]!.images).toEqual([other]);
+    expect(groups[1]!.images).toEqual([other, women]);
   });
 
-  it("packDisplayName = element + per-brand index (the ZIP file name)", () => {
+  it("packDisplayName = element + index + gender suffix (the ZIP file name)", () => {
     expect(packDisplayName(gen({ tourFileName: "Bonuskong_Tournament_1_2" }))).toBe(
       "Tournament_1_2",
     );
+    expect(
+      packDisplayName(
+        gen({ tourFileName: "SpinogambinoMen_Tournament_1_2", brandName: "Spinogambino(Men)" }),
+      ),
+    ).toBe("Tournament_1_2_men");
     expect(
       packDisplayName(
         gen({ tourElementName: "Playson & Booongo", tourFileName: "Bonuskong_Playson_&_Booongo_3" }),

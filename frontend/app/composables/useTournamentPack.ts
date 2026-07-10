@@ -74,27 +74,42 @@ export function trailingIndexOf(fileName: string): string {
   return m ? m[1]! : "1";
 }
 
+/**
+ * "Spinogambino(Men)" -> { base: "Spinogambino", gender: "men" }: the ZIP keeps
+ * ONE folder per brand pair, the gender moves to the file-name suffix. Mirrors
+ * the backend splitBrandGender / the gallery's stripGender.
+ */
+export function splitBrandGender(name: string): { base: string; gender: "" | "men" | "women" } {
+  const m = /\s*\((men|women)\)\s*$/i.exec(name);
+  if (!m) return { base: name.trim(), gender: "" };
+  return {
+    base: name.slice(0, m.index).trim(),
+    gender: m[1]!.toLowerCase() as "men" | "women",
+  };
+}
+
 /** The element part of a row's ZIP path ("Tournament_1"), robust to old rows. */
 function elementFolderOf(g: PackGeneration): string {
   return sanitizeName(g.tourElementName ?? "") || (g.tourFileName ? packFolderOf(g.tourFileName) : "");
 }
 
-/** The file name inside the ZIP brand folder: "Tournament_1_2" (element + index). */
+/** File name inside the ZIP brand folder: "Tournament_1_2[_women]" (element + index + gender). */
 export function packDisplayName(g: PackGeneration): string {
   if (!g.tourFileName) return "";
-  return `${elementFolderOf(g)}_${trailingIndexOf(g.tourFileName)}`;
+  const { gender } = splitBrandGender(g.brandName);
+  return `${elementFolderOf(g)}_${trailingIndexOf(g.tourFileName)}${gender ? `_${gender}` : ""}`;
 }
 
 /**
  * Group a batch's generations by BRAND — the ZIP layout is flat
- * {Brand}/{Element}_N.png, so the tab shows one brand folder per group,
- * in order of first appearance.
+ * {Brand}/{Element}_N[_gender].png, so the tab shows one brand folder per
+ * group (the (Men)/(Women) pair merges into one), in first-appearance order.
  */
 export function groupPack(generations: PackGeneration[]): PackGroup[] {
   const map = new Map<string, PackGroup>();
   for (const g of generations) {
     if (!g.tourFileName) continue;
-    const title = sanitizeName(g.brandName) || "Unknown";
+    const title = sanitizeName(splitBrandGender(g.brandName).base) || "Unknown";
     let group = map.get(title);
     if (!group) {
       group = { key: title, categoryKey: g.tourCategoryKey ?? "tournament", title, images: [] };
