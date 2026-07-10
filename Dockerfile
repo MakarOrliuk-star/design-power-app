@@ -20,4 +20,4 @@ COPY . .
 
 # Команда запуска Streamlit. 
 # $PORT — это переменная, которую Railway выдает автоматически.
-CMD ["sh", "-c", "streamlit run web_auditor_app_external_prod.py --server.port $PORT --server.address 0.0.0.0"]
+CMD ["sh", "-c", "streamlit run web_auditor_app_external_prod.py --server.port $PORT --server.address 0.0.0.0 --server.enableCORS false --server.enableXsrfProtection false"]
