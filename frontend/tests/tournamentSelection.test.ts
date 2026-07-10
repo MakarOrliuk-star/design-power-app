@@ -5,6 +5,8 @@ import {
   toggleCategoryIds,
   resolvePromptValue,
   addBrandCapped,
+  selectionKey,
+  parseSelectionKey,
   type TourCategory,
   type TourElement,
 } from "~/stores/tournament";
@@ -75,6 +77,27 @@ describe("categoryStateOf / toggleCategoryIds — the checkbox tree", () => {
   it("click on all -> clears ONLY this block's elements", () => {
     const next = toggleCategoryIds(ids, ["a", "b", "c", "other"]);
     expect(next).toEqual(["other"]);
+  });
+});
+
+describe("selectionKey / parseSelectionKey — per-mode checkboxes", () => {
+  it("round-trips element:MODE (Base and VIP are distinct selections)", () => {
+    expect(selectionKey("e1", "BASE")).toBe("e1:BASE");
+    expect(selectionKey("e1", "BASE")).not.toBe(selectionKey("e1", "VIP"));
+    expect(parseSelectionKey("e1:VIP")).toEqual({ elementId: "e1", mode: "VIP" });
+  });
+
+  it("keys plug into the generic checkbox-tree helpers per mode", () => {
+    const baseKeys = ["e1", "e2"].map((id) => selectionKey(id, "BASE"));
+    const checked = [selectionKey("e1", "BASE"), selectionKey("e1", "VIP")];
+    // e1 is fully checked under VIP, but Base still reads "some" of 2.
+    expect(categoryStateOf(baseKeys, checked)).toBe("some");
+    // Completing the Base block must not touch the VIP key.
+    expect(toggleCategoryIds(baseKeys, checked).sort()).toEqual([
+      "e1:BASE",
+      "e1:VIP",
+      "e2:BASE",
+    ]);
   });
 });
 

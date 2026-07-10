@@ -48,6 +48,20 @@ function fmtDate(iso: string): string {
   const d = new Date(iso);
   return d.toLocaleString("ru-RU", { day: "2-digit", month: "2-digit", hour: "2-digit", minute: "2-digit" });
 }
+
+// ---- Lightbox: click a thumbnail -> the image opens larger (Esc/click closes) ----
+const viewer = ref<{ url: string; name: string } | null>(null);
+function openViewer(url: string, name: string) {
+  viewer.value = { url, name };
+}
+function closeViewer() {
+  viewer.value = null;
+}
+function onKey(e: KeyboardEvent) {
+  if (e.key === "Escape") closeViewer();
+}
+onMounted(() => window.addEventListener("keydown", onKey));
+onBeforeUnmount(() => window.removeEventListener("keydown", onKey));
 </script>
 
 <template>
@@ -130,7 +144,13 @@ function fmtDate(iso: string): string {
                   <path d="M5 12.5l4 4 10-10" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" />
                 </svg>
               </button>
-              <img class="card__img" :src="img.generatedImageUrl" :alt="img.tourFileName ?? ''" loading="lazy" />
+              <img
+                class="card__img card__img--clickable"
+                :src="img.generatedImageUrl"
+                :alt="img.tourFileName ?? ''"
+                loading="lazy"
+                @click="openViewer(img.generatedImageUrl, img.tourFileName ?? '')"
+              />
             </template>
             <div v-else class="card__pending">
               <span class="card__spinner" v-if="img.status === 'QUEUED' || img.status === 'PROCESSING'" />
@@ -149,6 +169,19 @@ function fmtDate(iso: string): string {
         {{ loading ? "Загрузка…" : "Показать ещё" }}
       </button>
     </div>
+
+    <!-- Lightbox: enlarged view of a clicked result -->
+    <Teleport to="body">
+      <div v-if="viewer" class="lb" @click="closeViewer">
+        <img class="lb__img" :src="viewer.url" :alt="viewer.name" @click.stop />
+        <span class="lb__name">{{ viewer.name }}</span>
+        <button class="lb__close" type="button" aria-label="Закрыть" @click="closeViewer">
+          <svg viewBox="0 0 24 24" width="20" height="20" fill="none">
+            <path d="M6 6l12 12M18 6L6 18" stroke="currentColor" stroke-width="2" stroke-linecap="round" />
+          </svg>
+        </button>
+      </div>
+    </Teleport>
   </div>
 </template>
 
@@ -317,6 +350,54 @@ function fmtDate(iso: string): string {
 }
 .card--selected .card__img {
   border-color: var(--color-accent);
+}
+.card__img--clickable {
+  cursor: zoom-in;
+}
+
+/* lightbox */
+.lb {
+  position: fixed;
+  inset: 0;
+  z-index: 1200;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 12px;
+  padding: 40px;
+  background: rgba(15, 15, 18, 0.78);
+  backdrop-filter: blur(4px);
+  cursor: zoom-out;
+}
+.lb__img {
+  max-width: min(900px, 88vw);
+  max-height: 78vh;
+  object-fit: contain;
+  border-radius: var(--radius-md);
+  box-shadow: 0 20px 60px rgba(0, 0, 0, 0.45);
+  cursor: default;
+}
+.lb__name {
+  font-size: var(--fs-tab);
+  color: #fff;
+  opacity: 0.85;
+}
+.lb__close {
+  position: absolute;
+  top: 20px;
+  right: 20px;
+  display: grid;
+  place-items: center;
+  width: 40px;
+  height: 40px;
+  border: none;
+  border-radius: 50%;
+  background: rgba(255, 255, 255, 0.14);
+  color: #fff;
+}
+.lb__close:hover {
+  background: rgba(255, 255, 255, 0.26);
 }
 .card__check {
   position: absolute;
