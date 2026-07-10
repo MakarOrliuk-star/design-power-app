@@ -3,6 +3,7 @@ import { reactive } from "vue";
 import {
   buildPackExportQuery,
   packFolderOf,
+  packDisplayName,
   groupPack,
   batchStatusLabel,
   packCounts,
@@ -43,18 +44,41 @@ describe("buildPackExportQuery", () => {
   });
 });
 
-describe("groupPack — the ZIP pack folders", () => {
-  it("groups by Brand_Element (index stripped), preserving first-appearance order", () => {
+describe("groupPack — the ZIP folders (category -> Element -> Brand)", () => {
+  it("groups by Element/Brand, preserving first-appearance order", () => {
     const a1 = gen({ tourFileName: "Bonuskong_Tournament_1_1" });
-    const b1 = gen({ tourFileName: "Bonuskong_Lottery_2_1", tourCategoryKey: "lotterie" });
+    const b1 = gen({
+      tourFileName: "Bonuskong_Lottery_2_1",
+      tourElementName: "Lottery_2",
+      tourCategoryKey: "lotterie",
+    });
     const a2 = gen({ tourFileName: "Bonuskong_Tournament_1_2" });
-    const groups = groupPack([a1, b1, a2]);
-    expect(groups.map((g) => g.title)).toEqual(["Bonuskong_Tournament_1", "Bonuskong_Lottery_2"]);
+    const other = gen({
+      tourFileName: "SpinogambinoMen_Tournament_1_1",
+      brandName: "Spinogambino(Men)",
+    });
+    const groups = groupPack([a1, b1, a2, other]);
+    expect(groups.map((g) => g.title)).toEqual([
+      "Tournament_1/Bonuskong",
+      "Lottery_2/Bonuskong",
+      "Tournament_1/SpinogambinoMen", // parens sanitized like in the ZIP
+    ]);
     expect(groups[0]!.images).toEqual([a1, a2]);
     expect(groups[1]!.categoryKey).toBe("lotterie");
   });
 
-  it("packFolderOf strips only the trailing index", () => {
+  it("packDisplayName = element + per-brand index (the ZIP file name)", () => {
+    expect(packDisplayName(gen({ tourFileName: "Bonuskong_Tournament_1_2" }))).toBe(
+      "Tournament_1_2",
+    );
+    expect(
+      packDisplayName(
+        gen({ tourElementName: "Playson & Booongo", tourFileName: "Bonuskong_Playson_&_Booongo_3" }),
+      ),
+    ).toBe("Playson_&_Booongo_3");
+  });
+
+  it("packFolderOf strips only the trailing index (old-row fallback)", () => {
     expect(packFolderOf("Bonuskong_Playson_&_Booongo_3")).toBe("Bonuskong_Playson_&_Booongo");
     expect(packFolderOf("Bonuskong_Tournament_1_12")).toBe("Bonuskong_Tournament_1");
   });
@@ -91,8 +115,9 @@ describe("useTournamentPack — selection + export flow", () => {
   function makeDeps(batches: PackBatch[]) {
     const api = vi.fn(async () => ({ batches, total: batches.length, hasMore: false }));
     const download = vi.fn();
-    const genStore = reactive({ runningCount: 0 });
-    return { api: api as never, apiBase: "https://api", download, gen: genStore };
+    const genStore = reactive({ runningCount: 0, addBatch: vi.fn() });
+    const onEdited = vi.fn();
+    return { api: api as never, apiBase: "https://api", download, gen: genStore, onEdited };
   }
 
   it("exports the ticked ids through the DES endpoint; no-op when nothing ticked", async () => {
@@ -116,6 +141,68 @@ describe("useTournamentPack — selection + export flow", () => {
     expect(deps.download).toHaveBeenLastCalledWith(
       "https://api/api/tournament/export.zip?batchId=b1",
     );
+    unmount();
+  });
+
+  it("batch checkbox ticks/unticks every exportable image of the session", async () => {
+    const g1 = gen();
+    const g2 = gen();
+    const failed = gen({ status: "FAILED", generatedImageUrl: null });
+    const batch: PackBatch = {
+      id: "b1",
+      status: "PARTIAL_FAILURE",
+      createdAt: "2026-07-10T10:00:00Z",
+      generations: [g1, g2, failed],
+    };
+    const deps = makeDeps([batch]);
+    const { result, unmount } = withSetup(() => useTournamentPack(deps));
+    await vi.waitFor(() => expect(result.batches.value).toHaveLength(1));
+
+    expect(result.batchState(batch)).toBe("none");
+    result.toggleBatch(batch);
+    expect(result.batchState(batch)).toBe("all");
+    expect([...result.selected.value].sort()).toEqual([g1.id, g2.id].sort()); // failed skipped
+
+    result.toggleSelect(g2.id);
+    expect(result.batchState(batch)).toBe("some");
+    result.toggleBatch(batch); // some -> completes the batch
+    expect(result.batchState(batch)).toBe("all");
+    result.toggleBatch(batch); // all -> clears it
+    expect(result.selected.value.size).toBe(0);
+    unmount();
+  });
+
+  it("runEdit posts the ticked ids to /api/generate/edit and hands off to Edited", async () => {
+    const g1 = gen();
+    const batch: PackBatch = {
+      id: "b1",
+      status: "COMPLETED",
+      createdAt: "2026-07-10T10:00:00Z",
+      generations: [g1],
+    };
+    const deps = makeDeps([batch]);
+    (deps.api as ReturnType<typeof vi.fn>).mockImplementation(async (url: string) =>
+      url === "/api/generate/edit"
+        ? { batchId: "edit-b1", count: 1 }
+        : { batches: [batch], total: 1, hasMore: false },
+    );
+    const { result, unmount } = withSetup(() => useTournamentPack(deps));
+    await vi.waitFor(() => expect(result.batches.value).toHaveLength(1));
+
+    result.editPrompt.value = "make it neon";
+    await result.runEdit();
+    expect(deps.api).not.toHaveBeenCalledWith("/api/generate/edit", expect.anything()); // nothing ticked
+
+    result.toggleSelect(g1.id);
+    await result.runEdit();
+    expect(deps.api).toHaveBeenCalledWith("/api/generate/edit", {
+      method: "POST",
+      body: { generationIds: [g1.id], prompt: "make it neon" },
+    });
+    expect(deps.gen.addBatch).toHaveBeenCalledWith("edit-b1", "item");
+    expect(deps.onEdited).toHaveBeenCalled();
+    expect(result.selected.value.size).toBe(0); // selection cleared
+    expect(result.editPrompt.value).toBe("");
     unmount();
   });
 

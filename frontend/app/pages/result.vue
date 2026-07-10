@@ -118,8 +118,9 @@ function copyImage(img: { id: string; generatedImageUrl: string }) {
         </div>
       </div>
 
-      <!-- Tournament Pack (Phase 6): its own batch-grouped body + DES ZIP export -->
-      <ResultTournamentPack v-if="activeTab === 'tournament'" />
+      <!-- Tournament Pack (Phase 6): its own batch-grouped body + DES ZIP export.
+           An edit batch queued from the tab jumps to Edited, like everywhere. -->
+      <ResultTournamentPack v-if="activeTab === 'tournament'" @edited="selectTab('edited')" />
 
       <!-- Gallery lane + Edit panel -->
       <div v-else class="content">
