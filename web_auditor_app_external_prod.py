@@ -8,8 +8,7 @@ import threading
 import requests
 import extra_streamlit_components as stx
 import streamlit as st
-st.title("🚀 СЕРВЕР РАБОТАЕТ!")
-st.stop()
+
 from datetime import datetime
 from smartico_core_prod import SmarticoCore
 
@@ -30,6 +29,9 @@ def get_global_state():
 
 global_lock = get_browser_lock()
 global_state = get_global_state()
+
+st.title("🚀 ДОШЛО ДО СЮДА!")
+st.stop()
 
 from playwright.sync_api import sync_playwright
 
