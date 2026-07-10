@@ -171,9 +171,8 @@ onBeforeUnmount(() => window.removeEventListener("keydown", onKey));
       </div>
 
       <div v-for="g in groupPack(b.generations)" :key="g.key" class="group">
-        <div class="group__title">
-          <span class="group__folder">{{ g.categoryKey }}/</span>{{ g.title }}
-        </div>
+        <!-- brand folder at the ZIP root -->
+        <div class="group__title">{{ g.title }}/</div>
         <div class="grid">
           <div
             v-for="img in g.images"
@@ -430,10 +429,6 @@ onBeforeUnmount(() => window.removeEventListener("keydown", onKey));
 .group__title {
   font-size: var(--fs-tab);
   font-weight: 600;
-}
-.group__folder {
-  color: var(--color-grey);
-  font-weight: 500;
 }
 .grid {
   display: grid;

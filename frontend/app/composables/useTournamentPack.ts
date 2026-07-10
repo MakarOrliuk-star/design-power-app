@@ -52,9 +52,9 @@ export function buildPackExportQuery(p: { batchId?: string; ids?: string[] }): s
 }
 
 export interface PackGroup {
-  key: string; // "tournament/Tournament_1/Bonuskong"
-  categoryKey: string;
-  title: string; // "Tournament_1/Bonuskong" (the ZIP folder path inside the category)
+  key: string; // "Bonuskong" — the brand folder at the ZIP root
+  categoryKey: string; // category of the group's first image (informational)
+  title: string; // "Bonuskong" (the ZIP brand folder)
   images: PackGeneration[];
 }
 
@@ -86,20 +86,19 @@ export function packDisplayName(g: PackGeneration): string {
 }
 
 /**
- * Group a batch's generations into the ZIP folders (category -> Element ->
- * Brand), in order of first appearance — the tab mirrors the archive exactly.
+ * Group a batch's generations by BRAND — the ZIP layout is flat
+ * {Brand}/{Element}_N.png, so the tab shows one brand folder per group,
+ * in order of first appearance.
  */
 export function groupPack(generations: PackGeneration[]): PackGroup[] {
   const map = new Map<string, PackGroup>();
   for (const g of generations) {
     if (!g.tourFileName) continue;
-    const categoryKey = g.tourCategoryKey ?? "tournament";
-    const title = `${elementFolderOf(g)}/${sanitizeName(g.brandName) || "Unknown"}`;
-    const key = `${categoryKey}/${title}`;
-    let group = map.get(key);
+    const title = sanitizeName(g.brandName) || "Unknown";
+    let group = map.get(title);
     if (!group) {
-      group = { key, categoryKey, title, images: [] };
-      map.set(key, group);
+      group = { key: title, categoryKey: g.tourCategoryKey ?? "tournament", title, images: [] };
+      map.set(title, group);
     }
     group.images.push(g);
   }
