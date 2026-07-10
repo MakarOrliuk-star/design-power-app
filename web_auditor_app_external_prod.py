@@ -38,6 +38,9 @@ def install_playwright_cloud():
     os.system("playwright install chromium")
     os.system("playwright install-deps chromium") # Критично для Linux-серверов Streamlit!
 
+st.title("🚀 ДОШЛО ДО СЮДА! 2")
+st.stop()
+
 install_playwright_cloud()
 
 def test_general_info(MAIN_URL, POP_URL, auth_token, expected_data=None, progress_cb=None):
@@ -75,8 +78,7 @@ def test_general_info(MAIN_URL, POP_URL, auth_token, expected_data=None, progres
     rendered_emails_cache = {}
 
     log("🌐 Запуск виртуального браузера...", 5)
-    st.title("🚀 ДОШЛО ДО СЮДА! 2")
-    st.stop()
+
     with sync_playwright() as p:
         browser = p.chromium.launch()
         # Маскируем сервер под обычного пользователя iPhone, чтобы Cloudflare отдавал картинки
