@@ -32,16 +32,6 @@ global_state = get_global_state()
 
 from playwright.sync_api import sync_playwright
 
-@st.cache_resource(show_spinner=False)
-def install_playwright_cloud():
-    """Устанавливает Chromium один раз при старте сервера"""
-    os.system("playwright install chromium")
-    os.system("playwright install-deps chromium") # Критично для Linux-серверов Streamlit!
-
-
-install_playwright_cloud()
-
-
 
 def test_general_info(MAIN_URL, POP_URL, auth_token, expected_data=None, progress_cb=None):
     step_timer = [time.time()]
@@ -61,9 +51,6 @@ def test_general_info(MAIN_URL, POP_URL, auth_token, expected_data=None, progres
         DRIVE_HOST, BOAPI_HOST, TEST_USERS = "drive-5.smartico.ai", "boapi5.smartico.ai", [("829:8448539841010620822", "Oscarspin"), ("839:1531686315825469657", "Spingranny"), ("836:1706495762523592130", "Corgibet"), ("869:183708819059120879", "Spinjoys"), ("885:1719220158045499111", "Lootzino"), ("904:1716533076811932616", "Senseizino"), ("912:461525723524107789", "Frogyspin")]
     else:
         DRIVE_HOST, BOAPI_HOST, TEST_USERS = "drive.smartico.ai", "boapi.smartico.ai", [("673:1723144455787313991", "Winaura"), ("822:1758983921962607028", "Casinacho"), ("828:1602915985410109535", "Goldzino"), ("678:7510192718669794302", "R2PBet"), ("651:86114211798740340", "Kinghills"), ("842:1801871159569785305", "Winbeatz"), ("645:108467023969063098", "Ninewin")]
-
-    st.title("🚀 ДОШЛО ДО СЮДА! 2")
-    st.stop()
 
     report_data = {
         "general_main": {}, "general_pop": {},
@@ -988,3 +975,6 @@ def run_module(cookie_manager):
             st.download_button(label="📥 СКАЧАТЬ HTML ОТЧЕТ", data=final_report_html, file_name=final_file_name, mime="text/html", use_container_width=True)
             st.divider()
             components.html(final_report_html, height=1200, scrolling=True)
+
+if __name__ == "__main__":
+    run_module(None)
