@@ -7,6 +7,9 @@ import streamlit.components.v1 as components
 import threading
 import requests
 import extra_streamlit_components as stx
+import streamlit as st
+st.title("🚀 СЕРВЕР РАБОТАЕТ!")
+st.stop()
 from datetime import datetime
 from smartico_core_prod import SmarticoCore
 
