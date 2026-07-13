@@ -68,12 +68,12 @@ async function main() {
       continue;
     }
     const referenceImages = urls.filter(Boolean);
+    // Initial fill only: the admin panel is the source of truth for existing
+    // refs, and this seed runs on every Railway deploy — never overwrite.
     await prisma.brandNanoRef.upsert({
       where: { brandId: brand.id },
-      // stylePrompt is unused by the generation flow (prompt comes from
-      // PromptTemplate/default); keep any existing value on re-seed.
       create: { brandId: brand.id, referenceImages, stylePrompt: "" },
-      update: { referenceImages },
+      update: {},
     });
     nanoCount++;
   }
@@ -82,10 +82,11 @@ async function main() {
   const stylesUrl = new URL("./seed-data/item-styles.json", import.meta.url);
   const styles = JSON.parse(await readFile(stylesUrl, "utf8")) as { style: string; prompt: string }[];
   for (const { style, prompt } of styles) {
+    // Initial fill only — ITEM prompts are edited via the admin panel.
     await prisma.promptTemplate.upsert({
       where: { type_key: { type: "ITEM", key: style } },
       create: { type: "ITEM", key: style, content: prompt },
-      update: { content: prompt },
+      update: {},
     });
   }
 
