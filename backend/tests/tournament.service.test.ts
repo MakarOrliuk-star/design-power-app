@@ -185,8 +185,9 @@ describe("createTournamentBatches", () => {
     expect(first.tourCategoryKey).toBe("tournament");
     expect(first.tourMode).toBe("BASE");
     expect(first.actionType).toBe("TOURNAMENT");
-    // Prompt pre-built: system wrapper + element prompt + brand style.
-    expect(first.description).toBe("SYS[base tournament prompt]\nkong style");
+    // Description = wrapped element prompt ONLY: the brand stylePrompt is
+    // appended by the worker after the PERSON prompt-writer pass.
+    expect(first.description).toBe("SYS[base tournament prompt]");
     // Exactly TWO brand refs are mixed in (3rd is dropped).
     expect(first.referenceImages).toEqual(["https://cdn/b1-ref1.png", "https://cdn/b1-ref2.png"]);
 
@@ -212,8 +213,8 @@ describe("createTournamentBatches", () => {
     // fixedMode category resolves BASE without a client-sent mode.
     expect(prov.tourMode).toBe("BASE");
     expect(prov.tourFileName).toMatch(/^Bonuskong_Playson_&_Booongo_[12]$/);
-    // Brand text style is still mixed into the provider prompt (decision "а").
-    expect(prov.description).toBe("SYS[provider prompt]\nkong style");
+    // Brand text style is NOT baked in — the worker appends it post prompt-writer.
+    expect(prov.description).toBe("SYS[provider prompt]");
   });
 
   it("a user's override replaces the default prompt for that element+mode", async () => {
@@ -224,10 +225,10 @@ describe("createTournamentBatches", () => {
 
     const rows = db.generationCreate.mock.calls.map((c) => c[0].data);
     const t = rows.find((r) => r.tourCategoryKey === "tournament")!;
-    expect(t.description).toBe("SYS[MY custom prompt]\nkong style");
+    expect(t.description).toBe("SYS[MY custom prompt]");
     // The provider element (no override) keeps the default.
     const prov = rows.find((r) => r.tourCategoryKey === "provider")!;
-    expect(prov.description).toBe("SYS[provider prompt]\nkong style");
+    expect(prov.description).toBe("SYS[provider prompt]");
   });
 
   it("forcedAspectRatio wins over the 1:1 default in the queued jobs", async () => {

@@ -1,5 +1,6 @@
 import { prisma } from "../lib/prisma.js";
 import { buildItemPrompt } from "../services/prompts.js";
+import { buildPersonPromptMemoized } from "./person.processor.js";
 import { runPersonFal, runSeedvrUpscale } from "../lib/fal.js";
 import { uploadFromUrl, withRetry } from "../lib/cloudinary.js";
 import { finalizeSuccess, finalizeFailure } from "../services/finalize.js";
@@ -19,6 +20,7 @@ export async function processItemJob(generationId: string, aspectRatio = "1:1"):
       referenceImages: true,
       isEdit: true,
       actionType: true,
+      batchId: true,
       job: { select: { id: true, cloudinaryFolder: true } },
     },
   });
@@ -32,21 +34,33 @@ export async function processItemJob(generationId: string, aspectRatio = "1:1"):
     data: { status: "PROCESSING", statusMessage: "⏳ Generating" },
   });
 
-  // Edits (Result page) run nano-banana-2/edit on the source image with the user's
-  // raw instruction — no ITEM style template, so the edit isn't re-styled.
-  // Tournament rows arrive with the FULL prompt pre-built at batch creation
-  // (system wrapper + element prompt + brand style) — also used raw.
-  const finalPrompt =
-    gen.isEdit || gen.actionType === "TOURNAMENT"
-      ? (gen.description ?? "").trim()
-      : await buildItemPrompt(gen.brandName, gen.description ?? "");
-
   // Per-brand fal model override (admin-managed); null → default nano-banana-2.
-  // Applies to Item generation and Result-page edits alike.
+  // Applies to Item generation and Result-page edits alike. stylePrompt is
+  // appended to TOURNAMENT prompts after the prompt-writer pass.
   const brand = await prisma.brand.findUnique({
     where: { name: gen.brandName },
-    select: { imageModel: true },
+    select: { imageModel: true, nanoRef: { select: { stylePrompt: true } } },
   });
+
+  // Edits (Result page) run nano-banana-2/edit on the source image with the user's
+  // raw instruction — no ITEM style template, so the edit isn't re-styled.
+  // Tournament rows carry the element prompt: the brand's PERSON prompt-writer
+  // (nano-gpt, same as the Person flow) rewrites it into the final image prompt,
+  // then the brand stylePrompt is appended verbatim.
+  let finalPrompt: string;
+  if (gen.isEdit) {
+    finalPrompt = (gen.description ?? "").trim();
+  } else if (gen.actionType === "TOURNAMENT") {
+    const built = await buildPersonPromptMemoized(
+      gen.batchId ?? "",
+      gen.brandName,
+      (gen.description ?? "").trim(),
+    );
+    const style = (brand?.nanoRef?.stylePrompt ?? "").trim();
+    finalPrompt = style ? `${built}\n${style}` : built;
+  } else {
+    finalPrompt = await buildItemPrompt(gen.brandName, gen.description ?? "");
+  }
 
   const fal = await runPersonFal(finalPrompt, gen.referenceImages, aspectRatio, brand?.imageModel ?? null);
   if (!fal.success || !fal.imageUrl) {
