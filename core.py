@@ -2,107 +2,14 @@ import json
 import re
 import base64
 import time
-import requests
+import os
 import streamlit as st
 from collections import defaultdict, Counter
 from datetime import datetime, timedelta
+from dotenv import load_dotenv
+load_dotenv()
 
-@st.cache_data(ttl=86400, show_spinner=False)
-def fetch_global_qa_personas(boapi_host, brand_id, _auth_token):
-    """
-    Глобальный кэш персон на 24 часа. 
-    Использует оптимизированную структуру JSON для скорости как в UI (~10 сек на сегмент).
-    """
-    print(f"\n[CACHE MISS] Загрузка актуальных QA-персон (занимает ~40 сек суммарно)...")
-    
-    segments = {
-        "Tier 3": 24054,
-        "Tier 2": 24055,
-        "Tier 1": 24057,
-        "Tier VIP": 24058
-    }
-    
-    personas = {}
-    
-    headers = {
-        "accept": "application/json",
-        "accept-language": "en-US,en;q=0.9",
-        "active_label_id": str(brand_id),
-        "authorization": _auth_token,
-        "content-type": "application/json",
-        "post-get-list": "true",
-        "user-agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/147.0.0.0 Safari/537.36"
-    }
-
-    # Используем сессию для переиспользования соединений (ускоряет запросы)
-    with requests.Session() as session:
-        session.headers.update(headers)
-        
-        for name, seg_id in segments.items():
-            try:
-                # 1. Запрашиваем сырые условия
-                res_seg = session.get(f"https://{boapi_host}/api/j_segment/{seg_id}?lbl={brand_id}", timeout=15)
-                if not res_seg.ok: continue
-                
-                seg_data = res_seg.json()
-                if isinstance(seg_data, list) and len(seg_data) > 0: seg_data = seg_data[0]
-                
-                raw_conditions = seg_data.get("conditions")
-                if not raw_conditions: continue
-
-                # 🚨 ИСПРАВЛЕНИЕ: Правильная двойная обертка условий для базы данных
-                if isinstance(raw_conditions, list):
-                    fixed_conditions = {"conditions": raw_conditions}
-                else:
-                    fixed_conditions = raw_conditions
-                    
-                payload = {
-                    "conditions": fixed_conditions,
-                    "segment_type_id": 1
-                }
-                
-                query_params = {
-                    "filter": "", 
-                    "range": "[0,5]", 
-                    "sort": '["user_id","DESC"]', 
-                    "lbl": brand_id
-                }
-                
-                # Ставим таймаут 30 секунд (чтобы "тяжелый" Tier 3 успевал загрузиться)
-                res_users = session.post(
-                    f"https://{boapi_host}/api/j_segment_users",
-                    params=query_params, 
-                    json=payload, 
-                    timeout=30 
-                )
-                
-                if res_users.ok:
-                    users_list = res_users.json()
-                    if isinstance(users_list, dict): users_list = users_list.get("result", [])
-                    
-                    if len(users_list) > 0:
-                        u = users_list[0]
-                        ext_id = str(u.get("user_ext_id", ""))
-                        if ext_id and ext_id != "None":
-                            personas[name] = ext_id
-                            print(f"    ✅ {name}: Найден {ext_id}")
-                            
-            except Exception as e:
-                print(f"    ❌ [CACHE ERROR] Ошибка получения {name}: {e}")
-                continue
-
-    if not personas:
-        # Защита от отравления кэша (если API упало, пустоту не сохраняем)
-        raise ValueError("Failed to fetch real personas. Cache aborted.")
-        
-    print(f"[CACHE SET] Успешно сохранено {len(personas)} персон. Кэш активен на 24 часа.")
-    return personas
-
-def clear_qa_cache(self):
-        """Принудительно очищает кэш функции fetch_global_qa_personas"""
-        fetch_global_qa_personas.clear()
-
-class SmarticoCore:
+class GeneralCore:
     def __init__(self, playwright_context, auth_token, brand_id, boapi_host, drive_host):
         self.ctx = playwright_context
         self.auth_token = auth_token
@@ -110,30 +17,14 @@ class SmarticoCore:
         self.boapi_host = boapi_host
         self.drive_host = drive_host
         
-        # ==========================================================
-        # 👥 РЕЕСТР QA-ПЕРСОН (из web_auditor_app)
-        # ==========================================================
-        self.QA_REGISTRY = {
-            # DRIVE-7
-            "896": "896:1754238177731145185",
-            # DRIVE-5
-            "829": "829:8448539841010620822", "839": "839:1531686315825469657",
-            "836": "836:1706495762523592130", "869": "869:183708819059120879",
-            "885": "885:1719220158045499111", "904": "904:1716533076811932616",
-            "912": "912:461525723524107789",
-            # DRIVE (ENV 2)
-            "673": "673:1723144455787313991", "822": "822:1758983921962607028",
-            "828": "828:1602915985410109535", "678": "678:7510192718669794302",
-            "651": "651:86114211798740340",   "842": "842:1801871159569785305",
-            "645": "645:108467023969063098", "2828": "825:3281290609143656674"
-        }
+        # 👇 ДОБАВЛЯЕМ ЭТУ СТРОЧКУ 👇
+        self.system_name = str(os.getenv("SYSTEM_NAME", "CRM"))
 
         self.headers = {
             "accept": "application/json",
             "authorization": self.auth_token,
             "active_label_id": self.brand_id,
             "content-type": "application/json",
-            # 🚨 ФИКС СКОРОСТИ: Обход блокировок Cloudflare для библиотеки requests
             "user-agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36"
         }
         self.enum_cache = {}
@@ -194,10 +85,6 @@ class SmarticoCore:
             "FI": "🇫🇮", "HR": "🇭🇷", "SR": "🇷🇸", "MK": "🇲🇰", "SQ": "🇦🇱", 
             "BS": "🇧🇦"
         }
-
-        self.TRASH_STRINGS = [
-            "{{label.li_terms_crm2}}",
-        ]
 
         self.KNOWN_LABEL_ALIASES = {
             "bns_2": "bonus_label_2",
@@ -297,7 +184,7 @@ class SmarticoCore:
         return cond_str
 
     def normalize_label_name(self, raw_label):
-        """Нормализует сырое имя лейбла перед отправкой в API Smartico"""
+        """Нормализует сырое имя лейбла перед отправкой в API"""
         if not raw_label: 
             return ""
         text = raw_label.lower()
@@ -602,10 +489,16 @@ class SmarticoCore:
             "sort": json.dumps(["id", "ASC"]),
             "lbl": self.brand_id
         }
-        res = self.ctx.request.get(url, params=query_params, headers=self.headers)
-        if not res.ok: return []
-        data = res.json()
-        return data.get("result", data) if isinstance(data, dict) else data
+        try:
+            res = self.ctx.request.get(url, params=query_params, headers=self.headers)
+            if not res.ok: return []
+            data = res.json()
+            items = data.get("result", data) if isinstance(data, dict) else data
+            
+            # 🚨 ЖЕСТКАЯ ЗАЩИТА: Отдаем только список. Если пришел словарь с ошибкой - отдаем пустоту [].
+            return items if isinstance(items, list) else []
+        except Exception:
+            return []
 
     def get_segment_full_name(self, segment_id, fallback_name):
         """Получает готовое название сегмента с юзерами через j_segment_ref"""
@@ -737,15 +630,24 @@ class SmarticoCore:
         is_popup = "head" in campaign_url
         camp_type = "j_audience_head" if is_popup else "j_audience_scheduled"
         url = f"https://{self.boapi_host}/api/{camp_type}/{campaign_id}"
-        res = self.ctx.request.get(url, params={"lbl": self.brand_id}, headers=self.headers)
         
-        if not res.ok: return None, None
-        data = res.json()
-        meta = data[0] if isinstance(data, list) and len(data) > 0 else data
-        
-        # 🚨 ФИКС: Если API вернуло пустоту, прерываем функцию и отдаем пустые словари
-        if not isinstance(meta, dict):
-            return {}, {}
+        try:
+            res = self.ctx.request.get(url, params={"lbl": self.brand_id}, headers=self.headers)
+            if not res.ok: return None, None
+            data = res.json()
+            
+            # 🚨 ЛОВУШКА ДЛЯ ФЕЙКОВОГО УСПЕХА: Если сервер вернул словарь с ошибкой авторизации
+            if isinstance(data, dict) and str(data.get("status", "")).lower() == "error":
+                return None, None
+                
+            meta = data[0] if isinstance(data, list) and len(data) > 0 else data
+            
+            # Если API не отдало настройки кампании (вернулся мусор)
+            if not isinstance(meta, dict) or "audience_name" not in meta:
+                return None, None
+                
+        except Exception:
+            return None, None
             
         status_map = {1: "Draft", 2: "Active", 3: "Paused", 4:"Disabled", 5: "Executed", 6: "Archived"}
         entry_map = {
@@ -861,7 +763,7 @@ class SmarticoCore:
             # 👇 НОВЫЙ УМНЫЙ ПАРСЕР РАСПИСАНИЯ 👇
             exec_at = config.get("value", "N/A")
             
-            # Smartico отдает Cron из 6 или 7 частей: Sec Min Hour DayOfMonth Month DayOfWeek
+            
             if exec_at != "N/A" and len(exec_at.split()) >= 6:
                 parts = exec_at.split()
                 mins = parts[1].zfill(2)
@@ -993,7 +895,7 @@ class SmarticoCore:
 
             # 3. Если всё равно пусто — ругаемся в терминал
             if not exact_matches:
-                if log_cb: log_cb(f"   ❌ Лейбл '{label_name}' физически отсутствует в БД Smartico (или нет прав).", 75)
+                if log_cb: log_cb(f"   ❌ Лейбл '{label_name}' физически отсутствует в БД (или нет прав).", 75)
                 return None
                 
             exact_matches.sort(key=lambda x: (x.get("status_id") == 2, -x.get("id", 0)), reverse=True)
@@ -1249,7 +1151,7 @@ class SmarticoCore:
                 data = res.json()[0] if isinstance(res.json(), list) and res.json() else res.json()
                 var_params = {"filter": json.dumps({"status": [1, 3], "resource_id": int(inapp_id)}), "range": "[0,499]", "sort": '["variation_priority","DESC"]', "lbl": self.brand_id}
                 var_res = self.ctx.request.get(f"https://{self.boapi_host}/api/resource_inapp_variation", params=var_params, headers=self.headers)
-                # Фолбэк на случай если Smartico использует templated_popup_variation
+                
                 if not var_res.ok:
                     var_res = self.ctx.request.get(f"https://{self.boapi_host}/api/templated_popup_variation", params=var_params, headers=self.headers)
                 items = var_res.json().get("result", var_res.json()) if var_res.ok and isinstance(var_res.json(), dict) else (var_res.json() if var_res.ok else [])
@@ -1277,7 +1179,7 @@ class SmarticoCore:
             if res.ok:
                 data = res.json()
                 
-                # 🚨 ФИКС: Если Smartico вернул строку вместо JSON-объекта, парсим её принудительно
+        
                 if isinstance(data, str):
                     try: data = json.loads(data)
                     except: pass
@@ -1356,7 +1258,7 @@ class SmarticoCore:
                     unique_links.add((source_id, t_val, target_id))
 
         # 🚨 ФИКС: Склеиваем системную стартовую ноду с первой реальной нодой флоу.
-        # Smartico дает им одинаковый Aud_ID, так как обе триггерятся стартом.
+        
         for aud_id, nodes_list in target_nodes_by_aud_id.items():
             if len(nodes_list) > 1:
                 # Ищем ноду "Campaign Started" или аналогичную
@@ -1390,7 +1292,7 @@ class SmarticoCore:
 
         def esc(t): return str(t).replace('&', '&amp;').replace('<', '&lt;').replace('>', '&gt;').replace('"', '&quot;')
 
-        def format_smartico_rule(rule_str):
+        def format_rule(rule_str):
             rule_str = rule_str.strip()
             if not rule_str: return ""
             m_op = re.match(r"^'([^']+)'\s+(.+?)\s+\((.*)\)$", rule_str)
@@ -1434,7 +1336,7 @@ class SmarticoCore:
                 or_inner = "<br>".join([f"🔸 <span style='color:#b45309; font-family:monospace;'>{esc(r)}</span>" for r in or_rules])
                 html_parts.append(f"<div style='background:#fef3c7; border:1px solid #fde68a; border-left:4px solid #f59e0b; padding:8px 12px; border-radius:4px; margin-bottom:10px; font-size:13px;'><b>⚠️ Сработает любое из условий (OR):</b><br>{or_inner}</div>")
             if std_rules:
-                html_parts.append("<br>".join([format_smartico_rule(r) for r in std_rules]))
+                html_parts.append("<br>".join([format_rule(r) for r in std_rules]))
             return "".join(html_parts)
 
         # 🚨 Мы убрали аргументы drive_host, brand_id и api, так как они есть в self
@@ -1530,7 +1432,6 @@ class SmarticoCore:
             if "audience_id" in details and "another campaign" in n_low:
                 t_aud_id = details["audience_id"]
                 c_name = details.get("_campaign_name", f"Campaign {t_aud_id}")
-                # 🚨 Берем хост и бренд из self
                 camp_link = f"https://{self.drive_host}/{self.brand_id}#/j_audience_scheduled/{t_aud_id}" if self.brand_id else "#"
                 modal_html_blocks.append(f"<div style='margin-bottom: 10px;'><b style='color: #334155; font-size: 14px;'>🚀 Another Campaign:</b><div style='margin-top: 6px; background: #ffffff; border: 1px solid #e2e8f0; border-left: 4px solid #3b82f6; padding: 8px; border-radius: 4px; font-size: 12px;'><a href='{camp_link}' target='_blank' style='color:#2563eb; text-decoration:underline;'>{esc(c_name)}</a> <span style='color:#94a3b8;'>(ID: {t_aud_id})</span></div></div>")
 
@@ -1564,11 +1465,16 @@ class SmarticoCore:
                 
                 opt = "N/A"
                 if not is_pop:
-                    optout_map = {1: "Respect Platform and Smartico opt-out flags", 2: "Ignore Platform, opt-out flags, but respect Smartico", 3: "Ignore Smartico opt-out flags, but respect Platform", 4: "Ignore platform and Smartico opt-out flags"}
+                    optout_map = {
+                        1: f"Respect Platform and {self.system_name} opt-out flags", 
+                        2: f"Ignore Platform, opt-out flags, but respect {self.system_name}", 
+                        3: f"Ignore {self.system_name} opt-out flags, but respect Platform", 
+                        4: f"Ignore platform and {self.system_name} opt-out flags"
+                    }
                     opt = optout_map.get(d.get("optout_impact"), "N/A")
                     if opt == "N/A":
                         ignore_opt = d.get("ignore_opt_out") if d.get("ignore_opt_out") is not None else d.get("ignore_optout", False)
-                        opt = "Ignore Opt-out" if ignore_opt else "Respect Platform and Smartico"
+                        opt = "Ignore Opt-out" if ignore_opt else f"Respect Platform and {self.system_name}"
                     
                 dt = "N/A"
                 if is_pop:
@@ -2032,7 +1938,7 @@ class SmarticoCore:
                 else:
                     labels_store[clean_lbl] = "NOT_FOUND"
 
-        # ⚡ ФИКС КРАША: Если после скачивания всё ещё пусто — значит лейбла правда нет в Smartico.
+        
         if not data or not isinstance(data, dict): 
             return f"<div style='color:#c0392b; margin-bottom:4px;'>❌ {esc(label_name)} (Not Found)</div>"
                 
@@ -2279,7 +2185,10 @@ class SmarticoCore:
                             res_val = str(matched_val) if matched_val is not None else "5000"
                             return re.sub(r'<[^>]+>', '', res_val).strip() or "5000"
 
-                        BRAND_MAP = {"673": "Winaura", "822": "Casinacho", "828": "Goldzino", "678": "R2PBet", "651": "Kinghills", "842": "Winbeatz", "645": "Ninewin", "896": "AFKspin", "829": "Oscarspin", "839": "Spingranny", "836": "Corgibet", "869": "Spinjoys", "885": "Lootzino", "904": "Senseizino"}
+                        try:
+                            BRAND_MAP = json.loads(os.getenv("BRAND_MAP_JSON", "{}"))
+                        except:
+                            BRAND_MAP = {}
                         real_brand_name = BRAND_MAP.get(str(brand_id), brand_name)
 
                         max_depth = 3
@@ -2817,113 +2726,51 @@ class SmarticoCore:
     
     def get_qa_personas(self, use_dynamic=False):
         """
-        ВРЕМЕННО: Динамика отключена.
-        Возвращает ровно те списки тестовых профилей, которые прописаны для каждого окружения.
-        Никаких "Tier 1-3", только реальные бренды.
+        Возвращает тестовые профили из защищенных переменных окружения.
+        Сложная логика рандомизации сохранена.
         """
+        import random
+        
         # 1. Если мы на 7 окружении
         if "boapi7" in self.boapi_host or "drive-7" in self.drive_host:
-            return {
-                "AFKspin": "896:1754238177731145185",
-                "AFKspin": "896:5086327759074929002"
-            }
+            raw_data = os.getenv("QA_PERSONAS_7_JSON", "{}")
+            try: return json.loads(raw_data)
+            except: return {}
             
         # 2. Если мы на 5 окружении
         elif "boapi5" in self.boapi_host or "drive-5" in self.drive_host:
-            return {
-                "Oscarspin": "829:8448539841010620822",
-                "Spingranny": "839:1531686315825469657",
-                "Corgibet": "836:1706495762523592130",
-                "Spinjoys": "869:183708819059120879",
-                "Lootzino": "885:1719220158045499111",
-                "Senseizino": "904:1716533076811932616",
-                "Frogyspin": "912:461525723524107789",
-                "Gamblerina": "918:5889867319919786579",
-                "Lamalucky": "916:6160346663233670101"
-            }
+            raw_data = os.getenv("QA_PERSONAS_5_JSON", "{}")
+            try: return json.loads(raw_data)
+            except: return {}
             
-        # 3. Иначе (мы на 2 окружении / дефолтном drive - для 2828 и других)
+        # 3. Иначе (мы на 2 окружении)
         else:
-            import random
-
-            # Использован список кортежей (пары ключ-значение), чтобы Python не стирал дубликаты ключей
-            vip_1_pool = [
-                ("VIP 1", "853:7269268538016769836"),
-                ("VIP 1", "864:6359448759686786856"),
-                ("VIP 1", "798:6335956350133762815"),
-                ("VIP 1", "843:6133310204060133480"),
-                ("VIP 1", "864:5918068119399440756")
-            ]
-
-            vip_234_pool = [
-                ("VIP 2", "844:6453465079016313569"),
-                ("VIP 2", "842:5829210895743790772"),
-                ("VIP 2", "842:5630508923308825201"),
-                ("VIP 2", "880:5064630248742436549"),
-                ("VIP 2", "909:4629264131772101941"),
-                ("VIP 2", "844:4244115943566145397"),
-                ("VIP 3", "695:6075051476268878456"),
-                ("VIP 3", "822:5884805659376469948"),
-                ("VIP 3", "824:5593717938261106450"),
-                ("VIP 3", "904:6155799754119488045"),
-                ("VIP 3", "798:6442176398506222637"),
-                ("VIP 4", "748:5888705082022375934"),
-                ("VIP 4", "824:5918597440898170265"),
-                ("VIP 4", "804:6467738678373218794"),
-                ("VIP 4", "842:5670612217748706715"),
-                ("VIP 4", "832:5458279828468738499")
-            ]
-
-            tier_pool = [
-                ("TIER 1 Bottom", "909:7341693794297214582"),
-                ("TIER 1 Bottom", "841:7318924411745801627"),
-                ("TIER 1 Bottom", "832:7330799181754397889"),
-                ("TIER 1 Bottom", "839:7229741924731899817"),
-                ("TIER 1 Bottom", "796:7149973707941171580"),
-                ("TIER 2 Very Low", "842:7363742965034598674"),
-                ("TIER 2 Very Low", "821:7362500711012366510"),
-                ("TIER 2 Very Low", "907:7361153052654497434"),
-                ("TIER 2 Very Low", "825:7360017142906468338"),
-                ("TIER 2 Very Low", "821:7358354449876360257"),
-                ("TIER 3 Low", "828:7361915838794842875"),
-                ("TIER 3 Low", "864:7361248058745416790"),
-                ("TIER 3 Low", "824:7363681946189722430"),
-                ("TIER 3 Low", "904:7352040382792612092"),
-                ("TIER 3 Low", "786:7341819689612290412"),
-                ("TIER 4 Medium", "821:7363086317670934137"),
-                ("TIER 4 Medium", "826:7360519524653418819"),
-                ("TIER 4 Medium", "880:7357918581186175464"),
-                ("TIER 4 Medium", "881:7354615570042724575"),
-                ("TIER 4 Medium", "798:7346541530530973055"),
-                ("TIER 5 High", "866:7363728432256503358"),
-                ("TIER 5 High", "842:7364266211843220207"),
-                ("TIER 5 High", "825:7349966548803380240"),
-                ("TIER 5 High", "949:7348592614573187025"),
-                ("TIER 5 High", "844:7343708107901488492"),
-                ("TIER 5 High", "949:7348592614573187025"),
-                ("TIER 6 Very High", "695:7360611185190906561"),
-                ("TIER 6 Very High", "842:7354517361003924948"),
-                ("TIER 6 Very High", "695:7353915215569704732"),
-                ("TIER 6 Very High", "821:7338219557385312553"),
-                ("TIER 6 Very High", "864:7328356667917612004")
-            ]
-
-            chosen_personas = {}
-
-            # Выбираем случайные кортежи (ключ, значение)
-            rand_vip_234 = random.choice(vip_234_pool)
-            rand_vip_1 = random.choice(vip_1_pool)
-            rand_tier = random.choice(tier_pool)
-
-            # Формируем словарь СТРОГО в заданном порядке расположения
-            # Ключи берутся динамически из выбранных кортежей (например, "VIP 3" или "TIER 5 High")
-            chosen_personas[rand_vip_234[0]] = rand_vip_234[1]
-            chosen_personas[rand_vip_1[0]] = rand_vip_1[1]
-            chosen_personas["Winaura BR"] = "673:982120035868465737"
-            chosen_personas["Light"] = "651:241594074338371584"
-            chosen_personas[rand_tier[0]] = rand_tier[1]
-
-            return chosen_personas
+            raw_data = os.getenv("QA_PERSONAS_2_POOLS_JSON", "{}")
+            try:
+                pools = json.loads(raw_data)
+                chosen_personas = {}
+                
+                # Рандомизируем выборки из пулов
+                if pools.get("vip_234"):
+                    v234 = random.choice(pools["vip_234"])
+                    chosen_personas[v234[0]] = v234[1]
+                if pools.get("vip_1"):
+                    v1 = random.choice(pools["vip_1"])
+                    chosen_personas[v1[0]] = v1[1]
+                    
+                # Добавляем фиксированных
+                if pools.get("fixed"):
+                    chosen_personas.update(pools["fixed"])
+                    
+                # Рандомизируем Tier
+                if pools.get("tier"):
+                    tier = random.choice(pools["tier"])
+                    chosen_personas[tier[0]] = tier[1]
+                    
+                return chosen_personas
+            except Exception as e:
+                print(f"Ошибка загрузки пула юзеров из ENV: {e}")
+                return {}
 
     def find_value_deep(self, obj, target_keys):
         import json
@@ -3009,7 +2856,7 @@ class SmarticoCore:
                         
                 payload["params"]["body"] = payload_body
 
-            # HTTP Request to Smartico
+            
             try:
                 res = self.ctx.request.post(
                     f"https://{self.boapi_host}/api/private-api",
@@ -3306,7 +3153,7 @@ class SmarticoCore:
                 }
             grouped_mcs[sig]["count"] += 1
 
-        def format_smartico_rule_local(rule_str):
+        def format_rule_local(rule_str):
             rule_str = rule_str.strip()
             if not rule_str: return ""
             m_op = re.match(r"^'([^']+)'\s+(.+?)\s+\((.*)\)$", rule_str)
@@ -3348,7 +3195,7 @@ class SmarticoCore:
                         or_inner = "<br>".join([f"🔸 <span style='color:#b45309; font-family:monospace;'>{esc(r)}</span>" for r in or_rules])
                         rules_html_parts.append(f"<div style='background:#fef3c7; border:1px solid #fde68a; border-left:4px solid #f59e0b; padding:8px 12px; border-radius:4px; margin-bottom:10px; font-size:13px;'><b>⚠️ Сработает любое из условий (OR):</b><br>{or_inner}</div>")
                     if std_rules:
-                        rules_html_parts.append("<br>".join([format_smartico_rule_local(r) for r in std_rules]))
+                        rules_html_parts.append("<br>".join([format_rule_local(r) for r in std_rules]))
                         
                     rules_html = "".join(rules_html_parts)
                 
@@ -3389,7 +3236,7 @@ class SmarticoCore:
                 parsed_cond = "<i style='color:#94a3b8;'>Нет заданных условий</i>"
             else:
                 raw_rules = re.split(r'\nAND\s+|\s+AND\s+', c_raw)
-                parsed_cond = "<br>".join([format_smartico_rule_local(r) for r in raw_rules])
+                parsed_cond = "<br>".join([format_rule_local(r) for r in raw_rules])
                 
             cond_html += f"""
             <div class='dim-target' style='background: #f8fafc; border: 1px solid #cbd5e1; border-left: 4px solid #64748b; border-radius: 8px; padding: 16px; margin-bottom: 12px; transition: 0.3s;'>
@@ -4452,7 +4299,7 @@ class SmarticoCore:
         <body class="antialiased flex">
             <aside class="w-72 fixed h-screen top-0 left-0 bg-white dark:bg-slate-900 border-r border-slate-200 dark:border-slate-800 flex flex-col z-50 shadow-sm">
                 <div class="p-6 border-b border-slate-100 dark:border-slate-800">
-                    <h1 class="text-2xl font-black text-slate-900 dark:text-white leading-tight">Smartico<br><span class="text-blue-600">Audit</span></h1>
+                    <h1 class="text-2xl font-black text-slate-900 dark:text-white leading-tight">Campaign<br><span class="text-blue-600">Audit</span></h1>
                 </div>
                 <nav class="flex-1 overflow-y-auto p-4 space-y-1">
                     <div class="text-xs font-bold text-slate-400 uppercase tracking-wider mb-3 ml-2">Навигация</div>

@@ -2,29 +2,29 @@ import requests
 import json
 import re
 import os
-import webbrowser
 import urllib.parse
 import random
 import streamlit as st
 from datetime import timedelta
 from datetime import datetime
 from playwright.sync_api import sync_playwright
+from core import GeneralCore
+from dotenv import load_dotenv
 
-# Импортируем твое ядро
-from smartico_core_prod import SmarticoCore
+load_dotenv()
 
-# =====================================================================
-# ⚙️ НАСТРОЙКИ
-# =====================================================================
-TARGET_URL = "https://drive.smartico.ai/2828#/j_audience_head/1422651"
-AUTH_TOKEN = "ffa95d2c-5296-11f1-ba3d-068c3067dc9d"
+SYSTEM_DOMAIN = os.getenv("SYSTEM_DOMAIN")
+
+if not SYSTEM_DOMAIN:
+    st.error("❌ Критическая ошибка: переменная SYSTEM_DOMAIN не найдена в файле .env!")
+    st.stop()
 
 # 📅 За какой период (в днях) собирать статистику для карты Flow Map
 LIVE_VIEW_DAYS = 14 
 # =====================================================================
 
 def run_standalone_audit(url, token, use_live_view=True, days_back=14):
-    brand_match = re.search(r"smartico\.ai/(\d+)", url)
+    brand_match = re.search(rf"{re.escape(SYSTEM_DOMAIN)}/(\d+)", url)
     camp_match = re.search(r"(?:scheduled|head)/(\d+)", url)
     
     if not brand_match or not camp_match:
@@ -34,20 +34,19 @@ def run_standalone_audit(url, token, use_live_view=True, days_back=14):
     brand_id = brand_match.group(1)
     camp_id = camp_match.group(1)
     
-    env_match = re.search(r"drive(?:-(\d+))?\.smartico\.ai", url)
+    env_match = re.search(rf"drive(?:-(\d+))?\.{re.escape(SYSTEM_DOMAIN)}", url)
     env_suffix = env_match.group(1) if env_match and env_match.group(1) else ""
-    boapi_host = f"boapi{env_suffix}.smartico.ai" if env_suffix else "boapi.smartico.ai"
-    drive_host = env_match.group(0) if env_match else "drive.smartico.ai"
+    boapi_host = f"boapi{env_suffix}.{SYSTEM_DOMAIN}" if env_suffix else f"boapi.{SYSTEM_DOMAIN}"
+    drive_host = env_match.group(0) if env_match else f"drive.{SYSTEM_DOMAIN}"
 
     with sync_playwright() as p:
-        # Эти аргументы критически важны для работы внутри Streamlit на macOS/Linux
         browser = p.chromium.launch(
             headless=True, 
             args=["--no-sandbox", "--disable-dev-shm-usage", "--disable-gpu"]
         )
         context = browser.new_context()
         
-        core = SmarticoCore(context, token, brand_id, boapi_host, drive_host)
+        core = GeneralCore(context, token, brand_id, boapi_host, drive_host)
         
         print(f"🚀 Процессинг кампании #{camp_id}...")
 
@@ -72,9 +71,6 @@ def run_standalone_audit(url, token, use_live_view=True, days_back=14):
         flow_html = re.sub(r'<details[^>]*>\s*<summary[^>]*>.*?Интерактивная карта.*?</summary>', '<div style="padding-top: 10px;">', flow_html, count=1, flags=re.DOTALL)
         flow_html = re.sub(r'</details>\s*$', '</div>', flow_html)
 
-        # ⚡ ВЫЧИСЛЯЕМ ОБЩЕЕ КОЛИЧЕСТВО ВХОДОВ
-        # Берем максимальное значение report_activities_count среди всех нод
-        # (Стартовая нода всегда имеет максимальный трафик)
         total_entries = 0
         if f_nodes:
             for n in f_nodes:
@@ -282,9 +278,6 @@ def run_standalone_audit(url, token, use_live_view=True, days_back=14):
         if not found_any:
             communications_html = "<div style='color:#64748b; font-style:italic; padding: 10px;'>Отправок за выбранный период не найдено.</div>"
 
-        # =====================================================================
-        # 4. ОТВЯЗКА ОТ SMARTICO CORE (Собственная генерация HTML)
-        # =====================================================================
 
         def esc(t): return str(t).replace('&', '&amp;').replace('<', '&lt;').replace('>', '&gt;').replace('"', '&quot;')
 
@@ -417,34 +410,15 @@ def run_module(cookie_manager):
     urls_input = st.text_area("🔗 Список ссылок на кампании (каждая с новой строки)", placeholder="https://...\nhttps://...", height=150)
     urls = [u.strip() for u in urls_input.split('\n') if u.strip()]
 
-    # ⚡️ УМНОЕ ОПРЕДЕЛЕНИЕ ТОКЕНА ИЗ ГЛАВНОГО МЕНЮ (по первой ссылке) ⚡️
-    token_input = ""
-    if urls:
-        env_match = re.search(r"drive(?:-(\d+))?\.smartico\.ai", urls[0])
-        env_suffix = env_match.group(1) if env_match and env_match.group(1) else "2"
-        env_key = f"env{env_suffix}"
-        
-        # Берем токен из кэша главного файла
-        token_input = st.session_state.get(f"token_{env_key}", "")
-        
-        # Если токена нет, просим ввести и сохраняем навсегда
-        if not token_input:
-            st.warning(f"⚠️ Нет токена для окружения {env_key}. Пожалуйста, введите его:")
-            token_input = st.text_input(f"🔑 Auth Token ({env_key})", type="password")
-            if token_input:
-                st.session_state[f"token_{env_key}"] = token_input
-                cookie_manager.set(f"smartico_token_{env_key}", token_input, expires_at=datetime.now() + timedelta(days=30))
-                st.rerun()
-    
     st.markdown("---")
     st.subheader("⚙️ Настройки статистики")
     
     # Чекбокс включен по умолчанию (value=True)
-    use_stats = st.checkbox("📈 Запросить статистику по юзерам", value=True)
+    use_stats = st.checkbox("📈 Запросить статистику по юзерам", value=True, key="mass_audit_use_stats")
     
     days_input = 14 # Значение по умолчанию, если чекбокс выключен
     if use_stats:
-        days_input = st.number_input("Количество дней для сбора данных", min_value=1, max_value=90, value=14, step=1)
+        days_input = st.number_input("Количество дней для сбора данных", min_value=1, max_value=90, value=14, step=1, key="mass_audit_days_input")
 
     st.markdown("---")
     
@@ -454,10 +428,54 @@ def run_module(cookie_manager):
         st.session_state['processed_count'] = 0
 
     if st.button("🚀 Запустить проверку", use_container_width=True, type="primary"):
-        if not urls or not token_input:
-            st.error("❌ Пожалуйста, вставьте хотя бы одну ссылку и убедитесь, что есть токен.")
+        if not urls:
+            st.error("❌ Пожалуйста, вставьте хотя бы одну ссылку.")
             return
+
+        env_match = re.search(rf"drive(?:-(\d+))?\.{re.escape(SYSTEM_DOMAIN)}", urls[0])
+        env_suffix = env_match.group(1) if env_match and env_match.group(1) else "2"
+        env_key = f"env{env_suffix}"
+        
+        token_input = st.session_state.get(f"token_{env_key}", "")
+        
+        if not token_input:
+            st.error(f"❌ Нет авторизации для {env_key.upper()}. Введите актуальный Token в левом боковом меню.")
+            st.stop()
+
+        host_map = {
+            "env2": f"boapi.{SYSTEM_DOMAIN}", 
+            "env5": f"boapi5.{SYSTEM_DOMAIN}", 
+            "env7": f"boapi7.{SYSTEM_DOMAIN}"
+        }
+        check_host = host_map.get(env_key, f"boapi.{SYSTEM_DOMAIN}")
+        token_invalid = False
+        error_reason = ""
+
+        try:
+            ping_check = requests.get(f"https://{check_host}/api/users/me", headers={"authorization": token_input}, timeout=5)
             
+            if not ping_check.ok and ping_check.status_code != 291:
+                token_invalid = True
+                error_reason = f"HTTP {ping_check.status_code}"
+            else:
+                try:
+                    resp_json = ping_check.json()
+                    if isinstance(resp_json, dict) and str(resp_json.get("status", "")).lower() in ["error", "unauthorized"]:
+                        token_invalid = True
+                        error_reason = "JSON Error (Unauthorized)"
+                except Exception:
+                    token_invalid = True
+                    error_reason = "HTML/Cloudflare Redirect"
+                    
+        except requests.exceptions.RequestException as e:
+            st.warning(f"⚠️ Сетевая задержка при проверке токена: {e}")
+
+        if token_invalid:
+            st.error(f"🔑 Ошибка авторизации ({error_reason})! Ваш токен невалидный неверен. Обновите его в левом боковом меню.")
+            st.stop()
+        # 👆 ========================================================= 👆
+
+        # Если скрипт дошел сюда, значит токен 100% живой. Начинаем аудит!
         combined_html = '<div style="background: #f8fafc; padding: 20px; font-family: sans-serif;"><h1 style="text-align:center; color:#1e293b; margin-bottom: 30px;">Сводный отчет по аудиту</h1>'
         progress_bar = st.progress(0)
         
@@ -508,5 +526,3 @@ def run_module(cookie_manager):
             type="primary",
             use_container_width=True
         )
-
-# Запуск происходит через главный файл app.py

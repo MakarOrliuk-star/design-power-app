@@ -1,30 +1,34 @@
 import json
 import re
-import os
 import time         
 import streamlit as st
 import streamlit.components.v1 as components
 import threading
 import requests
 import extra_streamlit_components as stx
+from datetime import datetime
+from core import GeneralCore
+from dotenv import load_dotenv
+import os
 import streamlit as st
 
-from datetime import datetime
-from smartico_core_prod import SmarticoCore
+load_dotenv()
 
-# 1. Семафор (Semaphore), чтобы пускать до N браузеров одновременно
+SYSTEM_DOMAIN = os.getenv("SYSTEM_DOMAIN")
+
+if not SYSTEM_DOMAIN:
+    st.error("❌ Критическая ошибка: переменная SYSTEM_DOMAIN не найдена в файле .env!")
+    st.stop()
+
 @st.cache_resource
 def get_browser_lock():
-    # 2.7 GB хватит примерно на 3-4 одновременных тяжелых процесса Playwright.
-    # Если приложение начнет падать (крашиться), уменьшите это число до 2.
     return threading.Semaphore(4)
 
-# 2. Глобальное хранилище, которое не сбрасывается между юзерами
 @st.cache_resource
 def get_global_state():
     return {
-        "online_users": {}, # { "user@email.com": "timestamp_последнего_действия" }
-        "audit_logs": []    # [ {time, user, url, status} ]
+        "online_users": {},
+        "audit_logs": []   
     }
 
 global_lock = get_browser_lock()
@@ -45,12 +49,51 @@ def test_general_info(MAIN_URL, POP_URL, auth_token, expected_data=None, progres
     log("🔌 Подключение к серверам...", 2)
     base_url = MAIN_URL if MAIN_URL else POP_URL
 
+    system_domain = os.getenv("SYSTEM_DOMAIN")
+
     if "drive-7" in base_url:
-        DRIVE_HOST, BOAPI_HOST, TEST_USERS = "drive-7.smartico.ai", "boapi7.smartico.ai", [("896:1754238177731145185", "AFKspin")]
+        DRIVE_HOST = f"drive-7.{system_domain}"
+        BOAPI_HOST = f"boapi7.{system_domain}"
     elif "drive-5" in base_url:
-        DRIVE_HOST, BOAPI_HOST, TEST_USERS = "drive-5.smartico.ai", "boapi5.smartico.ai", [("829:8448539841010620822", "Oscarspin"), ("839:1531686315825469657", "Spingranny"), ("836:1706495762523592130", "Corgibet"), ("869:183708819059120879", "Spinjoys"), ("885:1719220158045499111", "Lootzino"), ("904:1716533076811932616", "Senseizino"), ("912:461525723524107789", "Frogyspin")]
+        DRIVE_HOST = f"drive-5.{system_domain}"
+        BOAPI_HOST = f"boapi5.{system_domain}"
     else:
-        DRIVE_HOST, BOAPI_HOST, TEST_USERS = "drive.smartico.ai", "boapi.smartico.ai", [("673:1723144455787313991", "Winaura"), ("822:1758983921962607028", "Casinacho"), ("828:1602915985410109535", "Goldzino"), ("678:7510192718669794302", "R2PBet"), ("651:86114211798740340", "Kinghills"), ("842:1801871159569785305", "Winbeatz"), ("645:108467023969063098", "Ninewin")]
+        DRIVE_HOST = f"drive.{system_domain}"
+        BOAPI_HOST = f"boapi.{system_domain}"
+
+    # 🔐 ЖЕСТКИЙ СТРАЖ АВТОРИЗАЦИИ (Тройной фильтр)
+    token_invalid = False
+    error_reason = ""
+
+    try:
+        ping_check = requests.get(f"https://{BOAPI_HOST}/api/users/me", headers={"authorization": auth_token}, timeout=5)
+        
+        # 1. Проверяем HTTP статус (если это явная ошибка 400+, но не 291)
+        if not ping_check.ok and ping_check.status_code != 291:
+            token_invalid = True
+            error_reason = f"HTTP {ping_check.status_code}"
+        else:
+            # 2. Проверяем, прислал ли сервер JSON-данные, а не HTML-страницу входа
+            try:
+                resp_json = ping_check.json()
+                # 3. Иногда API пишет "status: error" прямо внутри успешного ответа 200
+                if isinstance(resp_json, dict) and str(resp_json.get("status", "")).lower() in ["error", "unauthorized"]:
+                    token_invalid = True
+                    error_reason = "JSON Error (Unauthorized)"
+            except Exception:
+                # Если JSON не распарсился — значит нам прислали страницу заглушки
+                token_invalid = True
+                error_reason = "HTML/Cloudflare Redirect"
+                
+    except requests.exceptions.RequestException as e:
+        # При сетевой ошибке (таймауте) даем шанс, не блокируем жестко
+        log(f"⚠️ Предупреждение сети: не удалось проверить токен ({e})", 2)
+
+    # Вызываем остановку СНАРУЖИ блока try/except, чтобы Питон её не проигнорировал
+    if token_invalid:
+        log(f"❌ КРИТИЧЕСКАЯ ОШИБКА: Токен недействителен! ({error_reason})", 0)
+        st.error(f"🔑 Ошибка авторизации ({error_reason})! Ваш токен невалидный. Обновите его в левом боковом меню.")
+        st.stop()
 
     report_data = {
         "general_main": {}, "general_pop": {},
@@ -82,7 +125,8 @@ def test_general_info(MAIN_URL, POP_URL, auth_token, expected_data=None, progres
         for target_url in [MAIN_URL, POP_URL]:
             if not target_url: continue
             
-            brand_match = re.search(r"smartico\.ai/(\d+)", target_url)
+            domain = os.getenv("SYSTEM_DOMAIN")
+            brand_match = re.search(rf"{re.escape(domain)}/(\d+)", target_url)
             camp_match = re.search(r"(?:scheduled|head)/(\d+)", target_url)
             if not brand_match or not camp_match: continue
                 
@@ -91,19 +135,16 @@ def test_general_info(MAIN_URL, POP_URL, auth_token, expected_data=None, progres
             report_data["brand_id"] = brand_id
             
             # Создаем наше мощное ядро!
-            api = SmarticoCore(context, auth_token, brand_id, BOAPI_HOST, DRIVE_HOST)
+            api = GeneralCore(context, auth_token, brand_id, BOAPI_HOST, DRIVE_HOST)
             
-            # 👇 НОВЫЙ БЛОК: Скачиваем персон один раз на всю кампанию
-            log("🕵️‍♂️ Выгружаем реальных пользователей из сегментов (VIP, Tier 1-3)...", 8)
+            # Получаем тестовые профили (теперь они мгновенно берутся из памяти сервера/.env)
+            log("🕵️‍♂️ Загрузка тестовых профилей...", 8)
             qa_personas = api.get_qa_personas()
             
             if not qa_personas:
-                log("⚠️ Не удалось выгрузить юзеров, используем дефолтного.", 9)
-                # Берем первого юзера из старого хардкод-списка как фолбэк
-                fallback_uid, fallback_desc = TEST_USERS[0] if TEST_USERS else ("Unknown", "Default Test")
-                qa_personas = {fallback_desc: fallback_uid}
+                log("⚠️ Внимание: список тестовых профилей пуст (проверьте настройки окружения).", 9)
             else:
-                log(f"✅ Успешно выгружено персон: {len(qa_personas)}", 9)
+                log(f"✅ Готово. Профилей для тестов: {len(qa_personas)}", 9)
                 
             log(f"📋 Запрашиваем метаданные кампании #{camp_id}...", 10)
             gen, seg = api.get_campaign_metadata(camp_id, target_url)
@@ -147,20 +188,39 @@ def test_general_info(MAIN_URL, POP_URL, auth_token, expected_data=None, progres
             
             log(f"🔗 Извлекаем связи между нодами #{camp_id}...", 35)
             transitions_data = api.get_campaign_transitions(camp_id)
-            nodes_by_id = {str(n["id"]): n for n in nodes}
+            
+            # 🔥 ЗАЩИТА ОТ СТРОК-УБИЙЦ (Добавь эти две строчки!)
+            if not isinstance(transitions_data, list):
+                transitions_data = []
+                
+            # 🔥 ЗАЩИТА ОТ СТРОК И ПУСТОТЫ В НОДАХ
+            nodes_by_id = {str(n["id"]): n for n in nodes if isinstance(n, dict) and "id" in n}
             
             for aud in transitions_data:
+                # 🔥 ЗАЩИТА ВНУТРИ ЦИКЛА: Если элемент списка — не словарь, пропускаем его
+                if not isinstance(aud, dict):
+                    continue
+                    
                 source_id = str(aud.get("enabled_by_activity_id", ""))
                 target_audience_id = str(aud.get("id", ""))
                 if not source_id or source_id == "None": continue
                 
-                target_node = next((n for n in nodes if str(n.get("audience_id", "")) == target_audience_id), None)
+                # Ищем таргет только среди настоящих словарей
+                target_node = next((n for n in nodes if isinstance(n, dict) and str(n.get("audience_id", "")) == target_audience_id), None)
                 source_node = nodes_by_id.get(source_id)
                 
                 if source_node and target_node:
                     t_val = ""
-                    for c in aud.get("conditions", []):
-                        if c.get("p") == "event.action":
+                    
+                    # 🚨 ИСКАЛИ ОШИБКУ ЗДЕСЬ: conditions может быть строкой, None или словарем
+                    raw_conds = aud.get("conditions", [])
+                    if isinstance(raw_conds, dict):
+                        raw_conds = [raw_conds] # Оборачиваем словарь в список
+                    elif not isinstance(raw_conds, list):
+                        raw_conds = [] # Превращаем любой другой мусор в пустой список
+                        
+                    for c in raw_conds:
+                        if isinstance(c, dict) and c.get("p") == "event.action":
                             t_val = str(c.get("v", "")).strip("'\"")
                             break
                             
@@ -195,12 +255,19 @@ def test_general_info(MAIN_URL, POP_URL, auth_token, expected_data=None, progres
                         "is_pwa": is_pwa,
                         "label": t_val
                     })
-                    
+        
+        # 👇 НОВЫЙ БЛОК: ЗАЩИТА ОТ ФАНТОМНОГО УСПЕХА 👇
+        if not report_data.get("general_main") and not report_data.get("general_pop"):
+            log("<span style='color: #ef4444;'>❌ ОШИБКА: Токен недействителен или нет доступа к кампании!</span>", 0)
+            st.error("🔑 Ошибка авторизации! Вставьте актуальный Token в левом боковом меню.")
+            st.stop()
+        # 👆 ======================================== 👆
+
         report_data["flow_links"] = all_flow_links
 
         TARGET_NODES = {
             50: "Email", 40: "Push", 60: "SMS", 
-            30: "Pop-up", 31: "Inbox",  # 🚨 ВОТ ЗДЕСЬ ПРАВИЛЬНЫЙ ID (31)
+            30: "Pop-up", 31: "Inbox",
             203: "Multi-Check", 200: "WebHook", 9: "Wait For",
             201: "Condition Check"
         }
@@ -211,6 +278,7 @@ def test_general_info(MAIN_URL, POP_URL, auth_token, expected_data=None, progres
         log("📸 Извлечение контента узлов...", 45)
 
         for idx, node in enumerate(all_nodes):
+            if not isinstance(node, dict): continue # 🛡️ Броня: пропускаем любой мусор
             type_id = node.get("type_id")
             print(f"👉 НОДА: {node.get('name', 'Unknown')} | ТИП (type_id): {type_id}")
             if type_id not in TARGET_NODES:
@@ -323,7 +391,15 @@ def test_general_info(MAIN_URL, POP_URL, auth_token, expected_data=None, progres
                         timeout_str = "N/A"
 
                 period_map = {1: "Send only in activity period", 2: "Send always, disregarding activity period", 3: "Send if possible and if not - in next available activity period", 4: "Send in specific hour (User TZ)", 5: "Send in specific hour (UTC)", 260: "BEST TIME: Deposit+SB+CASINO Bet", 261: "BEST TIME: Online", 262: "BEST TIME: Clicks"}
-                optout_map = {1: "Respect Platform and Smartico opt-out flags", 2: "Ignore Platform, opt-out flags, but respect Smartico", 3: "Ignore Smartico opt-out flags, but respect Platform", 4: "Ignore platform and Smartico opt-out flags"}
+                
+                # Достаем имя системы из .env
+                sys_name = os.getenv("SYSTEM_NAME")
+                optout_map = {
+                    1: f"Respect Platform and {sys_name} opt-out flags", 
+                    2: f"Ignore Platform, opt-out flags, but respect {sys_name}", 
+                    3: f"Ignore {sys_name} opt-out flags, but respect Platform", 
+                    4: f"Ignore platform and {sys_name} opt-out flags"
+                }
                 
                 optout = optout_map.get(details.get("optout_impact"), f"ID: {details.get('optout_impact')}")
                 period = details.get("period")
@@ -498,11 +574,11 @@ def test_general_info(MAIN_URL, POP_URL, auth_token, expected_data=None, progres
                     })
 
             elif node_type == "WebHook":
-                # Умный поиск URL и тела запроса по всем возможным ключам Smartico
+
                 url_val = str(details.get("url") or details.get("endpoint") or details.get("webhook_url") or "")
                 body_raw = details.get("body") or details.get("payload") or details.get("data")
                 
-                # Часто Smartico прячет данные внутрь ключа "request"
+
                 if "request" in details and isinstance(details["request"], dict):
                     url_val = url_val or str(details["request"].get("url", ""))
                     body_raw = body_raw or details["request"].get("body")
@@ -850,9 +926,10 @@ def parse_template_deposit_ladder(raw_text):
 def get_env_from_url(url):
     """Определяет окружение по ссылке"""
     if not url: return None
+    domain = os.getenv("SYSTEM_DOMAIN")
     if "drive-7" in url: return "env7"
     elif "drive-5" in url: return "env5"
-    elif "smartico.ai" in url: return "env2"
+    elif domain in url: return "env2"
     return None
 
 def run_module(cookie_manager):
@@ -885,96 +962,125 @@ def run_module(cookie_manager):
             placeholder="Вставьте данные оффера сюда..."
         )
 
-    if main_url or pop_url:
+    st.write("")
+    start_audit = st.button("🚀 Запустить проверку", type="primary", use_container_width=True)
+
+    if start_audit:
+        # 1. ПРОВЕРКА НАЛИЧИЯ ХОТЯ БЫ ОДНОЙ ССЫЛКИ
+        if not main_url and not pop_url:
+            st.error("❌ Пожалуйста, вставьте хотя бы одну ссылку (Scheduled или Journey).")
+            st.stop()
+
+        # 2. ОПРЕДЕЛЯЕМ ОКРУЖЕНИЕ ПО ССЫЛКЕ
         test_url = main_url if main_url else pop_url
-        
         env = get_env_from_url(test_url)
+        
         if not env:
-            st.error("❌ Не удалось распознать ссылку. Убедитесь, что она ведет на smartico.ai")
+            st.error("❌ Не удалось распознать ссылку. Убедитесь, что она корректная")
             st.stop()
             
+        # 3. ДОСТАЕМ ТОКЕН ИЗ ПАМЯТИ (положенный туда боковым меню)
         current_token = st.session_state.get(f"token_{env}", "")
+        
         if not current_token:
             st.error(f"❌ Нет авторизации для {env.upper()}. Введите актуальный Token в левом боковом меню.")
             st.stop()
+
+        # 4. 🔐 ЖЕСТКИЙ СТРАЖ АВТОРИЗАЦИИ (Тройной фильтр, как в массовом аудите)
+        host_map = {
+            "env2": f"boapi.{SYSTEM_DOMAIN}", 
+            "env5": f"boapi5.{SYSTEM_DOMAIN}", 
+            "env7": f"boapi7.{SYSTEM_DOMAIN}"
+        }
+        check_host = host_map.get(env, f"boapi.{SYSTEM_DOMAIN}")
+        token_invalid = False
+        error_reason = ""
+
+        try:
+            ping_check = requests.get(f"https://{check_host}/api/users/me", headers={"authorization": current_token}, timeout=5)
+            
+            if not ping_check.ok and ping_check.status_code != 291:
+                token_invalid = True
+                error_reason = f"HTTP {ping_check.status_code}"
+            else:
+                try:
+                    resp_json = ping_check.json()
+                    if isinstance(resp_json, dict) and str(resp_json.get("status", "")).lower() in ["error", "unauthorized"]:
+                        token_invalid = True
+                        error_reason = "JSON Error (Unauthorized)"
+                except Exception:
+                    token_invalid = True
+                    error_reason = "HTML/Cloudflare Redirect"
+                    
+        except requests.exceptions.RequestException as e:
+            st.warning(f"⚠️ Сетевая задержка при проверке токена: {e}")
+
+        if token_invalid:
+            st.error(f"🔑 Ошибка авторизации ({error_reason})! Ваш токен невалидный. Обновите его в левом боковом меню.")
+            st.stop()
+        # 👆 ========================================================= 👆
+
+        # 5. ПАРСИНГ ТАБЛИЦЫ ДО ЗАПУСКА АУДИТА
+        expected_data = None
+
+        # 4. ЗАПУСК ОСНОВНОГО ПРОЦЕССА
+        log_container = st.empty()
+        progress_bar = st.progress(0)
+        log_history = []
         
-        st.write("")
-        start_audit = st.button("🚀 ЗАПУСТИТЬ АУДИТ И СВЕРКУ", type="primary", use_container_width=True)
+        if "audit_start_time" not in st.session_state:
+            st.session_state.audit_start_time = time.time()
+            st.session_state.last_step_time = time.time()
+        
+        def update_progress(msg, percent=None):
+            now = time.time()
+            total_elapsed = now - st.session_state.audit_start_time
+            step_elapsed = now - st.session_state.last_step_time
+            st.session_state.last_step_time = now
+            
+            timestamp = f"[{total_elapsed:02.0f}s] [+{step_elapsed:.1f}s]"
+            print(f"{timestamp} ➜ {msg}", flush=True)
+            
+            log_entry = f"<span style='color: #64748b;'>{timestamp}</span> ➜ {msg}"
+            log_history.append(log_entry)
+            logs_html = "<br>".join(log_history)
+            
+            terminal_html = f"""
+            <div style="background-color: #0f172a; color: #38bdf8; padding: 15px; border-radius: 8px; font-family: monospace; font-size: 13px; height: 280px; overflow-y: auto; border: 1px solid #1e293b; box-shadow: inset 0 2px 4px rgba(0,0,0,0.5); display: flex; flex-direction: column-reverse; margin-bottom: 15px; line-height: 1.5;">
+                <div style="margin-top: auto;">{logs_html}</div>
+            </div>
+            """
+            log_container.markdown(terminal_html, unsafe_allow_html=True)
+            if percent is not None:
+                progress_bar.progress(percent)
 
-        if start_audit:
-            # 3. ПАРСИНГ ТАБЛИЦЫ ДО ЗАПУСКА АУДИТА
-            expected_data = None
-            if template_choice != "Без сверки" and raw_table_data:
-                if "Шаблон 1" in template_choice:
-                    expected_data = parse_template_dep_bonus(raw_table_data)
-                elif "Шаблон 2" in template_choice:
-                    expected_data = parse_template_deposit_ladder(raw_table_data)
+        try:
+            st.session_state.audit_start_time = time.time()
+            st.session_state.last_step_time = time.time()
+            update_progress("⏳ Добавлен в очередь. Ждем освобождения ресурсов сервера...", 2)
+            
+            with global_lock:
+                update_progress("🚀 Ресурсы получены! Запускаю процесс...", 5)
                 
-                # Если парсер вернул ошибку - прерываем выполнение
-                if "error" in expected_data:
-                    st.error(expected_data["error"])
-                    st.stop()
+                # 🚨 ОБРАТИ ВНИМАНИЕ: МЫ ПЕРЕДАЕМ EXPECTED_DATA ВНУТРЬ ФУНКЦИИ
+                result = test_general_info(main_url, pop_url, current_token, expected_data=expected_data, progress_cb=update_progress)
+                
+                if result and result[0]:
+                    final_report_html, camp_name = result
+                    progress_bar.progress(100)
+                    update_progress("✅ АУДИТ УСПЕШНО ЗАВЕРШЕН!", 100)
+                    st.balloons()
+                    final_file_name = f"{camp_name}_{datetime.now().strftime('%Y%m%d_%H%M%S')}.html"
                 else:
-                    st.toast(f"✅ Данные из таблицы распознаны! Офферов: {len(expected_data.get('offers', []))}")
+                    update_progress("❌ Скрипт не смог собрать данные.", 0)
+        except Exception as e:
+            update_progress(f"❌ Критическая ошибка: {e}", 0)
 
-            # 4. ЗАПУСК ОСНОВНОГО ПРОЦЕССА
-            log_container = st.empty()
-            progress_bar = st.progress(0)
-            log_history = []
-            
-            if "audit_start_time" not in st.session_state:
-                st.session_state.audit_start_time = time.time()
-                st.session_state.last_step_time = time.time()
-            
-            def update_progress(msg, percent=None):
-                now = time.time()
-                total_elapsed = now - st.session_state.audit_start_time
-                step_elapsed = now - st.session_state.last_step_time
-                st.session_state.last_step_time = now
-                
-                timestamp = f"[{total_elapsed:02.0f}s] [+{step_elapsed:.1f}s]"
-                print(f"{timestamp} ➜ {msg}", flush=True)
-                
-                log_entry = f"<span style='color: #64748b;'>{timestamp}</span> ➜ {msg}"
-                log_history.append(log_entry)
-                logs_html = "<br>".join(log_history)
-                
-                terminal_html = f"""
-                <div style="background-color: #0f172a; color: #38bdf8; padding: 15px; border-radius: 8px; font-family: monospace; font-size: 13px; height: 280px; overflow-y: auto; border: 1px solid #1e293b; box-shadow: inset 0 2px 4px rgba(0,0,0,0.5); display: flex; flex-direction: column-reverse; margin-bottom: 15px; line-height: 1.5;">
-                    <div style="margin-top: auto;">{logs_html}</div>
-                </div>
-                """
-                log_container.markdown(terminal_html, unsafe_allow_html=True)
-                if percent is not None:
-                    progress_bar.progress(percent)
-
-            try:
-                st.session_state.audit_start_time = time.time()
-                st.session_state.last_step_time = time.time()
-                update_progress("⏳ Добавлен в очередь. Ждем освобождения ресурсов сервера...", 2)
-                
-                with global_lock:
-                    update_progress("🚀 Ресурсы получены! Запускаю процесс...", 5)
-                    
-                    # 🚨 ОБРАТИ ВНИМАНИЕ: МЫ ПЕРЕДАЕМ EXPECTED_DATA ВНУТРЬ ФУНКЦИИ
-                    result = test_general_info(main_url, pop_url, current_token, expected_data=expected_data, progress_cb=update_progress)
-                    
-                    if result and result[0]:
-                        final_report_html, camp_name = result
-                        progress_bar.progress(100)
-                        update_progress("✅ АУДИТ УСПЕШНО ЗАВЕРШЕН!", 100)
-                        st.balloons()
-                        final_file_name = f"{camp_name}_{datetime.now().strftime('%Y%m%d_%H%M%S')}.html"
-                    else:
-                        update_progress("❌ Скрипт не смог собрать данные.", 0)
-            except Exception as e:
-                update_progress(f"❌ Критическая ошибка: {e}", 0)
-
-        if final_report_html:
-            st.write("---")
-            st.download_button(label="📥 СКАЧАТЬ HTML ОТЧЕТ", data=final_report_html, file_name=final_file_name, mime="text/html", use_container_width=True)
-            st.divider()
-            components.html(final_report_html, height=1200, scrolling=True)
+    if final_report_html:
+        st.write("---")
+        st.download_button(label="📥 СКАЧАТЬ HTML ОТЧЕТ", data=final_report_html, file_name=final_file_name, mime="text/html", use_container_width=True)
+        st.divider()
+        components.html(final_report_html, height=1200, scrolling=True)
 
 if __name__ == "__main__":
     run_module(None)
