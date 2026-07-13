@@ -928,6 +928,12 @@ onMounted(() => {
           <span class="badge badge--off" v-text="'{{prompt}} = промпт элемента'" />
           <span v-if="tourMsg.system" class="brand-card__msg">{{ tourMsg.system }}</span>
         </div>
+        <p class="muted small">
+          Необязательная текстовая добавка к промпту элемента. Финальный промпт
+          пишет prompt writer бренда (PERSON-промпт, как в Person-генерации):
+          система = промпт бренда, юзер = промпт элемента; стиль бренда
+          добавляется в конец. Пусто = промпт элемента уходит prompt writer'у как есть.
+        </p>
         <textarea v-model="tourSystemPrompt" class="prompt" rows="3" />
         <div class="brand-card__foot">
           <button class="btn-primary" @click="saveTourSystemPrompt">Сохранить</button>

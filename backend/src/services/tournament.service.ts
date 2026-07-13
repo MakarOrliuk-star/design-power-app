@@ -6,11 +6,12 @@ import { getPrompt } from "./prompts.js";
  * Tournaments page (feature/tournament-page, Phase 3).
  *
  * A run creates ONE Batch per category (so the header pills / per-category
- * cancel reuse the existing batch machinery). The final prompt is assembled
- * HERE, at creation time (override ?? default -> system {{prompt}} wrapper ->
- * + brand stylePrompt) and stored in Generation.description — the item worker
- * uses it raw for actionType=TOURNAMENT. The output file name is fixed here
- * too (Generation.tourFileName), so the ZIP / Result tab never re-derive it.
+ * cancel reuse the existing batch machinery). Generation.description stores the
+ * ELEMENT prompt (override ?? default, optionally wrapped by the TOURNAMENT
+ * system template) — the item worker then runs it through the brand's PERSON
+ * prompt-writer (nano-gpt, same as the Person flow) and appends the brand
+ * stylePrompt before calling fal. The output file name is fixed here
+ * (Generation.tourFileName), so the ZIP / Result tab never re-derive it.
  */
 
 export type TournamentMode = "BASE" | "VIP";
@@ -105,7 +106,7 @@ export async function createTournamentBatches(
       id: true,
       name: true,
       forcedAspectRatio: true,
-      nanoRef: { select: { referenceImages: true, stylePrompt: true } },
+      nanoRef: { select: { referenceImages: true } },
     },
   });
   if (brands.length === 0) throw new Error("no_brands");
@@ -182,7 +183,6 @@ export async function createTournamentBatches(
     let batchCount = 0;
     for (const brand of brands) {
       const brandRefs = (brand.nanoRef?.referenceImages ?? []).slice(0, BRAND_REFS_PER_JOB);
-      const stylePrompt = brand.nanoRef?.stylePrompt ?? "";
       const aspect = brand.forcedAspectRatio || "1:1";
 
       for (const sel of sels) {
@@ -192,7 +192,9 @@ export async function createTournamentBatches(
           categoryKey === "provider"
             ? sel.element.referenceImages.slice(0, BRAND_REFS_PER_JOB)
             : brandRefs;
-        const prompt = buildTournamentPrompt(systemWrapper, sel.elementPrompt, stylePrompt);
+        // Brand stylePrompt is NOT baked in here — the worker appends it after
+        // the PERSON prompt-writer pass, so it reaches fal verbatim.
+        const prompt = buildTournamentPrompt(systemWrapper, sel.elementPrompt, "");
         const baseName = `${sanitizeName(brand.name)}_${sanitizeName(sel.element.name)}`;
 
         for (let i = 1; i <= count; i++) {
