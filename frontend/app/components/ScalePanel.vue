@@ -16,12 +16,21 @@ import { ref, reactive, computed, watch, nextTick, onMounted, onBeforeUnmount } 
 import type Konva from "konva";
 import { capPad, type Pad, type Placement, type InpaintPayload } from "~/composables/useResult";
 
-const props = defineProps<{
-  image: { id: string; generatedImageUrl: string; brandName?: string } | null;
-  busy: boolean;
-  error: string;
-  msg: string;
-}>();
+const props = withDefaults(
+  defineProps<{
+    image: { id: string; generatedImageUrl: string; brandName?: string } | null;
+    busy: boolean;
+    error: string;
+    msg: string;
+    /**
+     * "panel" (default) renders the sidebar preview + its own "Редактировать"
+     * button (Result page). "external" renders ONLY the modal — the host opens
+     * it via the exposed openEditor() (Tournament Pack cards).
+     */
+    trigger?: "panel" | "external";
+  }>(),
+  { trigger: "panel" },
+);
 const emit = defineEmits<{
   (e: "scale", payload: { pad?: Pad; placement?: Placement; prompt?: string }): void;
   (e: "inpaint", payload: InpaintPayload): void;
@@ -376,10 +385,13 @@ onMounted(() => {
   checker.value = c;
 });
 onBeforeUnmount(() => ro?.disconnect());
+
+// trigger="external" hosts open the modal themselves (Tournament Pack cards).
+defineExpose({ openEditor });
 </script>
 
 <template>
-  <section class="scale">
+  <section v-if="trigger === 'panel'" class="scale">
     <h2 class="scale__title">Scale image</h2>
 
     <p v-if="!image" class="scale__hint">
@@ -400,9 +412,10 @@ onBeforeUnmount(() => ro?.disconnect());
       </button>
       <p v-if="error" class="scale__feedback scale__feedback--error">{{ error }}</p>
     </template>
+  </section>
 
-    <!-- Large editor modal -->
-    <Teleport to="body">
+  <!-- Large editor modal (teleported — rendered for BOTH trigger modes) -->
+  <Teleport to="body">
       <div v-if="open && image" class="se" @click.self="!busy && closeEditor()">
         <div class="se__panel">
           <header class="se__head">
@@ -513,7 +526,6 @@ onBeforeUnmount(() => ro?.disconnect());
         </div>
       </div>
     </Teleport>
-  </section>
 </template>
 
 <style scoped>

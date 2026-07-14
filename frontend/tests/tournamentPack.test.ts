@@ -8,6 +8,7 @@ import {
   batchStatusLabel,
   packCounts,
   exportableIds,
+  replacePackImage,
   useTournamentPack,
   type PackBatch,
   type PackGeneration,
@@ -117,6 +118,25 @@ describe("packCounts / exportableIds / batchStatusLabel", () => {
   });
 });
 
+describe("replacePackImage — in-place swap after Scale/Inpaint", () => {
+  it("swaps ONLY the target generation's URL; untouched batches keep identity", () => {
+    const g1 = gen();
+    const g2 = gen();
+    const b1: PackBatch = { id: "b1", status: "COMPLETED", createdAt: "2026-07-10", generations: [g1, g2] };
+    const b2: PackBatch = { id: "b2", status: "COMPLETED", createdAt: "2026-07-09", generations: [gen()] };
+
+    const next = replacePackImage([b1, b2], g2.id, "https://cdn/edited.png?v=1");
+    expect(next[0]!.generations[1]!.generatedImageUrl).toBe("https://cdn/edited.png?v=1");
+    expect(next[0]!.generations[0]).toBe(g1); // sibling row untouched
+    expect(next[1]).toBe(b2); // other batch keeps reference identity
+  });
+
+  it("unknown id is a no-op on every batch", () => {
+    const b: PackBatch = { id: "b1", status: "COMPLETED", createdAt: "2026-07-10", generations: [gen()] };
+    expect(replacePackImage([b], "ghost", "https://cdn/x.png")[0]).toBe(b);
+  });
+});
+
 describe("useTournamentPack — selection + export flow", () => {
   function makeDeps(batches: PackBatch[]) {
     const api = vi.fn(async () => ({ batches, total: batches.length, hasMore: false }));
@@ -209,6 +229,73 @@ describe("useTournamentPack — selection + export flow", () => {
     expect(deps.onEdited).toHaveBeenCalled();
     expect(result.selected.value.size).toBe(0); // selection cleared
     expect(result.editPrompt.value).toBe("");
+    unmount();
+  });
+
+  it("runScale posts to /generate/scale for the targeted card and swaps its URL in place", async () => {
+    const g1 = gen();
+    const failed = gen({ status: "FAILED", generatedImageUrl: null });
+    const batch: PackBatch = {
+      id: "b1",
+      status: "PARTIAL_FAILURE",
+      createdAt: "2026-07-10T10:00:00Z",
+      generations: [g1, failed],
+    };
+    const deps = makeDeps([batch]);
+    (deps.api as ReturnType<typeof vi.fn>).mockImplementation(async (url: string) =>
+      url === "/api/generate/scale"
+        ? { generationId: g1.id, generatedImageUrl: "https://cdn/scaled.png" }
+        : { batches: [batch], total: 1, hasMore: false },
+    );
+    const { result, unmount } = withSetup(() => useTournamentPack(deps));
+    await vi.waitFor(() => expect(result.batches.value).toHaveLength(1));
+
+    // A non-editable row can never become the target.
+    result.setScaleTarget(failed.id);
+    expect(result.scaleImage.value).toBeNull();
+    await result.runScale({ pad: { top: 0, right: 100, bottom: 0, left: 0 } });
+    expect(deps.api).not.toHaveBeenCalledWith("/api/generate/scale", expect.anything());
+
+    result.setScaleTarget(g1.id);
+    expect(result.scaleImage.value).toMatchObject({ id: g1.id, brandName: g1.brandName });
+    await result.runScale({ pad: { top: 0, right: 100, bottom: 0, left: 0 }, prompt: " sky " });
+    expect(deps.api).toHaveBeenCalledWith("/api/generate/scale", {
+      method: "POST",
+      body: { generationId: g1.id, pad: { top: 0, right: 100, bottom: 0, left: 0 }, prompt: "sky" },
+    });
+    // URL swapped in place (cache-busted) — the target reflects it immediately.
+    const updated = result.batches.value[0]!.generations[0]!;
+    expect(updated.generatedImageUrl).toMatch(/^https:\/\/cdn\/scaled\.png\?v=\d+$/);
+    expect(result.scaleImage.value!.generatedImageUrl).toBe(updated.generatedImageUrl);
+    expect(result.scaleMsg.value).toContain("Готово");
+    unmount();
+  });
+
+  it("runInpaint posts the mask and maps a backend error code to a RU message", async () => {
+    const g1 = gen();
+    const batch: PackBatch = {
+      id: "b1",
+      status: "COMPLETED",
+      createdAt: "2026-07-10T10:00:00Z",
+      generations: [g1],
+    };
+    const deps = makeDeps([batch]);
+    (deps.api as ReturnType<typeof vi.fn>).mockImplementation(async (url: string) => {
+      if (url === "/api/generate/inpaint")
+        throw Object.assign(new Error("bad"), { data: { error: "inpaint_failed" } });
+      return { batches: [batch], total: 1, hasMore: false };
+    });
+    const { result, unmount } = withSetup(() => useTournamentPack(deps));
+    await vi.waitFor(() => expect(result.batches.value).toHaveLength(1));
+
+    result.setScaleTarget(g1.id);
+    await result.runInpaint({ maskDataUrl: "data:image/png;base64,AAA", mode: "erase" });
+    expect(deps.api).toHaveBeenCalledWith("/api/generate/inpaint", {
+      method: "POST",
+      body: { generationId: g1.id, maskDataUrl: "data:image/png;base64,AAA", mode: "erase" },
+    });
+    expect(result.scaleError.value).toBe("Не удалось обработать область — попробуйте другую маску.");
+    expect(result.batches.value[0]!.generations[0]!.generatedImageUrl).toBe(g1.generatedImageUrl); // untouched
     unmount();
   });
 

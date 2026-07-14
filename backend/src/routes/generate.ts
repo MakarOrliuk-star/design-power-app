@@ -475,14 +475,15 @@ generateRouter.post("/generate/inpaint", async (req: Request, res: Response) => 
 //   FULL / NANO_REF -> Person, CREATE_ITEM -> Item. There is no BACKGROUND
 //   pipeline yet, so that tab returns nothing (Phase 0 decision). Edited images
 //   (isEdit=true) live only in the "edited" tab and are excluded elsewhere.
-type ContentType = "Person" | "Item" | "Background";
+type ContentType = "Person" | "Item" | "Background" | "Tournament";
 function contentTypeOf(actionType: "FULL" | "CREATE_ITEM" | "NANO_REF" | "TOURNAMENT"): ContentType {
+  if (actionType === "TOURNAMENT") return "Tournament";
   return actionType === "CREATE_ITEM" ? "Item" : "Person";
 }
 
 /** Tab-specific Generation filter, merged into the base gallery where clause. */
 function tabWhere(
-  tab: "generated" | "person" | "item" | "background" | "edited",
+  tab: "generated" | "person" | "item" | "background" | "edited" | "tournament",
 ): Prisma.GenerationWhereInput {
   switch (tab) {
     case "person":
@@ -494,6 +495,10 @@ function tabWhere(
       return { actionType: { in: [] } };
     case "edited":
       return { isEdit: true };
+    case "tournament":
+      // Archive's "Tournament Pack" tab (задача 4): the flat read-only view of
+      // tournament results, with the standard period/search filters.
+      return { actionType: "TOURNAMENT" };
     case "generated":
     default:
       // Tournament results live in their own Result tab ("Tournament Pack",
@@ -532,10 +537,12 @@ const gallerySchema = z.object({
   brand: z.string().optional(), // exact brand match (Result page)
   search: z.string().trim().min(1).optional(), // partial brand match (Archive search)
   period: z.enum(["today", "week", "month", "3months"]).default("3months"),
-  tab: z.enum(["generated", "person", "item", "background", "edited"]).default("generated"),
+  tab: z
+    .enum(["generated", "person", "item", "background", "edited", "tournament"])
+    .default("generated"),
 });
 
-type GalleryTab = "generated" | "person" | "item" | "background" | "edited";
+type GalleryTab = "generated" | "person" | "item" | "background" | "edited" | "tournament";
 
 /** Shared gallery where-clause builder, reused by the list + ZIP export routes. */
 function galleryWhere(
@@ -585,6 +592,7 @@ generateRouter.get("/generations", async (req: Request, res: Response) => {
         actionType: true,
         isEdit: true,
         createdAt: true,
+        tourFileName: true, // Archive tournament tab shows the fixed ZIP name
       },
     }),
   ]);

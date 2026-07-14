@@ -64,6 +64,21 @@ function onCopySelected() {
   copySelected();
   markCopied("selected");
 }
+
+// ---- Tournament Pack tab (задача 4): read-only просмотр ----
+// No selection/copy/export on this tab; a click opens the shared fullscreen
+// slider (ImageViewer — the same ←/→/Esc behavior as on Result). The caption
+// is the fixed ZIP file name. Switching tabs empties `images`, which closes
+// the viewer by itself (its active id disappears from the list).
+const isTournament = computed(() => activeTab.value === "tournament");
+const viewerId = ref<string | null>(null);
+const viewerItems = computed(() =>
+  images.value.map((i) => ({
+    id: i.id,
+    url: i.generatedImageUrl,
+    caption: i.tourFileName ?? stripGender(i.brandName),
+  })),
+);
 </script>
 
 <template>
@@ -109,6 +124,7 @@ function onCopySelected() {
             </svg>
           </button>
           <button
+            v-if="!isTournament"
             :class="['iconbtn', { 'iconbtn--copied': copiedKey === 'selected' }]"
             type="button"
             aria-label="Copy selected"
@@ -125,6 +141,7 @@ function onCopySelected() {
             </svg>
           </button>
           <button
+            v-if="!isTournament"
             class="iconbtn"
             type="button"
             aria-label="Export ZIP"
@@ -194,7 +211,7 @@ function onCopySelected() {
             </svg>
           </span>
         </div>
-        <button class="select-all" type="button" @click="toggleSelectAll">
+        <button v-if="!isTournament" class="select-all" type="button" @click="toggleSelectAll">
           {{ allSelected ? "Deselect all" : "Select all" }}
         </button>
       </div>
@@ -212,9 +229,9 @@ function onCopySelected() {
             :key="img.id"
             :class="['card', { 'card--selected': isSelected(img.id) }]"
           >
-            <span class="card__label">{{ stripGender(img.brandName) }}</span>
+            <span class="card__label">{{ isTournament ? (img.tourFileName ?? stripGender(img.brandName)) : stripGender(img.brandName) }}</span>
 
-            <div class="card__tools">
+            <div v-if="!isTournament" class="card__tools">
               <button
                 type="button"
                 :class="['card__tool', { 'card__tool--on': isSelected(img.id) }]"
@@ -248,7 +265,13 @@ function onCopySelected() {
               </button>
             </div>
 
-            <img class="card__img" :src="img.generatedImageUrl" :alt="img.brandName" loading="lazy" />
+            <img
+              :class="['card__img', { 'card__img--clickable': isTournament }]"
+              :src="img.generatedImageUrl"
+              :alt="img.brandName"
+              loading="lazy"
+              @click="isTournament && (viewerId = img.id)"
+            />
 
             <span class="card__type">
               <span class="card__type-ic" aria-hidden="true">
@@ -258,6 +281,11 @@ function onCopySelected() {
                 </svg>
                 <svg v-else-if="img.contentType === 'Item'" viewBox="0 0 24 24" width="12" height="12" fill="none">
                   <path d="M7 4h10M8 4v2.5L6 9v9a2 2 0 002 2h8a2 2 0 002-2V9l-2-2.5V4" stroke="currentColor" stroke-width="1.5" stroke-linejoin="round" />
+                </svg>
+                <svg v-else-if="img.contentType === 'Tournament'" viewBox="0 0 24 24" width="12" height="12" fill="none">
+                  <path d="M8 4h8v5a4 4 0 01-8 0V4z" stroke="currentColor" stroke-width="1.5" stroke-linejoin="round" />
+                  <path d="M8 6H5v1.5A3.5 3.5 0 008.5 11M16 6h3v1.5A3.5 3.5 0 0115.5 11" stroke="currentColor" stroke-width="1.5" stroke-linejoin="round" />
+                  <path d="M12 13v4m-3.5 3h7m-5.5-3h4l.8 3H9.7l.8-3z" stroke="currentColor" stroke-width="1.5" stroke-linejoin="round" />
                 </svg>
                 <svg v-else viewBox="0 0 24 24" width="12" height="12" fill="none">
                   <rect x="4" y="5" width="16" height="14" rx="2" stroke="currentColor" stroke-width="1.5" />
@@ -276,6 +304,9 @@ function onCopySelected() {
         </div>
       </div>
     </div>
+
+    <!-- Fullscreen slider (Tournament Pack tab) — same behavior as Result -->
+    <ImageViewer v-model:active-id="viewerId" :images="viewerItems" />
   </div>
 </template>
 
@@ -602,6 +633,9 @@ function onCopySelected() {
   width: 100%;
   height: 100%;
   object-fit: cover;
+}
+.card__img--clickable {
+  cursor: zoom-in;
 }
 .card__label {
   position: absolute;

@@ -33,12 +33,8 @@ const {
   runScale,
   runInpaint,
   flatImages,
-  viewerIndex,
-  viewerImage,
-  viewerOpen,
+  viewerId,
   openViewer,
-  closeViewer,
-  viewerStep,
   newReadyCount,
   dismissReady,
 } = useResult({ api: useApi() as unknown as ResultApi, gen });
@@ -49,6 +45,17 @@ function copyImage(img: { id: string; generatedImageUrl: string }) {
   void navigator.clipboard?.writeText(img.generatedImageUrl);
   markCopied(img.id);
 }
+
+// Fullscreen slider — the shared ImageViewer; keyboard stays with useResult's
+// own handler (:keyboard="false"), so behavior is identical to before.
+const viewerItems = computed(() =>
+  flatImages.value.map((i) => ({
+    id: i.id,
+    url: i.generatedImageUrl,
+    caption: stripGender(i.brandName),
+    ...(i.description ? { sub: i.description } : {}),
+  })),
+);
 </script>
 
 <template>
@@ -299,49 +306,8 @@ function copyImage(img: { id: string; generatedImageUrl: string }) {
       </div>
     </div>
 
-    <!-- Fullscreen image viewer (Phase 3) -->
-    <Teleport to="body">
-      <div v-if="viewerOpen" class="viewer" @click.self="closeViewer">
-        <button class="viewer__close" type="button" aria-label="Close" @click="closeViewer">
-          <svg viewBox="0 0 24 24" width="22" height="22" fill="none">
-            <path d="M6 6l12 12M18 6L6 18" stroke="currentColor" stroke-width="2" stroke-linecap="round" />
-          </svg>
-        </button>
-
-        <button
-          v-if="flatImages.length > 1"
-          class="viewer__nav viewer__nav--prev"
-          type="button"
-          aria-label="Previous"
-          @click="viewerStep(-1)"
-        >
-          <svg viewBox="0 0 24 24" width="28" height="28" fill="none">
-            <path d="M15 5l-7 7 7 7" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" />
-          </svg>
-        </button>
-
-        <figure class="viewer__stage" @click.self="closeViewer">
-          <img v-if="viewerImage" class="viewer__img" :src="viewerImage.generatedImageUrl" :alt="viewerImage.brandName" />
-          <figcaption v-if="viewerImage" class="viewer__caption">
-            <span class="viewer__brand">{{ stripGender(viewerImage.brandName) }}</span>
-            <span v-if="viewerImage.description" class="viewer__desc">{{ viewerImage.description }}</span>
-            <span class="viewer__count">{{ viewerIndex + 1 }} / {{ flatImages.length }}</span>
-          </figcaption>
-        </figure>
-
-        <button
-          v-if="flatImages.length > 1"
-          class="viewer__nav viewer__nav--next"
-          type="button"
-          aria-label="Next"
-          @click="viewerStep(1)"
-        >
-          <svg viewBox="0 0 24 24" width="28" height="28" fill="none">
-            <path d="M9 5l7 7-7 7" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" />
-          </svg>
-        </button>
-      </div>
-    </Teleport>
+    <!-- Fullscreen image viewer (Phase 3) — shared slider component -->
+    <ImageViewer v-model:active-id="viewerId" :images="viewerItems" :keyboard="false" />
   </div>
 </template>
 
@@ -800,88 +766,6 @@ function copyImage(img: { id: string; generatedImageUrl: string }) {
 .edit-btn__ic {
   display: inline-grid;
   place-items: center;
-}
-
-/* ---- fullscreen viewer (Phase 3) ---- */
-.viewer {
-  position: fixed;
-  inset: 0;
-  z-index: 1000;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  gap: 16px;
-  padding: 40px;
-  background: rgba(15, 15, 18, 0.86);
-  backdrop-filter: blur(4px);
-}
-.viewer__stage {
-  margin: 0;
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  gap: 14px;
-  max-width: 90vw;
-  max-height: 90vh;
-}
-.viewer__img {
-  max-width: 100%;
-  max-height: 78vh;
-  object-fit: contain;
-  border-radius: var(--radius-sm);
-  box-shadow: 0 12px 40px rgba(0, 0, 0, 0.5);
-}
-.viewer__caption {
-  display: flex;
-  align-items: center;
-  gap: 14px;
-  flex-wrap: wrap;
-  justify-content: center;
-  color: #f2f2f2;
-  font-size: 13px;
-}
-.viewer__brand {
-  font-weight: 600;
-}
-.viewer__desc {
-  color: #b8b8c0;
-  max-width: 60vw;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-.viewer__count {
-  color: #b8b8c0;
-}
-.viewer__close {
-  position: absolute;
-  top: 22px;
-  right: 26px;
-  display: grid;
-  place-items: center;
-  width: 42px;
-  height: 42px;
-  border: none;
-  border-radius: 50%;
-  background: rgba(255, 255, 255, 0.12);
-  color: #fff;
-}
-.viewer__close:hover {
-  background: rgba(255, 255, 255, 0.22);
-}
-.viewer__nav {
-  flex: 0 0 auto;
-  display: grid;
-  place-items: center;
-  width: 52px;
-  height: 52px;
-  border: none;
-  border-radius: 50%;
-  background: rgba(255, 255, 255, 0.12);
-  color: #fff;
-}
-.viewer__nav:hover {
-  background: rgba(255, 255, 255, 0.22);
 }
 
 /* ---- responsive ---- */
