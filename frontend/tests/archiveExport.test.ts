@@ -1,5 +1,20 @@
 import { describe, it, expect } from "vitest";
-import { buildExportQuery } from "../app/composables/useArchive";
+import { buildExportQuery, ARCHIVE_TABS } from "../app/composables/useArchive";
+import { TABS, RESULT_TABS } from "../app/composables/useResult";
+
+// Задача 4 — the Archive gets its own "Tournament Pack" tab. It must live in
+// ARCHIVE_TABS only: RESULT_TABS already appends its own tournament tab, so a
+// tournament entry leaking into the shared TABS would double it on Result.
+describe("ARCHIVE_TABS", () => {
+  it("appends the tournament tab to the shared ones", () => {
+    expect(ARCHIVE_TABS.map((t) => t.key)).toEqual([...TABS.map((t) => t.key), "tournament"]);
+  });
+
+  it("keeps the shared TABS tournament-free (Result stays single-tabbed)", () => {
+    expect(TABS.some((t) => t.key === "tournament")).toBe(false);
+    expect(RESULT_TABS.filter((t) => t.key === "tournament")).toHaveLength(1);
+  });
+});
 
 // TASK §2 — ZIP export query: an explicit selection wins over the filters (the
 // backend ignores filters when `ids` is present), otherwise the current filters.

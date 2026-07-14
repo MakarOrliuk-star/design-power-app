@@ -17,7 +17,7 @@ import {
 
 export type TabKey = "generated" | "person" | "item" | "background" | "edited" | "tournament";
 export type SelectMode = "ALL" | "EACH";
-export type ContentType = "Person" | "Item" | "Background";
+export type ContentType = "Person" | "Item" | "Background" | "Tournament";
 
 /** Shared gallery tabs (Archive uses exactly these). */
 export const TABS: { key: TabKey; label: string; disabled?: boolean }[] = [
@@ -47,6 +47,8 @@ export interface GalleryImage {
   description: string | null;
   generatedImageUrl: string;
   createdAt: string;
+  /** Fixed ZIP file name — present on tournament rows only (Archive tab). */
+  tourFileName?: string | null;
 }
 export interface Group {
   id: string;

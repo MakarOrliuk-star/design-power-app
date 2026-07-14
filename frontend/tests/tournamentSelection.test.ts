@@ -7,6 +7,7 @@ import {
   addBrandCapped,
   selectionKey,
   parseSelectionKey,
+  allCategoryKeys,
   type TourCategory,
   type TourElement,
 } from "~/stores/tournament";
@@ -98,6 +99,38 @@ describe("selectionKey / parseSelectionKey — per-mode checkboxes", () => {
       "e1:VIP",
       "e2:BASE",
     ]);
+  });
+});
+
+describe("allCategoryKeys — the Select all / 'X of Y' universe", () => {
+  const elements = [el(), el({ id: "e2", name: "Tournament_2" })];
+
+  it("moded category yields BASE and VIP keys for every element, toggle ignored", () => {
+    const keys = allCategoryKeys(cat({ hasModes: true, elements }));
+    expect(keys.sort()).toEqual(["e1:BASE", "e1:VIP", "e2:BASE", "e2:VIP"]);
+  });
+
+  it("fixed-mode category yields only its fixed mode", () => {
+    const keys = allCategoryKeys(
+      cat({ key: "calendar_vip", hasModes: false, fixedMode: "VIP", elements }),
+    );
+    expect(keys).toEqual(["e1:VIP", "e2:VIP"]);
+  });
+
+  it("fixed-mode without an explicit mode falls back to BASE; empty category -> []", () => {
+    expect(allCategoryKeys(cat({ hasModes: false, fixedMode: null, elements: [el()] }))).toEqual([
+      "e1:BASE",
+    ]);
+    expect(allCategoryKeys(cat({ elements: [] }))).toEqual([]);
+  });
+
+  it("acts as the validity filter: stale keys (removed element / impossible mode) drop out", () => {
+    // Mirrors load()'s cleanup and the selectedCount intersection in the store.
+    const valid = new Set(
+      allCategoryKeys(cat({ key: "calendar_vip", hasModes: false, fixedMode: "VIP", elements })),
+    );
+    const checked = ["e1:VIP", "e1:BASE", "gone:VIP"]; // BASE impossible, "gone" removed
+    expect(checked.filter((k) => valid.has(k))).toEqual(["e1:VIP"]);
   });
 });
 

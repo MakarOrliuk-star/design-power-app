@@ -6,6 +6,13 @@
  * exported helpers, `api`/`apiBase`/`download`/`gen` are injected for tests.
  */
 import { ref, computed, watch, onMounted, onBeforeUnmount } from "vue";
+import {
+  bustCache,
+  mapScaleError,
+  type Pad,
+  type Placement,
+  type InpaintPayload,
+} from "./useResult";
 
 export type PackMode = "BASE" | "VIP";
 
@@ -151,6 +158,28 @@ export function exportableIds(batches: PackBatch[]): string[] {
   );
 }
 
+/**
+ * Swap one generation's image URL in place (after a successful Scale/Inpaint —
+ * the backend already overwrote the stored image, so the next ZIP export picks
+ * the edited version up automatically). Untouched batches keep their identity.
+ */
+export function replacePackImage(
+  batches: PackBatch[],
+  generationId: string,
+  url: string,
+): PackBatch[] {
+  return batches.map((b) =>
+    b.generations.some((g) => g.id === generationId)
+      ? {
+          ...b,
+          generations: b.generations.map((g) =>
+            g.id === generationId ? { ...g, generatedImageUrl: url } : g,
+          ),
+        }
+      : b,
+  );
+}
+
 // ---------------------------------------------------------------------------
 // Composable
 // ---------------------------------------------------------------------------
@@ -267,6 +296,95 @@ export function useTournamentPack(deps: PackDeps) {
     }
   }
 
+  // ---- Scale/Inpaint editor (задача 3: same pipeline as the Person reference) ----
+  // One image at a time: a card's "Редактировать" button sets the target and the
+  // host opens ScalePanel's modal (trigger="external"). POST /generate/scale и
+  // /generate/inpaint не фильтруют actionType, so tournament rows work as-is;
+  // the result REPLACES the stored image (and thus the next ZIP export).
+  const scaleTargetId = ref<string | null>(null);
+  const scaling = ref(false);
+  const scaleError = ref("");
+  const scaleMsg = ref("");
+
+  /** The live row for the target id (survives polling refreshes of `batches`). */
+  const scaleImage = computed(() => {
+    if (!scaleTargetId.value) return null;
+    for (const b of batches.value)
+      for (const g of b.generations)
+        if (g.id === scaleTargetId.value && g.status === "DONE" && g.generatedImageUrl)
+          return { id: g.id, generatedImageUrl: g.generatedImageUrl, brandName: g.brandName };
+    return null;
+  });
+
+  function setScaleTarget(id: string | null) {
+    scaleTargetId.value = id;
+    scaleError.value = "";
+    scaleMsg.value = "";
+  }
+
+  /** Swap the edited image's URL in place (cache-busted, mirrors useResult). */
+  function applyReplacement(res: { generationId: string; generatedImageUrl: string }) {
+    batches.value = replacePackImage(batches.value, res.generationId, bustCache(res.generatedImageUrl));
+  }
+
+  async function runScale(payload: { pad?: Pad; placement?: Placement; prompt?: string }) {
+    const target = scaleImage.value;
+    if (!target || scaling.value) return;
+    scaleError.value = "";
+    scaleMsg.value = "";
+    scaling.value = true;
+    try {
+      const prompt = payload.prompt?.trim();
+      const res = await api<{ generationId: string; generatedImageUrl: string }>(
+        "/api/generate/scale",
+        {
+          method: "POST",
+          body: {
+            generationId: target.id,
+            ...(payload.pad ? { pad: payload.pad } : {}),
+            ...(payload.placement ? { placement: payload.placement } : {}),
+            ...(prompt ? { prompt } : {}),
+          },
+        },
+      );
+      applyReplacement(res);
+      scaleMsg.value = "Готово! Изображение расширено и улучшено.";
+    } catch (e: unknown) {
+      scaleError.value = mapScaleError((e as { data?: { error?: string } })?.data?.error);
+    } finally {
+      scaling.value = false;
+    }
+  }
+
+  async function runInpaint(payload: InpaintPayload) {
+    const target = scaleImage.value;
+    if (!target || scaling.value) return;
+    scaleError.value = "";
+    scaleMsg.value = "";
+    scaling.value = true;
+    try {
+      const prompt = payload.prompt?.trim();
+      const res = await api<{ generationId: string; generatedImageUrl: string }>(
+        "/api/generate/inpaint",
+        {
+          method: "POST",
+          body: {
+            generationId: target.id,
+            maskDataUrl: payload.maskDataUrl,
+            mode: payload.mode,
+            ...(prompt ? { prompt } : {}),
+          },
+        },
+      );
+      applyReplacement(res);
+      scaleMsg.value = payload.mode === "erase" ? "Готово! Объект удалён." : "Готово! Область дорисована.";
+    } catch (e: unknown) {
+      scaleError.value = mapScaleError((e as { data?: { error?: string } })?.data?.error);
+    } finally {
+      scaling.value = false;
+    }
+  }
+
   // ---- ZIP export (a NEW DES number is issued on every download) ----
   const exporting = ref(false);
   function trigger(qs: string) {
@@ -343,6 +461,13 @@ export function useTournamentPack(deps: PackDeps) {
     editing,
     editError,
     runEdit,
+    scaleImage,
+    setScaleTarget,
+    scaling,
+    scaleError,
+    scaleMsg,
+    runScale,
+    runInpaint,
     exporting,
     exportBatch,
     exportSelected,

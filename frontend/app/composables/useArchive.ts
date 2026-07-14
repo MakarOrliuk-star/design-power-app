@@ -23,6 +23,14 @@ export const PERIODS: { key: Period; label: string }[] = [
   { key: "3months", label: "3 months" },
 ];
 
+/**
+ * Archive tabs = the shared gallery ones + "Tournament Pack" (задача 4): a
+ * read-only flat view of tournament results (backend tab=tournament). Kept
+ * here (not in TABS) so the Result page — which appends its own tournament
+ * tab — is unaffected.
+ */
+export const ARCHIVE_TABS: typeof TABS = [...TABS, { key: "tournament", label: "Tournament Pack" }];
+
 interface GalleryResponse {
   images: GalleryImage[];
   total: number;
@@ -254,7 +262,7 @@ export function useArchive(deps: ArchiveDeps) {
 
   return {
     // filters
-    TABS,
+    TABS: ARCHIVE_TABS,
     PERIODS,
     activeTab,
     period,
