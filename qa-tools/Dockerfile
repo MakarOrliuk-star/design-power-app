@@ -8,7 +8,7 @@ RUN apt-get update && apt-get install -y wget gnupg curl && rm -rf /var/lib/apt/
 WORKDIR /app
 
 # Сначала копируем список библиотек и устанавливаем их
-COPY requirements.txt .
+COPY qa-tools/requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
 # Устанавливаем Chromium и все его системные зависимости (шрифты, графику)
@@ -16,7 +16,7 @@ RUN playwright install chromium
 RUN playwright install-deps chromium
 
 # Копируем все остальные файлы проекта (наши питон скрипты)
-COPY . .
+COPY qa-tools/ .
 
 # Команда запуска Streamlit. 
 # $PORT — это переменная, которую Railway выдает автоматически.
