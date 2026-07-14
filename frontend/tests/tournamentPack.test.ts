@@ -9,6 +9,9 @@ import {
   packCounts,
   exportableIds,
   replacePackImage,
+  visibleGenerations,
+  batchCategoryLabel,
+  prettifyCategoryKey,
   useTournamentPack,
   type PackBatch,
   type PackGeneration,
@@ -96,25 +99,59 @@ describe("groupPack — the flat ZIP layout ({Brand}/{Element}_N.png)", () => {
 });
 
 describe("packCounts / exportableIds / batchStatusLabel", () => {
-  it("counts only DONE images with a stored URL as exportable", () => {
+  it("failed rows are excluded from the total ('7 of 7', not '7 of 8')", () => {
     const batch: PackBatch = {
       id: "b1",
       status: "PARTIAL_FAILURE",
       createdAt: "2026-07-08T10:00:00Z",
       generations: [
         gen(),
-        gen({ status: "FAILED", generatedImageUrl: null }),
+        gen({ status: "FAILED", generatedImageUrl: null }), // hidden entirely
         gen({ status: "DONE", generatedImageUrl: null }), // stored URL missing
       ],
     };
-    expect(packCounts(batch)).toEqual({ done: 1, total: 3 });
+    expect(packCounts(batch)).toEqual({ done: 1, total: 2 });
     expect(exportableIds([batch])).toEqual([batch.generations[0]!.id]);
   });
 
-  it("maps batch statuses to RU labels", () => {
+  it("visibleGenerations drops failed/cancelled rows, keeps pending ones", () => {
+    const ok = gen();
+    const pending = gen({ status: "PROCESSING", generatedImageUrl: null });
+    const failed = gen({ status: "FAILED", generatedImageUrl: null });
+    const cancelled = gen({ status: "CANCELLED", generatedImageUrl: null });
+    expect(visibleGenerations([ok, failed, pending, cancelled])).toEqual([ok, pending]);
+  });
+
+  it("maps batch statuses to RU labels; PARTIAL_FAILURE reads as Готово (fails hidden)", () => {
     expect(batchStatusLabel("IN_PROGRESS")).toBe("Генерация…");
-    expect(batchStatusLabel("PARTIAL_FAILURE")).toBe("Готово частично");
+    expect(batchStatusLabel("PARTIAL_FAILURE")).toBe("Готово");
     expect(batchStatusLabel("SOMETHING_NEW")).toBe("SOMETHING_NEW"); // graceful fallback
+  });
+});
+
+describe("batchCategoryLabel — the batch header title", () => {
+  it("prettifies the rows' category key ('what was generated')", () => {
+    const batch: PackBatch = {
+      id: "b1",
+      status: "COMPLETED",
+      createdAt: "2026-07-13T16:22:00Z",
+      generations: [gen({ tourCategoryKey: "tournament" }), gen({ tourCategoryKey: "tournament" })],
+    };
+    expect(batchCategoryLabel(batch)).toBe("Tournament");
+  });
+
+  it("handles multi-word keys, mixed batches and missing keys", () => {
+    expect(prettifyCategoryKey("calendar_vip")).toBe("Calendar VIP");
+    expect(prettifyCategoryKey("lotterie")).toBe("Lotterie");
+    const mixed: PackBatch = {
+      id: "b1",
+      status: "COMPLETED",
+      createdAt: "2026-07-13T16:22:00Z",
+      generations: [gen({ tourCategoryKey: "lotterie" }), gen({ tourCategoryKey: "provider" })],
+    };
+    expect(batchCategoryLabel(mixed)).toBe("Lotterie + Provider");
+    const legacy: PackBatch = { ...mixed, generations: [gen({ tourCategoryKey: null })] };
+    expect(batchCategoryLabel(legacy)).toBe("Tournament"); // graceful fallback
   });
 });
 

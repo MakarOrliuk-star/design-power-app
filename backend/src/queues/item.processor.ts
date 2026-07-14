@@ -1,6 +1,7 @@
 import { prisma } from "../lib/prisma.js";
-import { buildItemPrompt } from "../services/prompts.js";
+import { buildItemPrompt, getPersonSystemPrompt } from "../services/prompts.js";
 import { buildPersonPromptMemoized } from "./person.processor.js";
+import { buildPersonPrompt } from "../lib/nanogpt.js";
 import { runPersonFal, runSeedvrUpscale } from "../lib/fal.js";
 import { uploadFromUrl, withRetry } from "../lib/cloudinary.js";
 import { finalizeSuccess, finalizeFailure } from "../services/finalize.js";
@@ -62,7 +63,32 @@ export async function processItemJob(generationId: string, aspectRatio = "1:1"):
     finalPrompt = await buildItemPrompt(gen.brandName, gen.description ?? "");
   }
 
-  const fal = await runPersonFal(finalPrompt, gen.referenceImages, aspectRatio, brand?.imageModel ?? null);
+  let fal = await runPersonFal(finalPrompt, gen.referenceImages, aspectRatio, brand?.imageModel ?? null);
+
+  // Tournament rows get ONE automatic in-place retry (заказчик: fal's content
+  // checker occasionally flags a prompt — 422 content_policy). The prompt-writer
+  // is non-deterministic, so rebuild the final prompt BYPASSING the batch memo:
+  // a fresh wording usually passes the check the first one tripped. A second
+  // failure finalizes as FAILED — the pack tab hides such rows entirely.
+  if ((!fal.success || !fal.imageUrl) && gen.actionType === "TOURNAMENT" && !gen.isEdit) {
+    console.warn(
+      `⚠️ fal failed for tournament ${generationId} (${fal.error ?? "unknown"}) — retrying once with a fresh prompt`,
+    );
+    await prisma.generation.update({
+      where: { id: generationId },
+      data: { statusMessage: "🔁 Retrying" },
+    });
+    try {
+      const system = await getPersonSystemPrompt(gen.brandName);
+      const rebuilt = await buildPersonPrompt(system, (gen.description ?? "").trim());
+      const style = (brand?.nanoRef?.stylePrompt ?? "").trim();
+      finalPrompt = style ? `${rebuilt}\n${style}` : rebuilt;
+    } catch {
+      /* rebuild is best-effort — retry with the original prompt */
+    }
+    fal = await runPersonFal(finalPrompt, gen.referenceImages, aspectRatio, brand?.imageModel ?? null);
+  }
+
   if (!fal.success || !fal.imageUrl) {
     await prisma.job.update({ where: { id: jobId }, data: { status: "FAILED" } });
     await finalizeFailure(generationId, `fal: ${fal.error ?? "unknown"}`);
