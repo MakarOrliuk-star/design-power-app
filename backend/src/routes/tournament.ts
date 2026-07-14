@@ -280,6 +280,20 @@ export function trailingIndexOf(fileName: string): string {
   return m ? m[1]! : "1";
 }
 
+/**
+ * "Spinogambino(Men)" -> { base: "Spinogambino", gender: "men" }. The (Men)/
+ * (Women) pair shares ONE brand folder in the ZIP; the gender moves to the
+ * file-name suffix instead. Mirrors the UI's stripGender rule.
+ */
+export function splitBrandGender(name: string): { base: string; gender: "" | "men" | "women" } {
+  const m = /\s*\((men|women)\)\s*$/i.exec(name);
+  if (!m) return { base: name.trim(), gender: "" };
+  return {
+    base: name.slice(0, m.index).trim(),
+    gender: m[1]!.toLowerCase() as "men" | "women",
+  };
+}
+
 /** Collision-free archive path: appends "-2", "-3"... before the extension. */
 export function uniqueEntryPath(used: Set<string>, path: string): string {
   if (!used.has(path)) {
@@ -367,22 +381,23 @@ tournamentRouter.get("/export.zip", async (req: Request, res: Response) => {
   });
   archive.pipe(res);
 
-  // Folder layout (revised 2026-07-10, flat): {Brand}/{Element}_N.png — brand
-  // folders right at the archive root, each holding that brand's images named
-  // by element + per-brand index. Old rows work too (element/brand are
-  // denormalized on Generation). Brands with no images never appear.
+  // Folder layout (revised 2026-07-10, flat): {Brand}/{Element}_N[_gender].png —
+  // brand folders right at the archive root; the (Men)/(Women) variants share
+  // one folder, the gender becomes a file-name suffix ("Tournament_1_1_women").
+  // Old rows work too (element/brand are denormalized on Generation).
   const used = new Set<string>();
   for (const r of rows) {
     const fileName = r.tourFileName!;
     const element = sanitizeName(r.tourElementName ?? "") || packFolderOf(fileName);
-    const brand = sanitizeName(r.brandName) || "Unknown";
+    const { base, gender } = splitBrandGender(r.brandName);
+    const brand = sanitizeName(base) || "Unknown";
     try {
       const resp = await fetch(toPngUrl(r.generatedImageUrl!));
       if (!resp.ok) continue;
       const buf = Buffer.from(await resp.arrayBuffer());
       const path = uniqueEntryPath(
         used,
-        `${brand}/${element}_${trailingIndexOf(fileName)}.png`,
+        `${brand}/${element}_${trailingIndexOf(fileName)}${gender ? `_${gender}` : ""}.png`,
       );
       archive.append(buf, { name: path });
     } catch (err) {

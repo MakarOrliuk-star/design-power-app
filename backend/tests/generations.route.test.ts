@@ -126,6 +126,31 @@ describe("GET /api/generations — tab filters", () => {
     expect(where.status).toBe("DONE");
   });
 
+  it("tournament → only TOURNAMENT rows (Archive's Tournament Pack tab)", async () => {
+    await request(makeApp()).get("/api/generations?tab=tournament");
+    const where = lastWhere();
+    expect(where.actionType).toBe("TOURNAMENT");
+    expect(where.userId).toBe("user1");
+    expect(where.status).toBe("DONE");
+    // The standard Archive filters still apply on this tab.
+    expect(where.createdAt?.gte).toBeInstanceOf(Date);
+  });
+
+  it("generated (default) still EXCLUDES tournament rows", async () => {
+    await request(makeApp()).get("/api/generations");
+    expect(lastWhere().actionType).toEqual({ not: "TOURNAMENT" });
+  });
+
+  it("tournament rows map to contentType 'Tournament' and expose tourFileName", async () => {
+    db.count.mockResolvedValue(1);
+    db.findMany.mockResolvedValue([
+      row({ id: "g9", actionType: "TOURNAMENT", tourFileName: "Bonuskong_Tournament_1_2" }),
+    ]);
+    const res = await request(makeApp()).get("/api/generations?tab=tournament");
+    expect(res.body.images[0].contentType).toBe("Tournament");
+    expect(res.body.images[0].tourFileName).toBe("Bonuskong_Tournament_1_2");
+  });
+
   it("rejects an unknown tab with 400", async () => {
     const res = await request(makeApp()).get("/api/generations?tab=bogus");
     expect(res.status).toBe(400);

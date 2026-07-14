@@ -107,6 +107,16 @@ export function addBrandCapped(selected: string[], id: string, cap = MAX_TOURNAM
   return [...selected, id];
 }
 
+/**
+ * EVERY selection key a category can produce: both Base and VIP for a moded
+ * category (regardless of which mode its toggle currently shows), the fixed
+ * mode otherwise. This is the "Select all" / "X of Y" universe.
+ */
+export function allCategoryKeys(cat: TourCategory): string[] {
+  const modes: TourMode[] = cat.hasModes ? ["BASE", "VIP"] : [cat.fixedMode ?? "BASE"];
+  return modes.flatMap((m) => cat.elements.map((e) => selectionKey(e.id, m)));
+}
+
 export const useTournamentStore = defineStore("tournament", () => {
   const categories = ref<TourCategory[]>([]);
   const loaded = ref(false);
@@ -140,9 +150,10 @@ export const useTournamentStore = defineStore("tournament", () => {
       // Default every moded category to Base (the mock's initial state).
       for (const c of res.categories)
         if (c.hasModes && !modeByCategory.value[c.key]) modeByCategory.value[c.key] = "BASE";
-      // Drop checked keys whose element no longer exists (admin removed it).
-      const known = new Set(res.categories.flatMap((c) => c.elements.map((e) => e.id)));
-      checkedKeys.value = checkedKeys.value.filter((k) => known.has(parseSelectionKey(k).elementId));
+      // Drop checked keys that are no longer selectable — element removed by
+      // the admin OR a mode the category can't produce (keeps "X of Y" honest).
+      const valid = new Set(res.categories.flatMap(allCategoryKeys));
+      checkedKeys.value = checkedKeys.value.filter((k) => valid.has(k));
       loaded.value = true;
     } catch {
       loadError.value = "Не удалось загрузить конфигурацию турниров.";
@@ -189,10 +200,23 @@ export const useTournamentStore = defineStore("tournament", () => {
     checkedKeys.value = toggleCategoryIds(categoryKeys(cat), checkedKeys.value);
   }
 
-  /** Header "Select all": every element of every category in its current mode. */
+  // ---- Select all / Clean all + the "X / Y" indicator ----
+  // The universe is EVERY producible key (Base AND VIP of moded categories,
+  // toggles ignored). Counters intersect with it so stale keys never skew "X".
+  const allSelectableKeys = computed(() => new Set(categories.value.flatMap(allCategoryKeys)));
+  const totalSelectableCount = computed(() => allSelectableKeys.value.size);
+  const selectedCount = computed(
+    () => checkedKeys.value.filter((k) => allSelectableKeys.value.has(k)).length,
+  );
+  const allChecked = computed(
+    () => totalSelectableCount.value > 0 && selectedCount.value === totalSelectableCount.value,
+  );
+
+  /** Header "Select all": every element of every category, Base AND VIP. */
   function selectAll() {
-    checkedKeys.value = categories.value.flatMap((c) => categoryKeys(c));
+    checkedKeys.value = categories.value.flatMap(allCategoryKeys);
   }
+  /** Header "Clean all": drops every element checkbox (brands/count untouched). */
   function clearSelection() {
     checkedKeys.value = [];
   }
@@ -328,6 +352,9 @@ export const useTournamentStore = defineStore("tournament", () => {
     statusError,
     brandLimitReached,
     canGenerate,
+    totalSelectableCount,
+    selectedCount,
+    allChecked,
     load,
     addBrand,
     removeBrand,

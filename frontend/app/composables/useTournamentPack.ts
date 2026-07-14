@@ -6,6 +6,13 @@
  * exported helpers, `api`/`apiBase`/`download`/`gen` are injected for tests.
  */
 import { ref, computed, watch, onMounted, onBeforeUnmount } from "vue";
+import {
+  bustCache,
+  mapScaleError,
+  type Pad,
+  type Placement,
+  type InpaintPayload,
+} from "./useResult";
 
 export type PackMode = "BASE" | "VIP";
 
@@ -74,27 +81,42 @@ export function trailingIndexOf(fileName: string): string {
   return m ? m[1]! : "1";
 }
 
+/**
+ * "Spinogambino(Men)" -> { base: "Spinogambino", gender: "men" }: the ZIP keeps
+ * ONE folder per brand pair, the gender moves to the file-name suffix. Mirrors
+ * the backend splitBrandGender / the gallery's stripGender.
+ */
+export function splitBrandGender(name: string): { base: string; gender: "" | "men" | "women" } {
+  const m = /\s*\((men|women)\)\s*$/i.exec(name);
+  if (!m) return { base: name.trim(), gender: "" };
+  return {
+    base: name.slice(0, m.index).trim(),
+    gender: m[1]!.toLowerCase() as "men" | "women",
+  };
+}
+
 /** The element part of a row's ZIP path ("Tournament_1"), robust to old rows. */
 function elementFolderOf(g: PackGeneration): string {
   return sanitizeName(g.tourElementName ?? "") || (g.tourFileName ? packFolderOf(g.tourFileName) : "");
 }
 
-/** The file name inside the ZIP brand folder: "Tournament_1_2" (element + index). */
+/** File name inside the ZIP brand folder: "Tournament_1_2[_women]" (element + index + gender). */
 export function packDisplayName(g: PackGeneration): string {
   if (!g.tourFileName) return "";
-  return `${elementFolderOf(g)}_${trailingIndexOf(g.tourFileName)}`;
+  const { gender } = splitBrandGender(g.brandName);
+  return `${elementFolderOf(g)}_${trailingIndexOf(g.tourFileName)}${gender ? `_${gender}` : ""}`;
 }
 
 /**
  * Group a batch's generations by BRAND — the ZIP layout is flat
- * {Brand}/{Element}_N.png, so the tab shows one brand folder per group,
- * in order of first appearance.
+ * {Brand}/{Element}_N[_gender].png, so the tab shows one brand folder per
+ * group (the (Men)/(Women) pair merges into one), in first-appearance order.
  */
 export function groupPack(generations: PackGeneration[]): PackGroup[] {
   const map = new Map<string, PackGroup>();
   for (const g of generations) {
     if (!g.tourFileName) continue;
-    const title = sanitizeName(g.brandName) || "Unknown";
+    const title = sanitizeName(splitBrandGender(g.brandName).base) || "Unknown";
     let group = map.get(title);
     if (!group) {
       group = { key: title, categoryKey: g.tourCategoryKey ?? "tournament", title, images: [] };
@@ -105,15 +127,19 @@ export function groupPack(generations: PackGeneration[]): PackGroup[] {
   return [...map.values()];
 }
 
-/** Human batch status (RU, matching the app's tone). */
+/**
+ * Human batch status (RU, matching the app's tone). PARTIAL_FAILURE reads as
+ * "Готово" — failed rows are hidden from the tab and excluded from the
+ * counters (заказчик: content-checker fails must be invisible), so to the
+ * user the batch IS complete.
+ */
 export function batchStatusLabel(status: string): string {
   switch (status) {
     case "IN_PROGRESS":
       return "Генерация…";
     case "COMPLETED":
-      return "Готово";
     case "PARTIAL_FAILURE":
-      return "Готово частично";
+      return "Готово";
     case "FAILED":
       return "Ошибка";
     case "CANCELLED":
@@ -123,16 +149,67 @@ export function batchStatusLabel(status: string): string {
   }
 }
 
-/** Done/total counters for a batch header ("7 of 8"). */
+/** Rows the tab shows: failed/cancelled ones are hidden entirely. */
+export function visibleGenerations(generations: PackGeneration[]): PackGeneration[] {
+  return generations.filter((g) => g.status !== "FAILED" && g.status !== "CANCELLED");
+}
+
+/**
+ * Done/total counters for a batch header. Failed/cancelled rows don't count
+ * toward the total — a batch with one hidden failure reads "7 of 7", not
+ * "7 of 8" (they were retried once by the worker before being hidden).
+ */
 export function packCounts(batch: PackBatch): { done: number; total: number } {
-  const done = batch.generations.filter((g) => g.status === "DONE" && g.generatedImageUrl).length;
-  return { done, total: batch.generations.length };
+  const visible = visibleGenerations(batch.generations);
+  const done = visible.filter((g) => g.status === "DONE" && g.generatedImageUrl).length;
+  return { done, total: visible.length };
+}
+
+/** "tournament" / "calendar_vip" -> "Tournament" / "Calendar VIP". */
+export function prettifyCategoryKey(key: string): string {
+  return key
+    .split("_")
+    .filter(Boolean)
+    .map((w) => (w === "vip" ? "VIP" : w.charAt(0).toUpperCase() + w.slice(1)))
+    .join(" ");
+}
+
+/**
+ * Batch header title — what the batch generated (заказчик: "Tournament",
+ * "Lotterie"…), derived from the rows' denormalized category keys. Batches are
+ * created one per category, but distinct keys are joined just in case.
+ */
+export function batchCategoryLabel(batch: PackBatch): string {
+  const keys = [...new Set(batch.generations.map((g) => g.tourCategoryKey).filter(Boolean))];
+  return keys.map((k) => prettifyCategoryKey(k!)).join(" + ") || "Tournament";
 }
 
 /** Ids that CAN be exported (DONE with a stored image). */
 export function exportableIds(batches: PackBatch[]): string[] {
   return batches.flatMap((b) =>
     b.generations.filter((g) => g.status === "DONE" && g.generatedImageUrl).map((g) => g.id),
+  );
+}
+
+/**
+ * Swap one generation's image URL in place (after a successful Scale/Inpaint —
+ * the backend already overwrote the stored image, so the next ZIP export picks
+ * the edited version up automatically). Untouched batches keep their identity.
+ */
+export function replacePackImage(
+  batches: PackBatch[],
+  generationId: string,
+  url: string,
+): PackBatch[] {
+  return batches.map((b) =>
+    b.generations.some((g) => g.id === generationId)
+      ? {
+          ...b,
+          generations: b.generations.map((g) =>
+            g.id === generationId ? { ...g, generatedImageUrl: url } : g,
+          ),
+        }
+      : b,
   );
 }
 
@@ -252,6 +329,95 @@ export function useTournamentPack(deps: PackDeps) {
     }
   }
 
+  // ---- Scale/Inpaint editor (задача 3: same pipeline as the Person reference) ----
+  // One image at a time: a card's "Редактировать" button sets the target and the
+  // host opens ScalePanel's modal (trigger="external"). POST /generate/scale и
+  // /generate/inpaint не фильтруют actionType, so tournament rows work as-is;
+  // the result REPLACES the stored image (and thus the next ZIP export).
+  const scaleTargetId = ref<string | null>(null);
+  const scaling = ref(false);
+  const scaleError = ref("");
+  const scaleMsg = ref("");
+
+  /** The live row for the target id (survives polling refreshes of `batches`). */
+  const scaleImage = computed(() => {
+    if (!scaleTargetId.value) return null;
+    for (const b of batches.value)
+      for (const g of b.generations)
+        if (g.id === scaleTargetId.value && g.status === "DONE" && g.generatedImageUrl)
+          return { id: g.id, generatedImageUrl: g.generatedImageUrl, brandName: g.brandName };
+    return null;
+  });
+
+  function setScaleTarget(id: string | null) {
+    scaleTargetId.value = id;
+    scaleError.value = "";
+    scaleMsg.value = "";
+  }
+
+  /** Swap the edited image's URL in place (cache-busted, mirrors useResult). */
+  function applyReplacement(res: { generationId: string; generatedImageUrl: string }) {
+    batches.value = replacePackImage(batches.value, res.generationId, bustCache(res.generatedImageUrl));
+  }
+
+  async function runScale(payload: { pad?: Pad; placement?: Placement; prompt?: string }) {
+    const target = scaleImage.value;
+    if (!target || scaling.value) return;
+    scaleError.value = "";
+    scaleMsg.value = "";
+    scaling.value = true;
+    try {
+      const prompt = payload.prompt?.trim();
+      const res = await api<{ generationId: string; generatedImageUrl: string }>(
+        "/api/generate/scale",
+        {
+          method: "POST",
+          body: {
+            generationId: target.id,
+            ...(payload.pad ? { pad: payload.pad } : {}),
+            ...(payload.placement ? { placement: payload.placement } : {}),
+            ...(prompt ? { prompt } : {}),
+          },
+        },
+      );
+      applyReplacement(res);
+      scaleMsg.value = "Готово! Изображение расширено и улучшено.";
+    } catch (e: unknown) {
+      scaleError.value = mapScaleError((e as { data?: { error?: string } })?.data?.error);
+    } finally {
+      scaling.value = false;
+    }
+  }
+
+  async function runInpaint(payload: InpaintPayload) {
+    const target = scaleImage.value;
+    if (!target || scaling.value) return;
+    scaleError.value = "";
+    scaleMsg.value = "";
+    scaling.value = true;
+    try {
+      const prompt = payload.prompt?.trim();
+      const res = await api<{ generationId: string; generatedImageUrl: string }>(
+        "/api/generate/inpaint",
+        {
+          method: "POST",
+          body: {
+            generationId: target.id,
+            maskDataUrl: payload.maskDataUrl,
+            mode: payload.mode,
+            ...(prompt ? { prompt } : {}),
+          },
+        },
+      );
+      applyReplacement(res);
+      scaleMsg.value = payload.mode === "erase" ? "Готово! Объект удалён." : "Готово! Область дорисована.";
+    } catch (e: unknown) {
+      scaleError.value = mapScaleError((e as { data?: { error?: string } })?.data?.error);
+    } finally {
+      scaling.value = false;
+    }
+  }
+
   // ---- ZIP export (a NEW DES number is issued on every download) ----
   const exporting = ref(false);
   function trigger(qs: string) {
@@ -328,6 +494,13 @@ export function useTournamentPack(deps: PackDeps) {
     editing,
     editError,
     runEdit,
+    scaleImage,
+    setScaleTarget,
+    scaling,
+    scaleError,
+    scaleMsg,
+    runScale,
+    runInpaint,
     exporting,
     exportBatch,
     exportSelected,

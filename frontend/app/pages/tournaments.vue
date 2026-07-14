@@ -31,7 +31,21 @@ function bumpCount(delta: number) {
         <TournamentBrandSearchBar class="top__picker" />
 
         <div class="top__actions">
-          <button class="selectall" type="button" @click="tour.selectAll()">Select all</button>
+          <button
+            class="selectall"
+            type="button"
+            :disabled="tour.allChecked"
+            @click="tour.selectAll()"
+          >Select all</button>
+          <button
+            class="selectall"
+            type="button"
+            :disabled="!tour.selectedCount"
+            @click="tour.clearSelection()"
+          >Clean all</button>
+          <span class="selcount" :title="'Выбрано элементов (Base + VIP)'">
+            {{ tour.selectedCount }} / {{ tour.totalSelectableCount }}
+          </span>
 
           <div class="stepper">
             <button
@@ -139,8 +153,20 @@ function bumpCount(delta: number) {
   color: var(--color-text);
   padding: 8px 4px;
 }
-.selectall:hover {
+.selectall:hover:not(:disabled) {
   color: var(--color-accent);
+}
+.selectall:disabled {
+  color: var(--color-grey);
+  cursor: default;
+}
+
+/* "selected X of Y" indicator next to Select/Clean all */
+.selcount {
+  font-size: var(--fs-tab);
+  font-weight: 600;
+  color: var(--color-grey);
+  white-space: nowrap;
 }
 
 /* count stepper (mock: white card 38px with − / value / +) */
@@ -229,6 +255,14 @@ function bumpCount(delta: number) {
   grid-auto-rows: minmax(340px, 1fr);
   gap: var(--space-20);
   overflow-y: auto;
+}
+/* thin scrollbar, same as the Result Generated lane */
+.cols::-webkit-scrollbar {
+  width: 8px;
+}
+.cols::-webkit-scrollbar-thumb {
+  background: var(--color-border);
+  border-radius: var(--radius-pill);
 }
 
 @media (max-width: 1200px) {

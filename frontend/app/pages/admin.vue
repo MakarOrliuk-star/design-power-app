@@ -284,6 +284,38 @@ async function saveItemPrompt(p: ItemPrompt) {
   }
 }
 
+// ---- Create Item style: new PromptTemplate(ITEM) key => появляется в пикере Home ----
+const newItemKey = ref("");
+const newItemContent = ref("");
+const creatingItem = ref(false);
+const newItemMsg = ref("");
+
+async function createItemStyle() {
+  const key = newItemKey.value.trim();
+  if (!key) return;
+  // PUT /prompt — это upsert: без проверки молча перезаписали бы существующий стиль.
+  if (itemPrompts.value.some((p) => p.key.toLowerCase() === key.toLowerCase())) {
+    newItemMsg.value = "Стиль с таким именем уже существует.";
+    return;
+  }
+  creatingItem.value = true;
+  newItemMsg.value = "";
+  try {
+    await api("/api/admin/prompt", {
+      method: "PUT",
+      body: { type: "ITEM", key, content: newItemContent.value },
+    });
+    newItemMsg.value = "Стиль создан ✓";
+    newItemKey.value = "";
+    newItemContent.value = "";
+    await loadCatalog();
+  } catch {
+    newItemMsg.value = "Не удалось создать стиль.";
+  } finally {
+    creatingItem.value = false;
+  }
+}
+
 // ---- Smartico brands (Unique-Image-Smartico maintenance) ----
 interface SmarticoBrand {
   id: string;
@@ -836,6 +868,35 @@ onMounted(() => {
     <!-- Item style prompts -->
     <section v-if="auth.isAdmin" class="panel">
       <h2>Промпты Item-стилей</h2>
+
+      <form class="create-brand" @submit.prevent="createItemStyle">
+        <div class="field">
+          <label class="field__label">Новый Item-стиль</label>
+          <input
+            v-model="newItemKey"
+            class="field__input"
+            type="text"
+            placeholder="Название стиля (напр. Neon)"
+            required
+          />
+        </div>
+        <div class="field">
+          <label class="field__label">Промпт стиля</label>
+          <textarea
+            v-model="newItemContent"
+            class="prompt"
+            rows="3"
+            placeholder="Обёртка стиля; {{prompt}} = текст пользователя (иначе он добавится в конец)"
+          />
+        </div>
+        <div class="create-brand__foot">
+          <span v-if="newItemMsg" class="create-brand__msg">{{ newItemMsg }}</span>
+          <button type="submit" class="btn-primary" :disabled="creatingItem || !newItemKey.trim()">
+            {{ creatingItem ? "Создание…" : "Создать стиль" }}
+          </button>
+        </div>
+      </form>
+
       <div v-for="p in itemPrompts" :key="p.key" class="item-prompt">
         <div class="brand-card__head">
           <span class="brand-card__name">{{ p.key }}</span>
@@ -867,6 +928,12 @@ onMounted(() => {
           <span class="badge badge--off" v-text="'{{prompt}} = промпт элемента'" />
           <span v-if="tourMsg.system" class="brand-card__msg">{{ tourMsg.system }}</span>
         </div>
+        <p class="muted small">
+          Необязательная текстовая добавка к промпту элемента. Финальный промпт
+          пишет prompt writer бренда (PERSON-промпт, как в Person-генерации):
+          система = промпт бренда, юзер = промпт элемента; стиль бренда
+          добавляется в конец. Пусто = промпт элемента уходит prompt writer'у как есть.
+        </p>
         <textarea v-model="tourSystemPrompt" class="prompt" rows="3" />
         <div class="brand-card__foot">
           <button class="btn-primary" @click="saveTourSystemPrompt">Сохранить</button>

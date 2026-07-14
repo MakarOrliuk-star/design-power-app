@@ -36,7 +36,7 @@ export async function processPersonJob(generationId: string, aspectRatio = "1:1"
   });
 
   const userText = gen.description ?? "";
-  const builtPrompt = await buildPromptMemoized(gen.batchId ?? "", gen.brandName, userText);
+  const builtPrompt = await buildPersonPromptMemoized(gen.batchId ?? "", gen.brandName, userText);
   // ADDENDUM §7: two refs are blended via the PROMPT (nano-banana-2/edit has no
   // strength/controlnet weights). First image = brand style ref; the rest = the
   // user-uploaded image.
@@ -74,7 +74,13 @@ function withBlendingHint(prompt: string, imageCount: number): string {
   return `${prompt} Use the first reference image for the brand style, wardrobe and overall look; take the subject identity and pose from the additional reference image. Blend them into one coherent result.`;
 }
 
-async function buildPromptMemoized(
+/**
+ * system = brand's PERSON prompt (or the global default), user = the text —
+ * nano-gpt writes the final image prompt, memoized per batch+brand+text.
+ * Shared with the item worker's TOURNAMENT branch, which reuses the Person
+ * prompt-writer for tournament element prompts.
+ */
+export async function buildPersonPromptMemoized(
   batchId: string,
   brandName: string,
   userText: string,
