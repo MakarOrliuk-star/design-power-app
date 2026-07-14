@@ -127,15 +127,19 @@ export function groupPack(generations: PackGeneration[]): PackGroup[] {
   return [...map.values()];
 }
 
-/** Human batch status (RU, matching the app's tone). */
+/**
+ * Human batch status (RU, matching the app's tone). PARTIAL_FAILURE reads as
+ * "Готово" — failed rows are hidden from the tab and excluded from the
+ * counters (заказчик: content-checker fails must be invisible), so to the
+ * user the batch IS complete.
+ */
 export function batchStatusLabel(status: string): string {
   switch (status) {
     case "IN_PROGRESS":
       return "Генерация…";
     case "COMPLETED":
-      return "Готово";
     case "PARTIAL_FAILURE":
-      return "Готово частично";
+      return "Готово";
     case "FAILED":
       return "Ошибка";
     case "CANCELLED":
@@ -145,10 +149,39 @@ export function batchStatusLabel(status: string): string {
   }
 }
 
-/** Done/total counters for a batch header ("7 of 8"). */
+/** Rows the tab shows: failed/cancelled ones are hidden entirely. */
+export function visibleGenerations(generations: PackGeneration[]): PackGeneration[] {
+  return generations.filter((g) => g.status !== "FAILED" && g.status !== "CANCELLED");
+}
+
+/**
+ * Done/total counters for a batch header. Failed/cancelled rows don't count
+ * toward the total — a batch with one hidden failure reads "7 of 7", not
+ * "7 of 8" (they were retried once by the worker before being hidden).
+ */
 export function packCounts(batch: PackBatch): { done: number; total: number } {
-  const done = batch.generations.filter((g) => g.status === "DONE" && g.generatedImageUrl).length;
-  return { done, total: batch.generations.length };
+  const visible = visibleGenerations(batch.generations);
+  const done = visible.filter((g) => g.status === "DONE" && g.generatedImageUrl).length;
+  return { done, total: visible.length };
+}
+
+/** "tournament" / "calendar_vip" -> "Tournament" / "Calendar VIP". */
+export function prettifyCategoryKey(key: string): string {
+  return key
+    .split("_")
+    .filter(Boolean)
+    .map((w) => (w === "vip" ? "VIP" : w.charAt(0).toUpperCase() + w.slice(1)))
+    .join(" ");
+}
+
+/**
+ * Batch header title — what the batch generated (заказчик: "Tournament",
+ * "Lotterie"…), derived from the rows' denormalized category keys. Batches are
+ * created one per category, but distinct keys are joined just in case.
+ */
+export function batchCategoryLabel(batch: PackBatch): string {
+  const keys = [...new Set(batch.generations.map((g) => g.tourCategoryKey).filter(Boolean))];
+  return keys.map((k) => prettifyCategoryKey(k!)).join(" + ") || "Tournament";
 }
 
 /** Ids that CAN be exported (DONE with a stored image). */

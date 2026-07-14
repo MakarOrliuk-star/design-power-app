@@ -256,6 +256,14 @@ function bumpCount(delta: number) {
   gap: var(--space-20);
   overflow-y: auto;
 }
+/* thin scrollbar, same as the Result Generated lane */
+.cols::-webkit-scrollbar {
+  width: 8px;
+}
+.cols::-webkit-scrollbar-thumb {
+  background: var(--color-border);
+  border-radius: var(--radius-pill);
+}
 
 @media (max-width: 1200px) {
   .cols {

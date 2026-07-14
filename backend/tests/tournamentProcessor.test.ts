@@ -19,6 +19,9 @@ const fin = vi.hoisted(() => ({
 const pp = vi.hoisted(() => ({
   buildPersonPromptMemoized: vi.fn(),
 }));
+const ng = vi.hoisted(() => ({
+  buildPersonPrompt: vi.fn(),
+}));
 
 vi.mock("../src/env.js", () => ({
   personPipelineReady: true,
@@ -53,6 +56,11 @@ vi.mock("../src/services/finalize.js", () => ({
 vi.mock("../src/queues/person.processor.js", () => ({
   buildPersonPromptMemoized: pp.buildPersonPromptMemoized,
 }));
+// The retry path rebuilds the prompt bypassing the memo — mock the raw
+// nano-gpt writer so no HTTP is touched.
+vi.mock("../src/lib/nanogpt.js", () => ({
+  buildPersonPrompt: ng.buildPersonPrompt,
+}));
 
 import { processItemJob } from "../src/queues/item.processor.js";
 
@@ -74,6 +82,8 @@ beforeEach(() => {
   for (const fn of Object.values(fal)) fn.mockReset();
   for (const fn of Object.values(fin)) fn.mockReset();
   pp.buildPersonPromptMemoized.mockReset();
+  ng.buildPersonPrompt.mockReset();
+  ng.buildPersonPrompt.mockResolvedValue("FRESH[base prompt]");
   db.generationUpdate.mockResolvedValue({});
   db.jobUpdate.mockResolvedValue({});
   db.brandFindUnique.mockResolvedValue({
@@ -139,6 +149,53 @@ describe("processItemJob — TOURNAMENT branch", () => {
       "1:1",
       null,
     );
+  });
+
+  it("retries ONCE with a freshly-rebuilt prompt when fal fails (content checker)", async () => {
+    db.generationFindUnique.mockResolvedValue(genRow());
+    db.promptTemplateFindFirst.mockResolvedValue(null); // system prompt → default
+    fal.runPersonFal
+      .mockResolvedValueOnce({ success: false, error: "HTTP 422: content_policy" })
+      .mockResolvedValueOnce({ success: true, imageUrl: "https://fal/out2.png" });
+
+    await processItemJob("gen1", "9:16");
+
+    expect(fal.runPersonFal).toHaveBeenCalledTimes(2);
+    // The retry bypasses the memoized prompt: fresh nano-gpt output + style.
+    expect(ng.buildPersonPrompt).toHaveBeenCalledTimes(1);
+    expect(fal.runPersonFal).toHaveBeenLastCalledWith(
+      "FRESH[base prompt]\nkong style",
+      expect.any(Array),
+      "9:16",
+      null,
+    );
+    expect(fin.finalizeSuccess).toHaveBeenCalledWith("gen1", "https://cdn/stored.png");
+    expect(fin.finalizeFailure).not.toHaveBeenCalled();
+  });
+
+  it("a second failure finalizes as FAILED (the tab hides such rows)", async () => {
+    db.generationFindUnique.mockResolvedValue(genRow());
+    db.promptTemplateFindFirst.mockResolvedValue(null);
+    fal.runPersonFal.mockResolvedValue({ success: false, error: "HTTP 422: content_policy" });
+
+    await processItemJob("gen1", "9:16");
+
+    expect(fal.runPersonFal).toHaveBeenCalledTimes(2); // exactly one retry
+    expect(fin.finalizeFailure).toHaveBeenCalledWith("gen1", "fal: HTTP 422: content_policy");
+    expect(fin.finalizeSuccess).not.toHaveBeenCalled();
+  });
+
+  it("non-tournament rows do NOT retry (regression guard)", async () => {
+    db.generationFindUnique.mockResolvedValue(
+      genRow({ actionType: "CREATE_ITEM", description: "a sword" }),
+    );
+    db.promptTemplateFindFirst.mockResolvedValue(null);
+    fal.runPersonFal.mockResolvedValue({ success: false, error: "boom" });
+
+    await processItemJob("gen2");
+
+    expect(fal.runPersonFal).toHaveBeenCalledTimes(1);
+    expect(fin.finalizeFailure).toHaveBeenCalledWith("gen2", "fal: boom");
   });
 
   it("edit rows keep their upscale (regression guard)", async () => {

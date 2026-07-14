@@ -9,6 +9,8 @@ import {
   groupPack,
   packDisplayName,
   batchStatusLabel,
+  batchCategoryLabel,
+  visibleGenerations,
   packCounts,
   type PackApi,
 } from "~/composables/useTournamentPack";
@@ -79,7 +81,7 @@ function fmtDate(iso: string): string {
 const viewerId = ref<string | null>(null);
 const viewerItems = computed(() =>
   batches.value.flatMap((b) =>
-    groupPack(b.generations).flatMap((g) =>
+    groupPack(visibleGenerations(b.generations)).flatMap((g) =>
       g.images
         .filter((img) => img.status === "DONE" && !!img.generatedImageUrl)
         .map((img) => ({
@@ -169,6 +171,7 @@ const viewerItems = computed(() =>
             <path d="M2.5 6h7" stroke="#fff" stroke-width="1.8" stroke-linecap="round" />
           </svg>
         </button>
+        <span class="batch__cat">{{ batchCategoryLabel(b) }}</span>
         <span class="batch__date">{{ fmtDate(b.createdAt) }}</span>
         <span
           :class="['batch__status', {
@@ -191,7 +194,9 @@ const viewerItems = computed(() =>
         </button>
       </div>
 
-      <div v-for="g in groupPack(b.generations)" :key="g.key" class="group">
+      <!-- Failed rows are hidden (retried once by the worker; a second failure
+           drops the card and the counters read e.g. "7 of 7"). -->
+      <div v-for="g in groupPack(visibleGenerations(b.generations))" :key="g.key" class="group">
         <!-- brand folder at the ZIP root -->
         <div class="group__title">{{ g.title }}/</div>
         <div class="grid">
@@ -232,14 +237,18 @@ const viewerItems = computed(() =>
                 loading="lazy"
                 @click="viewerId = img.id"
               />
+              <!-- Archive-style pill with the ZIP file name (bottom, clear of the buttons) -->
+              <span class="card__label" :title="packDisplayName(img)">{{ packDisplayName(img) }}</span>
             </template>
             <div v-else class="card__pending">
               <span class="card__spinner" v-if="img.status === 'QUEUED' || img.status === 'PROCESSING'" />
-              <span :class="['card__status', { 'card__status--bad': img.status === 'FAILED' }]">
-                {{ img.statusMessage || img.status }}
-              </span>
+              <span class="card__status">{{ img.statusMessage || img.status }}</span>
             </div>
-            <span class="card__name" :title="packDisplayName(img)">{{ packDisplayName(img) }}</span>
+            <span
+              v-if="!(img.status === 'DONE' && img.generatedImageUrl)"
+              class="card__name"
+              :title="packDisplayName(img)"
+            >{{ packDisplayName(img) }}</span>
           </div>
         </div>
       </div>
@@ -277,6 +286,14 @@ const viewerItems = computed(() =>
   flex-direction: column;
   gap: var(--space-20);
   padding-right: 4px;
+}
+/* thin scrollbar, same as the Result Generated lane */
+.pack::-webkit-scrollbar {
+  width: 8px;
+}
+.pack::-webkit-scrollbar-thumb {
+  background: var(--color-border);
+  border-radius: var(--radius-pill);
 }
 
 /* selection / export bar */
@@ -416,9 +433,13 @@ const viewerItems = computed(() =>
   opacity: 0.45;
   cursor: default;
 }
-.batch__date {
+.batch__cat {
   font-size: var(--fs-user);
   font-weight: 700;
+}
+.batch__date {
+  font-size: var(--fs-tab);
+  color: var(--color-grey);
 }
 .batch__status {
   font-size: var(--fs-tag);
@@ -472,10 +493,16 @@ const viewerItems = computed(() =>
   font-size: var(--fs-tab);
   font-weight: 600;
 }
+/* 8 per row (заказчик: чуть крупнее, не 10 в строку) */
 .grid {
   display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(150px, 1fr));
+  grid-template-columns: repeat(8, minmax(0, 1fr));
   gap: 12px;
+}
+@media (max-width: 1400px) {
+  .grid {
+    grid-template-columns: repeat(6, minmax(0, 1fr));
+  }
 }
 
 /* image card */
@@ -542,6 +569,24 @@ const viewerItems = computed(() =>
 .card__edit:disabled {
   opacity: 0.5;
   cursor: default;
+}
+/* Archive-style file-name pill, at the bottom so the buttons stay clear */
+.card__label {
+  position: absolute;
+  bottom: 8px;
+  left: 8px;
+  z-index: 2;
+  max-width: calc(100% - 16px);
+  padding: 3px 10px;
+  border-radius: var(--radius-pill);
+  background: var(--color-white);
+  border: 1px solid var(--color-border);
+  font-size: 11px;
+  color: var(--color-text);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  pointer-events: none;
 }
 .card__pending {
   display: grid;

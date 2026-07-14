@@ -137,6 +137,14 @@ const modeLabel: Record<TourMode, string> = { BASE: "Base", VIP: "VIP" };
   background: var(--color-window);
   border: 1px solid var(--color-bubble);
 }
+/* thin scrollbar, same as the Result Generated lane */
+.col__body::-webkit-scrollbar {
+  width: 8px;
+}
+.col__body::-webkit-scrollbar-thumb {
+  background: var(--color-border);
+  border-radius: var(--radius-pill);
+}
 .col__empty {
   margin: 0;
   font-size: var(--fs-tab);
