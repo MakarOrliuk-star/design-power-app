@@ -15,9 +15,11 @@ import { getPrompt } from "./prompts.js";
  */
 
 export type TournamentMode = "BASE" | "VIP";
+export type TournamentAspect = "1:1" | "9:16";
 
 export const MAX_TOURNAMENT_BRANDS = 4;
 export const MAX_TOURNAMENT_COUNT = 4;
+export const DEFAULT_TOURNAMENT_ASPECT: TournamentAspect = "1:1";
 /** How many brand reference images are mixed into one request (Phase 0). */
 export const BRAND_REFS_PER_JOB = 2;
 
@@ -79,6 +81,8 @@ export interface CreateTournamentParams {
   brandIds: string[]; // 1..4 (route-validated; re-checked here)
   count: number; // images per brand x element, 1..4
   selections: TournamentSelection[];
+  /** Page-level 1:1 / 9:16 toggle; a brand's forcedAspectRatio still wins. */
+  aspect?: TournamentAspect;
 }
 
 export interface TournamentBatchInfo {
@@ -183,7 +187,7 @@ export async function createTournamentBatches(
     let batchCount = 0;
     for (const brand of brands) {
       const brandRefs = (brand.nanoRef?.referenceImages ?? []).slice(0, BRAND_REFS_PER_JOB);
-      const aspect = brand.forcedAspectRatio || "1:1";
+      const aspect = brand.forcedAspectRatio || p.aspect || DEFAULT_TOURNAMENT_ASPECT;
 
       for (const sel of sels) {
         // Provider elements bake in their OWN 2 admin refs (no brand images);

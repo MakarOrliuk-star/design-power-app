@@ -15,6 +15,7 @@ import { defineStore } from "pinia";
  */
 
 export type TourMode = "BASE" | "VIP";
+export type TourAspect = "1:1" | "9:16";
 
 export interface TourPromptInfo {
   content: string;
@@ -128,6 +129,7 @@ export const useTournamentStore = defineStore("tournament", () => {
   const checkedKeys = ref<string[]>([]); // "elementId:MODE" — Base/VIP independent
   const modeByCategory = ref<Record<string, TourMode>>({}); // per moded category
   const count = ref(1); // global stepper, 1..4
+  const aspect = ref<TourAspect>("1:1"); // 1:1 / 9:16 toggle; brand force still wins
 
   // Run state
   const submitting = ref(false);
@@ -325,7 +327,12 @@ export const useTournamentStore = defineStore("tournament", () => {
         batches: { batchId: string; categoryKey: string; count: number }[];
       }>("/api/tournament/generate", {
         method: "POST",
-        body: { brandIds: selectedBrandIds.value, count: count.value, selections },
+        body: {
+          brandIds: selectedBrandIds.value,
+          count: count.value,
+          aspect: aspect.value,
+          selections,
+        },
       });
       // Register in the generator store: toolbar pills (one per category),
       // per-pill cancel and the global stop all come for free.
@@ -348,6 +355,7 @@ export const useTournamentStore = defineStore("tournament", () => {
     checkedKeys,
     modeByCategory,
     count,
+    aspect,
     submitting,
     statusError,
     brandLimitReached,

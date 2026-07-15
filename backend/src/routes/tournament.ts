@@ -182,6 +182,7 @@ tournamentRouter.post("/overrides/ack", async (req: Request, res: Response) => {
 const generateSchema = z.object({
   brandIds: z.array(z.string().min(1)).min(1).max(MAX_TOURNAMENT_BRANDS),
   count: z.number().int().min(1).max(MAX_TOURNAMENT_COUNT).default(1),
+  aspect: z.enum(["1:1", "9:16"]).default("1:1"),
   selections: z
     .array(z.object({ elementId: z.string().min(1), mode: z.enum(MODES).optional() }))
     .min(1),
@@ -202,6 +203,7 @@ tournamentRouter.post("/generate", async (req: Request, res: Response) => {
       userId: req.user!.sub,
       brandIds: parsed.data.brandIds,
       count: parsed.data.count,
+      aspect: parsed.data.aspect,
       selections: parsed.data.selections,
     });
     res.json({ batches });

@@ -124,11 +124,10 @@ const modeLabel: Record<TourMode, string> = { BASE: "Base", VIP: "VIP" };
   background: var(--gradient-active);
 }
 
-/* grey container with the element cards; scrolls locally when tall */
+/* grey container with the element cards; grows with its content (no local
+   scroll — the page's .cols grid is the one scroll area, per the mock) */
 .col__body {
-  flex: 1;
-  min-height: 0;
-  overflow-y: auto;
+  min-height: 120px; /* an empty category still reads as a card */
   display: flex;
   flex-direction: column;
   gap: 10px;
@@ -136,14 +135,6 @@ const modeLabel: Record<TourMode, string> = { BASE: "Base", VIP: "VIP" };
   border-radius: var(--radius-md);
   background: var(--color-window);
   border: 1px solid var(--color-bubble);
-}
-/* thin scrollbar, same as the Result Generated lane */
-.col__body::-webkit-scrollbar {
-  width: 8px;
-}
-.col__body::-webkit-scrollbar-thumb {
-  background: var(--color-border);
-  border-radius: var(--radius-pill);
 }
 .col__empty {
   margin: 0;
