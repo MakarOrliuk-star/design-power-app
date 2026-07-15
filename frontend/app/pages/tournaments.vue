@@ -6,7 +6,8 @@
 // column's element list scrolls locally.
 useHead({ title: "Design Power — Tournaments" });
 
-import { MAX_TOURNAMENT_COUNT } from "~/stores/tournament";
+import { MAX_TOURNAMENT_COUNT, type TourAspect } from "~/stores/tournament";
+import { formatBrand } from "~/data/brands";
 
 const gen = useGeneratorStore();
 const tour = useTournamentStore();
@@ -19,6 +20,26 @@ onMounted(() => {
 function bumpCount(delta: number) {
   tour.count = Math.min(Math.max(tour.count + delta, 1), MAX_TOURNAMENT_COUNT);
 }
+
+const ASPECTS: TourAspect[] = ["1:1", "9:16"];
+
+// Selected brands whose brand-book aspect lock differs from the page toggle —
+// the backend keeps their forcedAspectRatio, so warn instead of surprising.
+const forcedConflicts = computed(() =>
+  tour.selectedBrandIds
+    .map((id) => gen.brands.find((b) => b.id === id))
+    .filter(
+      (b): b is NonNullable<typeof b> =>
+        !!b && !!b.forcedAspectRatio && b.forcedAspectRatio !== tour.aspect,
+    ),
+);
+const forcedHint = computed(() => {
+  if (!forcedConflicts.value.length) return "";
+  const list = forcedConflicts.value
+    .map((b) => `${formatBrand(b.name)} (${b.forcedAspectRatio})`)
+    .join(", ");
+  return `У брендов ${list} формат зафиксирован брендбуком — выбор формата на них не влияет.`;
+});
 </script>
 
 <template>
@@ -34,18 +55,39 @@ function bumpCount(delta: number) {
           <button
             class="selectall"
             type="button"
-            :disabled="tour.allChecked"
-            @click="tour.selectAll()"
-          >Select all</button>
+            :disabled="!tour.selectedCount"
+            @click="tour.clearSelection()"
+          >Clear all</button>
           <button
             class="selectall"
             type="button"
-            :disabled="!tour.selectedCount"
-            @click="tour.clearSelection()"
-          >Clean all</button>
+            :disabled="tour.allChecked"
+            @click="tour.selectAll()"
+          >Select all</button>
           <span class="selcount" :title="'Выбрано элементов (Base + VIP)'">
             {{ tour.selectedCount }} / {{ tour.totalSelectableCount }}
           </span>
+
+          <!-- 1:1 / 9:16 (mock: two white cards, exactly one active) -->
+          <div class="aspects" role="radiogroup" aria-label="Формат изображений">
+            <button
+              v-for="a in ASPECTS"
+              :key="a"
+              :class="['aspect', { 'aspect--on': tour.aspect === a }]"
+              type="button"
+              role="radio"
+              :aria-checked="tour.aspect === a"
+              @click="tour.aspect = a"
+            >
+              <svg v-if="a === '1:1'" viewBox="0 0 24 24" width="15" height="15" fill="none" aria-hidden="true">
+                <rect x="4.5" y="4.5" width="15" height="15" rx="2.5" stroke="currentColor" stroke-width="1.8" />
+              </svg>
+              <svg v-else viewBox="0 0 24 24" width="15" height="15" fill="none" aria-hidden="true">
+                <rect x="7.5" y="3.5" width="9" height="17" rx="2.5" stroke="currentColor" stroke-width="1.8" />
+              </svg>
+              {{ a }}
+            </button>
+          </div>
 
           <div class="stepper">
             <button
@@ -88,6 +130,7 @@ function bumpCount(delta: number) {
         </div>
       </div>
 
+      <p v-if="forcedHint" class="forced">{{ forcedHint }}</p>
       <p v-if="tour.statusError" class="error">{{ tour.statusError }}</p>
 
       <!-- states -->
@@ -169,6 +212,32 @@ function bumpCount(delta: number) {
   white-space: nowrap;
 }
 
+/* 1:1 / 9:16 toggle (mock: white 38px cards with a square / phone icon) */
+.aspects {
+  display: flex;
+  gap: 8px;
+}
+.aspect {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  height: 38px;
+  padding: 0 16px;
+  border: 1px solid var(--color-bubble);
+  border-radius: var(--radius-pill);
+  background: var(--color-white);
+  font-size: var(--fs-user);
+  font-weight: 600;
+  color: var(--color-grey);
+}
+.aspect:hover {
+  color: var(--color-text);
+}
+.aspect--on {
+  border-color: var(--color-accent);
+  color: var(--color-accent);
+}
+
 /* count stepper (mock: white card 38px with − / value / +) */
 .stepper {
   display: flex;
@@ -227,6 +296,13 @@ function bumpCount(delta: number) {
   color: var(--color-stop-hover);
 }
 
+/* brand-book aspect lock notice (shown only on a real conflict) */
+.forced {
+  margin: 0;
+  font-size: var(--fs-tab);
+  color: var(--color-grey);
+}
+
 .state {
   flex: 1;
   display: flex;
@@ -244,15 +320,16 @@ function bumpCount(delta: number) {
   font-size: var(--fs-tab);
 }
 
-/* 4 columns per row; each column's grey body scrolls locally. With more than
-   4 admin-created categories the extra ones wrap to a second row and the
-   whole grid scrolls vertically (with exactly 4 nothing changes). */
+/* 4 columns per row; columns grow with their content (no local scroll — mock:
+   figma/tournaments), the whole grid is the ONE scroll area. The top controls
+   row stays pinned above it. Extra admin categories wrap to further rows. */
 .cols {
   flex: 1;
   min-height: 0;
   display: grid;
   grid-template-columns: repeat(4, minmax(0, 1fr));
-  grid-auto-rows: minmax(340px, 1fr);
+  grid-auto-rows: auto;
+  align-items: start;
   gap: var(--space-20);
   overflow-y: auto;
 }

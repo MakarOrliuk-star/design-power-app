@@ -12,7 +12,19 @@ const tokens = vi.hoisted(() => ({ get: vi.fn() }));
 vi.mock("../src/lib/driveTokens.js", () => ({ getDriveToken: tokens.get }));
 
 const asset = vi.hoisted(() => ({ upload: vi.fn() }));
-vi.mock("../src/lib/smartico/uploadAsset.js", () => ({ uploadSmarticoAsset: asset.upload }));
+vi.mock("../src/lib/smartico/uploadAsset.js", () => ({
+  uploadSmarticoAsset: asset.upload,
+  // Мини-копия реального publicIdFor — достаточно для проверок предупреждений.
+  publicIdFor: (brand: string, type: string, locale: string) =>
+    `${brand}_${type}${locale === "KO" ? "_ko" : ""}`,
+}));
+
+// Text scanner (TASK Трек A) — по умолчанию «чисто»; включается в конкретных тестах.
+const scanner = vi.hoisted(() => ({ scan: vi.fn() }));
+vi.mock("../src/lib/textScan.js", () => ({
+  scanImageBuffer: scanner.scan,
+  newScanBudget: () => ({ deadline: Number.MAX_SAFE_INTEGER }),
+}));
 
 const db = vi.hoisted(() => ({ findMany: vi.fn() }));
 vi.mock("../src/lib/prisma.js", () => ({
@@ -47,6 +59,8 @@ beforeEach(() => {
   tokens.get.mockReset();
   asset.upload.mockReset();
   db.findMany.mockReset();
+  scanner.scan.mockReset();
+  scanner.scan.mockResolvedValue(null); // скан по умолчанию молчит (best-effort)
   tokens.get.mockResolvedValue("tok");
   db.findMany.mockResolvedValue([]); // no canonical brands → raw names used as-is
   drive.download.mockResolvedValue(Buffer.from([1, 2, 3]));
@@ -127,6 +141,52 @@ describe("processDriveSmarticoJob", () => {
     expect(titles).toContain("Push — Function");
     const emailBlock = result.outputs.find((o) => o.title === "Email — Function")!;
     expect(emailBlock.code).toContain('"BrandA": "https://cdn/BrandA_email"');
+  });
+
+  it("flags an email image with marketing text (scan only for email, KO warnings skipped)", async () => {
+    wireHappyTree();
+    scanner.scan.mockResolvedValue({
+      md5: "f".repeat(32),
+      hasText: true,
+      text: "UP TO 500000$",
+      confidence: 0.95,
+      approvedOk: false,
+    });
+    const result = await processDriveSmarticoJob(makeJob());
+
+    // Сканировалась только email-картинка (push не сканим — решение A6).
+    expect(scanner.scan).toHaveBeenCalledTimes(1);
+    expect(result.textWarnings).toEqual([
+      {
+        brand: "BrandA",
+        publicId: "BrandA_email",
+        url: "https://cdn/BrandA_email",
+        md5: "f".repeat(32),
+        text: "UP TO 500000$",
+        confidence: 0.95,
+        driveFolderId: "brandA", // «перейти к замене» ведёт в папку бренда
+      },
+    ]);
+  });
+
+  it("suppresses whitelisted verdicts and stays silent when the scanner fails", async () => {
+    wireHappyTree();
+    // approvedOk = менеджер уже пометил «ок» → предупреждения нет.
+    scanner.scan.mockResolvedValue({
+      md5: "e".repeat(32),
+      hasText: true,
+      text: "UP TO 500000$",
+      confidence: 0.9,
+      approvedOk: true,
+    });
+    const ok = await processDriveSmarticoJob(makeJob());
+    expect(ok.textWarnings).toEqual([]);
+
+    // Сканер упал (null) → джоба живёт, предупреждений нет.
+    scanner.scan.mockResolvedValue(null);
+    const silent = await processDriveSmarticoJob(makeJob());
+    expect(silent.textWarnings).toEqual([]);
+    expect(silent.stats.failed).toBe(0);
   });
 
   it("counts a missing type file as failed only when expected, else just skips", async () => {

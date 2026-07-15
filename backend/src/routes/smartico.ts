@@ -22,6 +22,7 @@ import {
   sweepOldUploads,
 } from "../lib/smartico/storage.js";
 import { analyzeZip } from "../services/smartico.service.js";
+import { prisma } from "../lib/prisma.js";
 import type { Job } from "bullmq";
 import {
   getSmarticoQueue,
@@ -166,6 +167,30 @@ smarticoRouter.get("/jobs/:id", async (req: Request, res: Response) => {
     return;
   }
   res.json({ status: state === "active" ? "active" : "queued", progress });
+});
+
+// ---- Text-scan whitelist (TASK Трек A): «пометить ок» из поп-апа ----
+// Keyed by the image bytes' MD5 — the mark is global and survives until the
+// bytes change (a replaced image gets a fresh scan automatically).
+
+const whitelistSchema = z.object({ md5: z.string().regex(/^[0-9a-f]{32}$/i) });
+
+smarticoRouter.post("/text-whitelist", async (req: Request, res: Response) => {
+  const parsed = whitelistSchema.safeParse(req.body);
+  if (!parsed.success) {
+    res.status(400).json({ error: "invalid_body" });
+    return;
+  }
+  const md5 = parsed.data.md5.toLowerCase();
+  const upd = await prisma.imageTextScan.updateMany({
+    where: { md5 },
+    data: { approvedOk: true },
+  });
+  if (upd.count === 0) {
+    res.status(404).json({ error: "scan_not_found" });
+    return;
+  }
+  res.json({ ok: true });
 });
 
 // ============================================================================

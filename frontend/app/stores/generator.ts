@@ -7,6 +7,8 @@ export interface BrandItem {
   categoryIds: string[];
   isFavorite: boolean;
   hasNanoRef: boolean;
+  /** Brand-book aspect lock (e.g. "9:16"); null = free. Wins over page toggles. */
+  forcedAspectRatio?: string | null;
 }
 export interface Category {
   id: string;

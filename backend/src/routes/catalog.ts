@@ -17,6 +17,7 @@ catalogRouter.get("/home", async (req: Request, res: Response) => {
       select: {
         id: true,
         name: true,
+        forcedAspectRatio: true,
         categories: { select: { categoryId: true } },
         favorites: { where: { userId }, select: { userId: true } },
         nanoRef: { select: { id: true } },
@@ -38,6 +39,7 @@ catalogRouter.get("/home", async (req: Request, res: Response) => {
     brands: brands.map((b) => ({
       id: b.id,
       name: b.name,
+      forcedAspectRatio: b.forcedAspectRatio,
       categoryIds: b.categories.map((c) => c.categoryId),
       isFavorite: b.favorites.length > 0,
       hasNanoRef: b.nanoRef !== null,

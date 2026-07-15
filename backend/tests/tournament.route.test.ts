@@ -221,6 +221,18 @@ describe("POST /api/tournament/generate", () => {
     expect(res.status).toBe(400);
   });
 
+  it("rejects an aspect outside 1:1 / 9:16", async () => {
+    const res = await request(makeApp())
+      .post("/api/tournament/generate")
+      .send({
+        brandIds: ["1"],
+        count: 1,
+        aspect: "16:9",
+        selections: [{ elementId: "e1", mode: "BASE" }],
+      });
+    expect(res.status).toBe(400);
+  });
+
   it("rejects a count above 4 and an empty selection", async () => {
     const tooMany = await request(makeApp())
       .post("/api/tournament/generate")

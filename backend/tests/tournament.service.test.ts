@@ -238,6 +238,22 @@ describe("createTournamentBatches", () => {
     expect(aspects).toEqual(new Set(["1:1", "9:16"]));
   });
 
+  it("the page aspect reaches the queued jobs; forcedAspectRatio still wins over it", async () => {
+    await createTournamentBatches(baseParams({ aspect: "9:16" }));
+    // b1 (no force) follows the page toggle; b2 keeps its own 9:16 force.
+    const jobs = queue.addBulk.mock.calls[0]![0] as { data: { aspectRatio: string } }[];
+    expect(new Set(jobs.map((j) => j.data.aspectRatio))).toEqual(new Set(["9:16"]));
+
+    // The lock also wins when it CONFLICTS with the toggle: force 9:16 vs page 1:1.
+    queue.addBulk.mockReset();
+    db.brandFindMany.mockResolvedValue([BRANDS[1]!]); // only the locked brand
+    await createTournamentBatches(
+      baseParams({ aspect: "1:1", brandIds: ["b2"], selections: [{ elementId: "e1", mode: "BASE" }] }),
+    );
+    const locked = queue.addBulk.mock.calls[0]![0] as { data: { aspectRatio: string } }[];
+    expect(new Set(locked.map((j) => j.data.aspectRatio))).toEqual(new Set(["9:16"]));
+  });
+
   it("a provider with only ONE admin ref still generates (uses what exists)", async () => {
     db.elementFindMany.mockResolvedValue([
       { ...ELEMENTS[1]!, referenceImages: ["https://cdn/prov-only.png"] },

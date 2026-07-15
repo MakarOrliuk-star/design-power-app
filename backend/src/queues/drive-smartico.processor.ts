@@ -14,8 +14,9 @@ import {
   type TypeKey,
 } from "../lib/smartico/detect.js";
 import { generateOutputs, generateSmarticoCardOutputs } from "../lib/smartico/generate.js";
-import { uploadSmarticoAsset } from "../lib/smartico/uploadAsset.js";
-import type { SmarticoJobResult, SmarticoUrlSlot } from "./smartico.processor.js";
+import { uploadSmarticoAsset, publicIdFor } from "../lib/smartico/uploadAsset.js";
+import { scanImageBuffer, newScanBudget } from "../lib/textScan.js";
+import type { SmarticoJobResult, SmarticoUrlSlot, TextWarning } from "./smartico.processor.js";
 import type { DriveSmarticoJobData } from "./index.js";
 
 /**
@@ -74,6 +75,8 @@ export async function processDriveSmarticoJob(
 
   const urls: Record<string, Partial<Record<TypeKey, SmarticoUrlSlot>>> = {};
   const cardUrls: Record<string, string | null> = {}; // raw brand → card.webp URL
+  const textWarnings: TextWarning[] = [];
+  const scanBudget = newScanBudget(); // общий бюджет скана на весь пак
   const failedItems: string[] = [];
   let uploaded = 0;
   let reused = 0;
@@ -122,6 +125,21 @@ export async function processDriveSmarticoJob(
             else {
               failed++;
               failedItems.push(label);
+            }
+            // Скан текста — только email-картинки (решение интервью A6); best-effort.
+            if (type === "email" && outcome.url) {
+              const scan = await scanImageBuffer(buffer, scanBudget);
+              if (scan?.hasText && !scan.approvedOk) {
+                textWarnings.push({
+                  brand: rawBrand,
+                  publicId: publicIdFor(rawBrand, "email", "default"),
+                  url: outcome.url,
+                  md5: scan.md5,
+                  text: scan.text,
+                  confidence: scan.confidence,
+                  driveFolderId: brandFolder.id, // «перейти к замене» ведёт в папку бренда
+                });
+              }
             }
           } catch (e) {
             if (isFatalDriveError(e)) throw e;
@@ -181,6 +199,7 @@ export async function processDriveSmarticoJob(
   if (includeSmartico) {
     outputs.push(...generateSmarticoCardOutputs(cardUrls, brands));
   }
+  textWarnings.sort((a, b) => a.brand.localeCompare(b.brand));
 
   await job.updateProgress(100);
   return {
@@ -190,6 +209,7 @@ export async function processDriveSmarticoJob(
     brands,
     allBrandsDefaultUrl: null, // Drive flow has no type-less "All brands" default image
     outputs,
+    textWarnings,
     stats: { total: uploaded + reused + failed, uploaded, reused, failed, failedItems },
   };
 }
