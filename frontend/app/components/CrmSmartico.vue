@@ -1,6 +1,7 @@
 <script setup lang="ts">
 
 import { ref, computed, onUnmounted, onMounted } from "vue";
+import { useImageTextScanner, type TextWarning } from "~/composables/useImageTextScanner";
 
 type TypeKey = "email" | "push" | "pop-up" | "pop-up_1" | "pop-up_2";
 
@@ -30,6 +31,7 @@ interface OutputBlock {
 }
 interface JobResult {
   outputs: OutputBlock[];
+  textWarnings?: TextWarning[]; // optional: старые завершённые джобы поля не имеют
   stats: { total: number; uploaded: number; reused: number; failed: number; failedItems: string[] };
 }
 interface JobResponse {
@@ -84,6 +86,20 @@ const result = ref<JobResult | null>(null);
 let pollTimer: ReturnType<typeof setTimeout> | undefined;
 const fileInput = ref<HTMLInputElement | null>(null);
 
+// Текст-скан email-картинок (TASK Трек A): поп-ап + баннер по result.textWarnings.
+const {
+  activeWarnings: textWarnings,
+  hasWarnings: hasTextWarnings,
+  popupOpen: textPopupOpen,
+  pending: textMarkPending,
+  markError: textMarkError,
+  setWarnings: setTextWarnings,
+  openPopup: openTextPopup,
+  closePopup: closeTextPopup,
+  markOk: markTextOk,
+  reset: resetTextScan,
+} = useImageTextScanner(api);
+
 const suspiciousBrands = computed(() =>
   (analysis.value?.brands ?? []).filter((b) => b.suspicious),
 );
@@ -133,6 +149,7 @@ function reset() {
   selectedTypes.value = [];
   genPct.value = 0;
   result.value = null;
+  resetTextScan();
   if (fileInput.value) fileInput.value.value = "";
 }
 
@@ -444,6 +461,7 @@ function pollJob(jobId: string) {
       genPct.value = res.progress ?? 0;
       if (res.status === "completed" && res.result) {
         result.value = res.result;
+        setTextWarnings(res.result.textWarnings ?? []); // непустой список сам откроет поп-ап
         phase.value = "done";
         return;
       }
@@ -772,6 +790,14 @@ onUnmounted(() => {
         Не загрузились: {{ result.stats.failedItems.join(", ") }}
       </p>
 
+      <!-- Текст-скан: баннер остаётся, пока предупреждения не помечены «ок» -->
+      <p v-if="hasTextWarnings" class="alert alert--warn textwarn-banner">
+        ⚠️ Обнаружен текст на email-картинках: {{ textWarnings.length }}.
+        <button class="textwarn-banner__btn" type="button" @click="openTextPopup">
+          Показать
+        </button>
+      </p>
+
       <p v-if="!result.outputs.length" class="alert alert--warn">
         Для выбранных типов нечего сгенерировать.
       </p>
@@ -800,6 +826,15 @@ onUnmounted(() => {
     </div>
     <!-- /RIGHT -->
   </div>
+
+  <TextWarningsPopup
+    :open="textPopupOpen"
+    :warnings="textWarnings"
+    :pending="textMarkPending"
+    :error="textMarkError"
+    @close="closeTextPopup"
+    @mark-ok="markTextOk"
+  />
   </div>
 </template>
 
@@ -1109,6 +1144,27 @@ onUnmounted(() => {
   background: rgba(244, 175, 64, 0.14);
   color: #b9791b;
   border: 1px solid rgba(244, 175, 64, 0.5);
+}
+
+/* text-scan banner (TASK Трек A) */
+.textwarn-banner {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+.textwarn-banner__btn {
+  border: 1px solid rgba(244, 175, 64, 0.7);
+  background: var(--color-white);
+  color: #b9791b;
+  border-radius: var(--radius-sm);
+  padding: 4px 12px;
+  font-size: 13px;
+  font-weight: 600;
+  cursor: pointer;
+}
+.textwarn-banner__btn:hover {
+  background: rgba(244, 175, 64, 0.18);
 }
 
 /* type checkboxes */

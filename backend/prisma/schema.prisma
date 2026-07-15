@@ -324,6 +324,20 @@ model SmarticoAsset {
   @@unique([zipName, brand, type, locale])
 }
 
+/// Marketing-text scan cache + whitelist for CRM email images (TASK Трек A).
+/// Keyed by the image bytes' MD5: the same bytes are never scanned twice, and
+/// "пометить ок" (approvedOk) suppresses the warning for everyone until the
+/// bytes — and therefore the MD5 — change.
+model ImageTextScan {
+  md5        String   @id
+  hasText    Boolean // VLM verdict: baked-in marketing text present
+  text       String   @default("") // the promo text the model could read
+  confidence Float    @default(0) // model's self-reported 0..1 (debug only)
+  approvedOk Boolean  @default(false) // manager marked this image as OK
+  createdAt  DateTime @default(now())
+  updatedAt  DateTime @updatedAt
+}
+
 // ============================================================
 // Tournaments page (TASK feature/tournament-page)
 // ============================================================

@@ -11,7 +11,8 @@ import {
   type NormalizedBrand,
 } from "../lib/smartico/detect.js";
 import { generateOutputs, type OutputBlock } from "../lib/smartico/generate.js";
-import { uploadSmarticoAsset } from "../lib/smartico/uploadAsset.js";
+import { uploadSmarticoAsset, publicIdFor } from "../lib/smartico/uploadAsset.js";
+import { scanImageBuffer, newScanBudget } from "../lib/textScan.js";
 import type { SmarticoJobData } from "./index.js";
 
 const UPLOAD_CONCURRENCY = 5;
@@ -21,6 +22,16 @@ export interface SmarticoUrlSlot {
   default: string | null;
   KO: string | null;
 }
+/** Email image flagged by the marketing-text scanner (TASK Трек A). */
+export interface TextWarning {
+  brand: string;
+  publicId: string;
+  url: string;
+  md5: string; // whitelist key for "пометить ок"
+  text: string; // what the model could read
+  confidence: number; // 0..1 (UI shows a coarse badge, not the raw number)
+  driveFolderId: string | null; // Drive flow: "перейти к замене" link target
+}
 export interface SmarticoJobResult {
   zipName: string;
   selectedTypes: TypeKey[];
@@ -29,6 +40,8 @@ export interface SmarticoJobResult {
   /** Uploaded "All brands" default image — becomes the fallback of every function. */
   allBrandsDefaultUrl: string | null;
   outputs: OutputBlock[]; // ready-to-paste Smartico functions / labels
+  /** Email images with baked-in marketing text (already whitelisted ones excluded). */
+  textWarnings: TextWarning[];
   stats: {
     total: number;
     uploaded: number;
@@ -73,6 +86,8 @@ export async function processSmarticoJob(job: Job<SmarticoJobData>): Promise<Sma
 
     const urls: SmarticoJobResult["urls"] = {};
     let allBrandsDefaultUrl: string | null = null;
+    const textWarnings: TextWarning[] = [];
+    const scanBudget = newScanBudget(); // общий бюджет скана на весь пак
     const failedItems: string[] = [];
     let uploaded = 0;
     let reused = 0;
@@ -110,6 +125,21 @@ export async function processSmarticoJob(job: Job<SmarticoJobData>): Promise<Sma
             failedItems.push(label);
             console.error(`⚠️ Smartico upload failed for ${label}: ${outcome.error ?? "unknown"}`);
           }
+          // Скан текста — только email-картинки (решение интервью A6); best-effort.
+          if (!isDefault && m.type === "email" && outcome.url) {
+            const scan = await scanImageBuffer(buffer, scanBudget);
+            if (scan?.hasText && !scan.approvedOk) {
+              textWarnings.push({
+                brand: m.brand,
+                publicId: publicIdFor(m.brand, "email", m.locale),
+                url: outcome.url,
+                md5: scan.md5,
+                text: scan.text,
+                confidence: scan.confidence,
+                driveFolderId: null, // ZIP-поток: источника в Drive нет
+              });
+            }
+          }
         } catch (e) {
           if (!isDefault) setUrl(m.brand, m.type as TypeKey, m.locale, null);
           failed++;
@@ -125,6 +155,7 @@ export async function processSmarticoJob(job: Job<SmarticoJobData>): Promise<Sma
 
     const brands = Object.keys(urls).map((raw) => normalizeBrand(raw, brandMap));
     const outputs = generateOutputs(urls, selectedTypes, brands, allBrandsDefaultUrl);
+    textWarnings.sort((a, b) => a.brand.localeCompare(b.brand));
 
     await job.updateProgress(100);
     return {
@@ -134,6 +165,7 @@ export async function processSmarticoJob(job: Job<SmarticoJobData>): Promise<Sma
       brands,
       allBrandsDefaultUrl,
       outputs,
+      textWarnings,
       stats: { total, uploaded, reused, failed, failedItems },
     };
   } finally {

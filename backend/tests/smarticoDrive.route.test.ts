@@ -20,6 +20,11 @@ vi.mock("../src/lib/driveTokens.js", () => ({
 vi.mock("../src/services/smartico.service.js", () => ({ analyzeZip: vi.fn() }));
 vi.mock("../src/queues/index.js", () => ({ getSmarticoQueue: vi.fn() }));
 
+const db = vi.hoisted(() => ({ scanUpdateMany: vi.fn() }));
+vi.mock("../src/lib/prisma.js", () => ({
+  prisma: { imageTextScan: { updateMany: db.scanUpdateMany } },
+}));
+
 const drive = vi.hoisted(() => ({ getItem: vi.fn(), list: vi.fn() }));
 vi.mock("../src/lib/drive.js", async (importActual) => {
   const actual = await importActual<typeof import("../src/lib/drive.js")>();
@@ -48,6 +53,37 @@ beforeEach(() => {
   tokens.clear.mockReset();
   drive.getItem.mockReset();
   drive.list.mockReset();
+  db.scanUpdateMany.mockReset();
+});
+
+// ---- POST /text-whitelist («пометить ок», TASK Трек A) ----
+
+describe("POST /api/smartico/text-whitelist", () => {
+  it("marks an existing scan row as approved (md5 lowercased)", async () => {
+    db.scanUpdateMany.mockResolvedValue({ count: 1 });
+    const md5 = "A".repeat(32);
+    const res = await request(makeApp()).post("/api/smartico/text-whitelist").send({ md5 });
+    expect(res.status).toBe(200);
+    expect(res.body).toEqual({ ok: true });
+    expect(db.scanUpdateMany).toHaveBeenCalledWith({
+      where: { md5: "a".repeat(32) },
+      data: { approvedOk: true },
+    });
+  });
+
+  it("404s for an unknown md5 and 400s for a malformed one", async () => {
+    db.scanUpdateMany.mockResolvedValue({ count: 0 });
+    const missing = await request(makeApp())
+      .post("/api/smartico/text-whitelist")
+      .send({ md5: "b".repeat(32) });
+    expect(missing.status).toBe(404);
+
+    const malformed = await request(makeApp())
+      .post("/api/smartico/text-whitelist")
+      .send({ md5: "not-an-md5" });
+    expect(malformed.status).toBe(400);
+    expect(db.scanUpdateMany).toHaveBeenCalledTimes(1);
+  });
 });
 
 describe("GET /api/smartico/drive/status", () => {
