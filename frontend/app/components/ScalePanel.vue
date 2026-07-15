@@ -15,6 +15,8 @@
 import { ref, reactive, computed, watch, nextTick, onMounted, onBeforeUnmount } from "vue";
 import type Konva from "konva";
 import { capPad, type Pad, type Placement, type InpaintPayload } from "~/composables/useResult";
+import { useKonvaZoom } from "~/composables/useKonvaZoom";
+import { useMaskHistory, type MaskStroke } from "~/composables/useMaskHistory";
 
 const props = withDefaults(
   defineProps<{
@@ -69,6 +71,11 @@ const imgNodeRef = ref<{ getNode: () => Konva.Image } | null>(null);
 const imgTrRef = ref<{ getNode: () => Konva.Transformer } | null>(null);
 
 const stage = reactive({ w: 600, h: 460 });
+
+// Viewport zoom/pan (Ctrl/Cmd+wheel к курсору, pan). Scene geometry stays in
+// content coordinates — the transform below is view-only.
+const { view, stageTransform, reset: resetView, startPan } = useKonvaZoom(stageWrapRef, open, stage);
+
 const natural = ref<{ width: number; height: number } | null>(null);
 const htmlImg = ref<HTMLImageElement | null>(null);
 const checker = ref<HTMLCanvasElement | null>(null);
@@ -89,14 +96,20 @@ const baseImg = computed(() => {
 
 const frame = reactive<Box>({ x: 0, y: 0, width: 0, height: 0, rotation: 0 });
 const imgT = reactive<Box>({ x: 0, y: 0, width: 0, height: 0, rotation: 0 });
-const strokes = ref<{ points: number[]; size: number }[]>([]);
+const strokes = ref<MaskStroke[]>([]);
 let drawing = false;
+
+// Undo/redo маски: один мазок = одно действие, clear откатывается (Ctrl+Z /
+// Ctrl+Shift+Z / Ctrl+Y — см. onKey ниже).
+const history = useMaskHistory(strokes);
 
 function resetScene() {
   const b = baseImg.value;
   frame.x = b.x; frame.y = b.y; frame.width = b.width; frame.height = b.height; frame.rotation = 0;
   imgT.x = b.x; imgT.y = b.y; imgT.width = b.width; imgT.height = b.height; imgT.rotation = 0;
   strokes.value = [];
+  resetView(); // зум/pan сбрасываются вместе со сценой (смена инструмента/картинки)
+  history.reset();
 }
 
 // ---- Derived output (SOURCE px) ----
@@ -135,7 +148,7 @@ const canSubmit = computed(() => {
 const activeHint = computed(() => TOOLS.find((t) => t.key === tool.value)?.hint ?? "");
 
 // ---- Konva configs ----
-const stageConfig = computed(() => ({ width: stage.w, height: stage.h }));
+const stageConfig = computed(() => ({ width: stage.w, height: stage.h, ...stageTransform.value }));
 const checkerConfig = computed(() => ({
   x: frame.x, y: frame.y, width: frame.width, height: frame.height,
   fillPatternImage: checker.value, fillPatternRepeat: "repeat", listening: false,
@@ -150,23 +163,33 @@ const baseImageConfig = computed(() => ({
 }));
 const frameConfig = computed(() => ({
   x: frame.x, y: frame.y, width: frame.width, height: frame.height,
-  stroke: "#8a38f5", strokeWidth: 2, fillEnabled: false, draggable: false,
+  stroke: "#8a38f5", strokeWidth: 2 / view.value.scale, fillEnabled: false, draggable: false,
 }));
 const movableImageConfig = computed(() => ({
   image: htmlImg.value, x: imgT.x, y: imgT.y, width: imgT.width, height: imgT.height, draggable: true,
 }));
-const transformerConfig = {
+// Anchors/borders are drawn in stage space, so they'd grow with the zoom —
+// dividing by the view scale keeps them a constant on-screen size.
+const transformerConfig = computed(() => ({
   rotateEnabled: false, keepRatio: false, flipEnabled: false,
-  enabledAnchors: ANCHORS, anchorSize: 14, anchorStroke: "#8a38f5",
-  anchorFill: "#ffffff", anchorCornerRadius: 7, borderStroke: "#8a38f5", borderStrokeWidth: 2,
+  enabledAnchors: ANCHORS, anchorSize: 14 / view.value.scale, anchorStroke: "#8a38f5",
+  anchorFill: "#ffffff", anchorCornerRadius: 7 / view.value.scale,
+  borderStroke: "#8a38f5", borderStrokeWidth: 2 / view.value.scale,
   boundBoxFunc: frameBound,
-};
-const imgTransformerConfig = {
+}));
+const imgTransformerConfig = computed(() => ({
   rotateEnabled: false, keepRatio: true, flipEnabled: false,
   enabledAnchors: ["top-left", "top-right", "bottom-left", "bottom-right"],
-  anchorSize: 14, anchorStroke: "#8a38f5", anchorFill: "#ffffff",
-  anchorCornerRadius: 7, borderStroke: "#8a38f5", borderStrokeWidth: 2, boundBoxFunc: imgBound,
-};
+  anchorSize: 14 / view.value.scale, anchorStroke: "#8a38f5", anchorFill: "#ffffff",
+  anchorCornerRadius: 7 / view.value.scale, borderStroke: "#8a38f5",
+  borderStrokeWidth: 2 / view.value.scale, boundBoxFunc: imgBound,
+}));
+// The brush backdrop must cover the VISIBLE viewport in content coordinates,
+// whatever the current zoom/pan (a fixed 0..stage rect would drift away).
+const maskBackdropConfig = computed(() => {
+  const v = view.value;
+  return { x: -v.x / v.scale, y: -v.y / v.scale, width: stage.w / v.scale, height: stage.h / v.scale };
+});
 const maskLines = computed(() =>
   strokes.value.map((s) => ({
     points: srcPointsToDisplay(s.points),
@@ -176,26 +199,41 @@ const maskLines = computed(() =>
   })),
 );
 
+// Transformer's boundBoxFunc works in ABSOLUTE (screen) coordinates, which
+// include the view zoom/pan — the checks below are content-space rules, so
+// the candidate box is converted back before testing.
+function toContentBox(box: Box): Box {
+  const v = view.value;
+  return {
+    x: (box.x - v.x) / v.scale,
+    y: (box.y - v.y) / v.scale,
+    width: box.width / v.scale,
+    height: box.height / v.scale,
+    rotation: box.rotation,
+  };
+}
 function frameBound(oldBox: Box, newBox: Box): Box {
   const b = baseImg.value;
+  const nb = toContentBox(newBox);
   const eps = 0.5;
   const ok =
-    newBox.x <= b.x + eps && newBox.y <= b.y + eps &&
-    newBox.x + newBox.width >= b.x + b.width - eps &&
-    newBox.y + newBox.height >= b.y + b.height - eps &&
-    newBox.x >= b.x - b.width && newBox.y >= b.y - b.height &&
-    newBox.x + newBox.width <= b.x + b.width + b.width &&
-    newBox.y + newBox.height <= b.y + b.height + b.height &&
-    newBox.x >= 0 && newBox.y >= 0 &&
-    newBox.x + newBox.width <= stage.w && newBox.y + newBox.height <= stage.h;
+    nb.x <= b.x + eps && nb.y <= b.y + eps &&
+    nb.x + nb.width >= b.x + b.width - eps &&
+    nb.y + nb.height >= b.y + b.height - eps &&
+    nb.x >= b.x - b.width && nb.y >= b.y - b.height &&
+    nb.x + nb.width <= b.x + b.width + b.width &&
+    nb.y + nb.height <= b.y + b.height + b.height &&
+    nb.x >= 0 && nb.y >= 0 &&
+    nb.x + nb.width <= stage.w && nb.y + nb.height <= stage.h;
   return ok ? newBox : oldBox;
 }
 function imgBound(oldBox: Box, newBox: Box): Box {
   const min = 24;
+  const nb = toContentBox(newBox);
   const ok =
-    newBox.width >= min && newBox.height >= min &&
-    newBox.x >= 0 && newBox.y >= 0 &&
-    newBox.x + newBox.width <= stage.w && newBox.y + newBox.height <= stage.h;
+    nb.width >= min && nb.height >= min &&
+    nb.x >= 0 && nb.y >= 0 &&
+    nb.x + nb.width <= stage.w && nb.y + nb.height <= stage.h;
   return ok ? newBox : oldBox;
 }
 
@@ -234,25 +272,43 @@ function srcPointsToDisplay(pts: number[]): number[] {
   for (let i = 0; i < pts.length; i += 2) out.push(b.x + pts[i]! * unit.value, b.y + pts[i + 1]! * unit.value);
   return out;
 }
-function onMaskDown(e: { target: { getStage: () => Konva.Stage | null } }) {
+// getRelativePointerPosition (не getPointerPosition!) вычитает view-трансформацию
+// стейджа — иначе при зуме мазки лягут со смещением от кисти.
+function onMaskDown(e: { evt: PointerEvent; target: { getStage: () => Konva.Stage | null } }) {
   if (tool.value !== "inpaint" || !natural.value) return;
-  const pos = e.target.getStage()?.getPointerPosition();
+  if (e.evt.button !== 0) return; // средняя кнопка — pan, не кисть
+  if (drawing) onMaskUp(); // застрявший мазок (pointerup ушёл мимо) — закоммитить
+  const pos = e.target.getStage()?.getRelativePointerPosition();
   if (!pos) return;
   drawing = true;
   strokes.value = [...strokes.value, { points: stagePointToSrc(pos.x, pos.y), size: brush.value }];
 }
 function onMaskMove(e: { target: { getStage: () => Konva.Stage | null } }) {
   if (!drawing) return;
-  const pos = e.target.getStage()?.getPointerPosition();
+  const pos = e.target.getStage()?.getRelativePointerPosition();
   if (!pos) return;
   const last = strokes.value[strokes.value.length - 1];
   if (last) last.points.push(...stagePointToSrc(pos.x, pos.y));
 }
 function onMaskUp() {
+  if (!drawing) return;
   drawing = false;
+  history.commitStroke();
 }
 function clearMask() {
-  strokes.value = [];
+  history.commitClear(); // очистка — одно откатываемое действие
+}
+
+// Pan gestures: middle-drag anywhere (any tool), left-drag on empty stage in
+// Expand/Transform (in mask mode the left button belongs to the brush).
+function onStageDown(e: { evt: MouseEvent; target: { getStage: () => Konva.Stage | null } }) {
+  const stg = e.target.getStage();
+  const isMiddle = e.evt.button === 1;
+  const isEmptyLeft =
+    e.evt.button === 0 && tool.value !== "inpaint" && (e.target as unknown) === (stg as unknown);
+  if (!isMiddle && !isEmptyLeft) return;
+  e.evt.preventDefault(); // middle: подавить Windows-autoscroll
+  startPan({ x: e.evt.clientX, y: e.evt.clientY });
 }
 
 function buildMaskDataUrl(): string | null {
@@ -306,6 +362,36 @@ const actionLabel = computed(() => {
 // Close the modal automatically once a successful op reports its "Готово" message.
 watch(() => props.msg, (m) => {
   if (m && open.value) closeEditor();
+});
+
+// ---- Hotkeys (активны только при открытой модалке) ----
+// e.code вместо e.key: Ctrl+Z должен работать и на русской раскладке ("я").
+function isEditableTarget(t: EventTarget | null): boolean {
+  return t instanceof HTMLElement && !!t.closest("input, textarea, select, [contenteditable]");
+}
+function onKey(e: KeyboardEvent) {
+  if (!open.value || isEditableTarget(e.target)) return;
+  if (!(e.ctrlKey || e.metaKey)) return;
+  if (e.code === "Digit0" || e.code === "Numpad0") {
+    e.preventDefault();
+    resetView();
+    return;
+  }
+  // Скоуп undo — только маска (Expand/Transform живут с кнопкой «Сбросить»);
+  // во время незавершённого мазка история не трогается.
+  if (tool.value !== "inpaint" || drawing) return;
+  if (e.code === "KeyZ" && !e.shiftKey) {
+    e.preventDefault();
+    history.undo();
+  } else if ((e.code === "KeyZ" && e.shiftKey) || e.code === "KeyY") {
+    e.preventDefault();
+    history.redo();
+  }
+}
+watch(open, (on) => {
+  if (!import.meta.client) return;
+  if (on) window.addEventListener("keydown", onKey);
+  else window.removeEventListener("keydown", onKey);
 });
 
 // ---- Modal open/close + stage measuring ----
@@ -384,7 +470,10 @@ onMounted(() => {
   }
   checker.value = c;
 });
-onBeforeUnmount(() => ro?.disconnect());
+onBeforeUnmount(() => {
+  ro?.disconnect();
+  if (import.meta.client) window.removeEventListener("keydown", onKey);
+});
 
 // trigger="external" hosts open the modal themselves (Tournament Pack cards).
 defineExpose({ openEditor });
@@ -430,7 +519,7 @@ defineExpose({ openEditor });
           <div class="se__body">
             <div ref="stageWrapRef" class="se__canvas">
               <ClientOnly>
-                <v-stage v-if="natural && htmlImg && checker" :config="stageConfig">
+                <v-stage v-if="natural && htmlImg && checker" :config="stageConfig" @mousedown="onStageDown">
                   <v-layer>
                     <template v-if="tool === 'expand'">
                       <v-rect :config="checkerConfig" />
@@ -453,7 +542,7 @@ defineExpose({ openEditor });
                     <template v-else>
                       <v-image :config="baseImageConfig" />
                       <v-rect
-                        :config="{ x: 0, y: 0, width: stage.w, height: stage.h }"
+                        :config="maskBackdropConfig"
                         @pointerdown="onMaskDown"
                         @pointermove="onMaskMove"
                         @pointerup="onMaskUp"
@@ -488,6 +577,7 @@ defineExpose({ openEditor });
                   Размер кисти: {{ brush }}px
                   <input v-model.number="brush" type="range" min="8" max="200" step="4" />
                 </label>
+                <p class="se__keys">Ctrl+Z — отменить мазок · Ctrl+Shift+Z / Ctrl+Y — вернуть</p>
                 <button v-if="hasMask" type="button" class="se__link" @click="clearMask">Очистить маску</button>
               </div>
 
@@ -734,6 +824,11 @@ defineExpose({ openEditor });
 }
 .se__brush input {
   accent-color: var(--color-accent);
+}
+.se__keys {
+  margin: 0;
+  font-size: 11px;
+  color: var(--color-grey);
 }
 .se__added {
   margin: 0;
