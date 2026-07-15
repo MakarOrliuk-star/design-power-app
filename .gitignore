@@ -29,3 +29,23 @@ rewrite/
 .DS_Store
 Thumbs.db
 .gstack/
+
+# Виртуальное окружение
+venv/
+.venv/
+env/
+
+# Системные файлы macOS
+.DS_Store
+
+# Кэш Python
+__pycache__/
+*.pyc
+
+# Файлы, которые генерирует сам скрипт (отчеты и дампы)
+*.html
+*.json
+
+# Скрытые настройки Streamlit (чтобы не слить ключи, если они там есть)
+.streamlit/
+.env
