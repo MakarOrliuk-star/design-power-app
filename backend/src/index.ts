@@ -10,11 +10,13 @@ import { catalogRouter } from "./routes/catalog.js";
 import { generateRouter } from "./routes/generate.js";
 import { tournamentRouter } from "./routes/tournament.js";
 import { tournamentAdminRouter } from "./routes/tournamentAdmin.js";
+import { myBrandsRouter } from "./routes/myBrands.js";
 import {
   loadUser,
   requireAdmin,
   requireAdminOrManager,
   requireAuth,
+  requireSuperDesigner,
   requireZone,
 } from "./middleware/auth.js";
 import { calculatorRouter } from "./routes/calculator.js";
@@ -54,6 +56,8 @@ app.use("/api/smartico", loadUser, requireAuth, requireZone("CRM"), smarticoRout
 app.use("/api/crm", loadUser, requireAuth, requireZone("CRM"), crmRouter);
 app.use("/api/tournament-admin", loadUser, requireAuth, requireAdminOrManager, tournamentAdminRouter);
 app.use("/api/tournament", loadUser, requireAuth, requireZone("DESIGNER"), tournamentRouter);
+// Super-designer surface (own-brand CRUD + brand test runs).
+app.use("/api/my-brands", loadUser, requireAuth, requireSuperDesigner, myBrandsRouter);
 // Generic /api (generate) is a Design-zone route — keep it last so the more
 // specific prefixes above match first.
 app.use("/api", loadUser, requireAuth, requireZone("DESIGNER"), generateRouter);

@@ -24,6 +24,12 @@ export default defineNuxtRouteMiddleware(async (to) => {
     return navigateTo("/forbidden");
   }
 
+  // Library (TASK super-designer): own-brand management — super-designers,
+  // ADMIN and MANAGER only (mirrors the backend requireSuperDesigner guard).
+  if (to.path.startsWith("/library") && !auth.canCreateStyles) {
+    return navigateTo("/forbidden");
+  }
+
   // Zone walls: CRM-only users can't reach the Design app, and Designer-only
   // users can't reach the CRM zone. ADMIN passes both (canDesign/canCrm true).
   const isCrmRoute = to.path.startsWith("/crm");

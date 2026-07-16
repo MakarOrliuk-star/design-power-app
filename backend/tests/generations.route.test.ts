@@ -156,6 +156,13 @@ describe("GET /api/generations — tab filters", () => {
     expect(res.status).toBe(400);
     expect(res.body.error).toBe("invalid_query");
   });
+
+  it("every tab EXCLUDES unsaved brand-test runs (isTest=false, TASK super-designer)", async () => {
+    for (const tab of ["", "?tab=person", "?tab=edited", "?tab=tournament"]) {
+      await request(makeApp()).get(`/api/generations${tab}`);
+      expect(lastWhere().isTest).toBe(false);
+    }
+  });
 });
 
 /**
