@@ -76,32 +76,36 @@ onBeforeUnmount(() => document.removeEventListener("click", onDocClick));
       <span class="picker__count">Selected {{ tour.selectedBrandIds.length }}/{{ MAX_TOURNAMENT_BRANDS }}</span>
     </div>
 
-    <div v-for="b in chips" :key="b.id" class="chip">
-      <span class="chip__label">{{ formatBrand(b.name) }}</span>
-      <button class="chip__x" type="button" :aria-label="`Убрать ${b.name}`" @click="tour.removeBrand(b.id)">
-        <svg viewBox="0 0 24 24" width="10" height="10" fill="none">
-          <path d="M6 6l12 12M18 6L6 18" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" />
-        </svg>
-      </button>
+    <div class="chips">
+      <div v-for="b in chips" :key="b.id" class="chip">
+        <span class="chip__label">{{ formatBrand(b.name) }}</span>
+        <button class="chip__x" type="button" :aria-label="`Убрать ${b.name}`" @click="tour.removeBrand(b.id)">
+          <svg viewBox="0 0 24 24" width="10" height="10" fill="none">
+            <path d="M6 6l12 12M18 6L6 18" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" />
+          </svg>
+        </button>
+      </div>
     </div>
   </div>
 </template>
 
 <style scoped>
+/* Frame 110: search 430×38, 32px to the first chip, chips 8px apart,
+   "Selected N/4" 14px under the search */
 .picker {
   display: flex;
   align-items: flex-start;
-  gap: var(--space-16);
+  gap: var(--space-32);
   min-width: 0;
 }
 .picker__search {
   display: flex;
   flex-direction: column;
-  gap: 6px;
-  flex: 0 1 440px;
+  gap: 14px;
+  flex: 0 1 430px;
   min-width: 220px;
 }
-/* mock: 440×38, pill, magnifier right */
+/* mock: 430×38, pill, magnifier right */
 .search {
   position: relative;
 }
@@ -172,6 +176,14 @@ onBeforeUnmount(() => document.removeEventListener("click", onDocClick));
   margin: 4px 12px 6px;
   font-size: var(--fs-tab);
   color: var(--color-grey);
+}
+
+.chips {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px;
+  min-width: 0;
 }
 
 /* gradient chip (mock: pill, white label, ✕ in a translucent circle) */

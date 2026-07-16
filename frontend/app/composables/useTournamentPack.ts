@@ -9,6 +9,8 @@ import { ref, computed, watch, onMounted, onBeforeUnmount } from "vue";
 import {
   bustCache,
   mapScaleError,
+  buildEditBody,
+  type SelectMode,
   type Pad,
   type Placement,
   type InpaintPayload,
@@ -100,11 +102,48 @@ function elementFolderOf(g: PackGeneration): string {
   return sanitizeName(g.tourElementName ?? "") || (g.tourFileName ? packFolderOf(g.tourFileName) : "");
 }
 
-/** File name inside the ZIP brand folder: "Tournament_1_2[_women]" (element + index + gender). */
+/**
+ * Card caption: "Bonuskong_Tournament_1_2[_women]" (brand + element + index +
+ * gender). The brand moved INTO the caption (Phase 0, 5а) because the tab
+ * groups by category → subcategory (Frame 110-1), not by brand folder anymore.
+ */
 export function packDisplayName(g: PackGeneration): string {
   if (!g.tourFileName) return "";
-  const { gender } = splitBrandGender(g.brandName);
-  return `${elementFolderOf(g)}_${trailingIndexOf(g.tourFileName)}${gender ? `_${gender}` : ""}`;
+  const { base, gender } = splitBrandGender(g.brandName);
+  const brand = sanitizeName(base);
+  return `${brand ? `${brand}_` : ""}${elementFolderOf(g)}_${trailingIndexOf(g.tourFileName)}${gender ? `_${gender}` : ""}`;
+}
+
+/** "BASE" | "VIP" -> the human label used in titles ("Base" / "VIP"). */
+export function modeLabel(mode: PackMode | null): string {
+  return mode === "VIP" ? "VIP" : "Base";
+}
+
+export interface PackSubgroup {
+  key: string; // "Tournament_1:BASE"
+  title: string; // "Tournament_1_Base" (mock: the subcategory line)
+  images: PackGeneration[];
+}
+
+/**
+ * Second grouping level (Frame 110-1): inside a batch (= one main category)
+ * the images are grouped by SUBCATEGORY — the element under its mode
+ * ("Tournament_1_Base"), in first-appearance order.
+ */
+export function groupPackByElement(generations: PackGeneration[]): PackSubgroup[] {
+  const map = new Map<string, PackSubgroup>();
+  for (const g of generations) {
+    if (!g.tourFileName) continue;
+    const el = elementFolderOf(g) || "Unknown";
+    const key = `${el}:${g.tourMode ?? "BASE"}`;
+    let group = map.get(key);
+    if (!group) {
+      group = { key, title: `${el}_${modeLabel(g.tourMode)}`, images: [] };
+      map.set(key, group);
+    }
+    group.images.push(g);
+  }
+  return [...map.values()];
 }
 
 /**
@@ -175,13 +214,16 @@ export function prettifyCategoryKey(key: string): string {
 }
 
 /**
- * Batch header title — what the batch generated (заказчик: "Tournament",
- * "Lotterie"…), derived from the rows' denormalized category keys. Batches are
- * created one per category, but distinct keys are joined just in case.
+ * Batch header title — the MAIN category line of the mock ("Tournament (Base)"):
+ * category name from the rows' denormalized keys + the mode(s) the batch
+ * generated. Batches are created one per category, but distinct keys/modes are
+ * joined just in case ("Tournament (Base + VIP)").
  */
 export function batchCategoryLabel(batch: PackBatch): string {
   const keys = [...new Set(batch.generations.map((g) => g.tourCategoryKey).filter(Boolean))];
-  return keys.map((k) => prettifyCategoryKey(k!)).join(" + ") || "Tournament";
+  const name = keys.map((k) => prettifyCategoryKey(k!)).join(" + ") || "Tournament";
+  const modes = [...new Set(batch.generations.map((g) => g.tourMode).filter(Boolean))] as PackMode[];
+  return modes.length ? `${name} (${modes.map(modeLabel).join(" + ")})` : name;
 }
 
 /** Ids that CAN be exported (DONE with a stored image). */
@@ -280,6 +322,20 @@ export function useTournamentPack(deps: PackDeps) {
   function clearSelection() {
     selected.value = new Set();
   }
+  /** The live rows behind the ticks (drives the Edit panel + Scale target). */
+  const selectedImages = computed(() =>
+    batches.value.flatMap((b) =>
+      b.generations.filter(
+        (g) => selected.value.has(g.id) && g.status === "DONE" && !!g.generatedImageUrl,
+      ),
+    ),
+  );
+  /** Bar's "Select all" (result.vue delegates here on the Tournament tab). */
+  function toggleSelectAll() {
+    const ids = exportableIds(batches.value);
+    const all = ids.length > 0 && ids.every((id) => selected.value.has(id));
+    selected.value = all ? new Set() : new Set(ids);
+  }
 
   // ---- Whole-batch (session) checkbox ----
   function batchState(b: PackBatch): "all" | "some" | "none" {
@@ -298,24 +354,30 @@ export function useTournamentPack(deps: PackDeps) {
   }
 
   // ---- Edit the ticked images (same /api/generate/edit as the other tabs; the
-  // results land in the Edited tab as a regular edit batch) ----
+  // results land in the Edited tab as a regular edit batch). ALL mode shares
+  // one prompt, EACH mode sends a per-image map — same contract as useResult.
   const editPrompt = ref("");
+  const perEditPrompts = ref<Record<string, string>>({});
   const editing = ref(false);
   const editError = ref("");
-  async function runEdit() {
-    const ids = [...selected.value];
-    const prompt = editPrompt.value.trim();
-    if (!ids.length || !prompt || editing.value) return;
+  async function runEdit(mode: SelectMode = "ALL") {
+    if (editing.value) return;
+    const built = buildEditBody(mode, selectedImages.value, editPrompt.value, perEditPrompts.value);
+    if (!built.ok) {
+      if (built.error !== "no_selection") editError.value = built.error;
+      return;
+    }
     editError.value = "";
     editing.value = true;
     try {
       const res = await api<{ batchId: string; count: number }>("/api/generate/edit", {
         method: "POST",
-        body: { generationIds: ids, prompt },
+        body: built.body,
       });
       // Toolbar progress + completion toast, like every other edit.
       gen.addBatch(res.batchId, "item");
       editPrompt.value = "";
+      perEditPrompts.value = {};
       clearSelection();
       deps.onEdited?.();
     } catch (e: unknown) {
@@ -354,6 +416,26 @@ export function useTournamentPack(deps: PackDeps) {
     scaleError.value = "";
     scaleMsg.value = "";
   }
+
+  /**
+   * What the right panel's ScalePanel edits: the card whose pencil was clicked,
+   * else the single ticked image (mirrors useResult's scaleTarget). A selection
+   * change drops a stale pencil target so the panel follows the ticks again.
+   */
+  const panelScaleImage = computed(() => {
+    if (scaleImage.value) return scaleImage.value;
+    const sel = selectedImages.value;
+    if (sel.length !== 1) return null;
+    const g = sel[0]!;
+    return { id: g.id, generatedImageUrl: g.generatedImageUrl!, brandName: g.brandName };
+  });
+  watch(
+    selected,
+    () => {
+      scaleTargetId.value = null;
+    },
+    { flush: "sync" },
+  );
 
   /** Swap the edited image's URL in place (cache-busted, mirrors useResult). */
   function applyReplacement(res: { generationId: string; generatedImageUrl: string }) {
@@ -488,13 +570,17 @@ export function useTournamentPack(deps: PackDeps) {
     isSelected,
     selectedCount,
     clearSelection,
+    selectedImages,
+    toggleSelectAll,
     batchState,
     toggleBatch,
     editPrompt,
+    perEditPrompts,
     editing,
     editError,
     runEdit,
     scaleImage,
+    panelScaleImage,
     setScaleTarget,
     scaling,
     scaleError,

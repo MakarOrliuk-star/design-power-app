@@ -5,6 +5,7 @@ import {
   packFolderOf,
   packDisplayName,
   groupPack,
+  groupPackByElement,
   batchStatusLabel,
   packCounts,
   exportableIds,
@@ -72,20 +73,20 @@ describe("groupPack — the flat ZIP layout ({Brand}/{Element}_N.png)", () => {
     expect(groups[1]!.images).toEqual([other, women]);
   });
 
-  it("packDisplayName = element + index + gender suffix (the ZIP file name)", () => {
+  it("packDisplayName = brand + element + index + gender (Frame 110-1 caption)", () => {
     expect(packDisplayName(gen({ tourFileName: "Bonuskong_Tournament_1_2" }))).toBe(
-      "Tournament_1_2",
+      "Bonuskong_Tournament_1_2",
     );
     expect(
       packDisplayName(
         gen({ tourFileName: "SpinogambinoMen_Tournament_1_2", brandName: "Spinogambino(Men)" }),
       ),
-    ).toBe("Tournament_1_2_men");
+    ).toBe("Spinogambino_Tournament_1_2_men");
     expect(
       packDisplayName(
         gen({ tourElementName: "Playson & Booongo", tourFileName: "Bonuskong_Playson_&_Booongo_3" }),
       ),
-    ).toBe("Playson_&_Booongo_3");
+    ).toBe("Bonuskong_Playson_&_Booongo_3");
   });
 
   it("packFolderOf strips only the trailing index (old-row fallback)", () => {
@@ -95,6 +96,34 @@ describe("groupPack — the flat ZIP layout ({Brand}/{Element}_N.png)", () => {
 
   it("skips rows without a fixed file name (never crashes the tab)", () => {
     expect(groupPack([gen({ tourFileName: null })])).toEqual([]);
+  });
+});
+
+describe("groupPackByElement — the Frame 110-1 subcategory level", () => {
+  it("groups by element+mode with 'Element_Mode' titles, first-appearance order", () => {
+    const t1a = gen({ tourElementName: "Tournament_1" });
+    const t2 = gen({ tourElementName: "Tournament_2", tourFileName: "Bonuskong_Tournament_2_1" });
+    const t1b = gen({
+      tourElementName: "Tournament_1",
+      brandName: "Spinogambino(Men)",
+      tourFileName: "SpinogambinoMen_Tournament_1_1",
+    });
+    const groups = groupPackByElement([t1a, t2, t1b]);
+    // Brands merge inside a subcategory — the level is the element, not the brand.
+    expect(groups.map((g) => g.title)).toEqual(["Tournament_1_Base", "Tournament_2_Base"]);
+    expect(groups[0]!.images).toEqual([t1a, t1b]);
+    expect(groups[1]!.images).toEqual([t2]);
+  });
+
+  it("the same element under Base and VIP makes two visually separate blocks", () => {
+    const base = gen({ tourMode: "BASE" });
+    const vip = gen({ tourMode: "VIP" });
+    const groups = groupPackByElement([base, vip]);
+    expect(groups.map((g) => g.title)).toEqual(["Tournament_1_Base", "Tournament_1_VIP"]);
+  });
+
+  it("skips rows without a fixed file name (never crashes the tab)", () => {
+    expect(groupPackByElement([gen({ tourFileName: null })])).toEqual([]);
   });
 });
 
@@ -129,18 +158,23 @@ describe("packCounts / exportableIds / batchStatusLabel", () => {
   });
 });
 
-describe("batchCategoryLabel — the batch header title", () => {
-  it("prettifies the rows' category key ('what was generated')", () => {
+describe("batchCategoryLabel — the main category line (Frame 110-1)", () => {
+  it("prettifies the rows' category key and appends the generated mode(s)", () => {
     const batch: PackBatch = {
       id: "b1",
       status: "COMPLETED",
       createdAt: "2026-07-13T16:22:00Z",
       generations: [gen({ tourCategoryKey: "tournament" }), gen({ tourCategoryKey: "tournament" })],
     };
-    expect(batchCategoryLabel(batch)).toBe("Tournament");
+    expect(batchCategoryLabel(batch)).toBe("Tournament (Base)");
+    const both: PackBatch = {
+      ...batch,
+      generations: [gen({ tourMode: "BASE" }), gen({ tourMode: "VIP" })],
+    };
+    expect(batchCategoryLabel(both)).toBe("Tournament (Base + VIP)");
   });
 
-  it("handles multi-word keys, mixed batches and missing keys", () => {
+  it("handles multi-word keys, mixed batches and missing keys/modes", () => {
     expect(prettifyCategoryKey("calendar_vip")).toBe("Calendar VIP");
     expect(prettifyCategoryKey("lotterie")).toBe("Lotterie");
     const mixed: PackBatch = {
@@ -149,8 +183,11 @@ describe("batchCategoryLabel — the batch header title", () => {
       createdAt: "2026-07-13T16:22:00Z",
       generations: [gen({ tourCategoryKey: "lotterie" }), gen({ tourCategoryKey: "provider" })],
     };
-    expect(batchCategoryLabel(mixed)).toBe("Lotterie + Provider");
-    const legacy: PackBatch = { ...mixed, generations: [gen({ tourCategoryKey: null })] };
+    expect(batchCategoryLabel(mixed)).toBe("Lotterie + Provider (Base)");
+    const legacy: PackBatch = {
+      ...mixed,
+      generations: [gen({ tourCategoryKey: null, tourMode: null })],
+    };
     expect(batchCategoryLabel(legacy)).toBe("Tournament"); // graceful fallback
   });
 });
@@ -333,6 +370,85 @@ describe("useTournamentPack — selection + export flow", () => {
     });
     expect(result.scaleError.value).toBe("Не удалось обработать область — попробуйте другую маску.");
     expect(result.batches.value[0]!.generations[0]!.generatedImageUrl).toBe(g1.generatedImageUrl); // untouched
+    unmount();
+  });
+
+  it("toggleSelectAll ticks every exportable image across batches, then clears", async () => {
+    const g1 = gen();
+    const g2 = gen();
+    const failed = gen({ status: "FAILED", generatedImageUrl: null });
+    const deps = makeDeps([
+      { id: "b1", status: "COMPLETED", createdAt: "2026-07-10T10:00:00Z", generations: [g1, failed] },
+      { id: "b2", status: "COMPLETED", createdAt: "2026-07-09T10:00:00Z", generations: [g2] },
+    ]);
+    const { result, unmount } = withSetup(() => useTournamentPack(deps));
+    await vi.waitFor(() => expect(result.batches.value).toHaveLength(2));
+
+    result.toggleSelectAll();
+    expect([...result.selected.value].sort()).toEqual([g1.id, g2.id].sort());
+    result.toggleSelectAll(); // all selected -> clears
+    expect(result.selected.value.size).toBe(0);
+    unmount();
+  });
+
+  it("runEdit in EACH mode sends the per-image prompt map", async () => {
+    const g1 = gen();
+    const g2 = gen();
+    const batch: PackBatch = {
+      id: "b1",
+      status: "COMPLETED",
+      createdAt: "2026-07-10T10:00:00Z",
+      generations: [g1, g2],
+    };
+    const deps = makeDeps([batch]);
+    (deps.api as ReturnType<typeof vi.fn>).mockImplementation(async (url: string) =>
+      url === "/api/generate/edit"
+        ? { batchId: "edit-b1", count: 2 }
+        : { batches: [batch], total: 1, hasMore: false },
+    );
+    const { result, unmount } = withSetup(() => useTournamentPack(deps));
+    await vi.waitFor(() => expect(result.batches.value).toHaveLength(1));
+
+    result.toggleSelect(g1.id);
+    result.toggleSelect(g2.id);
+    result.perEditPrompts.value = { [g1.id]: "neon", [g2.id]: "" };
+    await result.runEdit("EACH");
+    // A missing per-image prompt is a user-facing error, not a request.
+    expect(deps.api).not.toHaveBeenCalledWith("/api/generate/edit", expect.anything());
+    expect(result.editError.value).toContain("каждой");
+
+    result.perEditPrompts.value = { [g1.id]: "neon", [g2.id]: "gold" };
+    await result.runEdit("EACH");
+    expect(deps.api).toHaveBeenCalledWith("/api/generate/edit", {
+      method: "POST",
+      body: { generationIds: [g1.id, g2.id], perPrompts: { [g1.id]: "neon", [g2.id]: "gold" } },
+    });
+    unmount();
+  });
+
+  it("panelScaleImage targets the pencil'd card, else the single ticked image", async () => {
+    const g1 = gen();
+    const g2 = gen();
+    const batch: PackBatch = {
+      id: "b1",
+      status: "COMPLETED",
+      createdAt: "2026-07-10T10:00:00Z",
+      generations: [g1, g2],
+    };
+    const deps = makeDeps([batch]);
+    const { result, unmount } = withSetup(() => useTournamentPack(deps));
+    await vi.waitFor(() => expect(result.batches.value).toHaveLength(1));
+
+    expect(result.panelScaleImage.value).toBeNull(); // nothing ticked, no pencil
+    result.toggleSelect(g1.id);
+    expect(result.panelScaleImage.value).toMatchObject({ id: g1.id });
+    result.toggleSelect(g2.id); // two ticked -> ambiguous, no target
+    expect(result.panelScaleImage.value).toBeNull();
+
+    result.setScaleTarget(g2.id); // the pencil wins over the selection
+    expect(result.panelScaleImage.value).toMatchObject({ id: g2.id });
+    result.toggleSelect(g2.id); // any selection change drops the stale pencil
+    expect(result.panelScaleImage.value).toMatchObject({ id: g1.id });
     unmount();
   });
 
