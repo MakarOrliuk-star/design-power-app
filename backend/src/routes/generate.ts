@@ -557,6 +557,9 @@ function galleryWhere(
   return {
     userId,
     status: "DONE",
+    // Unsaved brand-test runs (super-designer modal) never reach the gallery;
+    // «Сохранить» flips isTest to false and the image appears here.
+    isTest: false,
     generatedImageUrl: { not: null },
     createdAt: { gte: periodSince(q.period) },
     ...(q.brand ? { brandName: q.brand } : {}),

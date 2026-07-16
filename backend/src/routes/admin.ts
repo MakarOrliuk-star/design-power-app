@@ -5,6 +5,7 @@ import { prisma } from "../lib/prisma.js";
 import { cloudinaryConfigured } from "../env.js";
 import { uploadBase64, withRetry } from "../lib/cloudinary.js";
 import { MODEL_KEYS, MODEL_OPTIONS } from "../lib/falModels.js";
+import { createBrand } from "../services/brand.service.js";
 
 // All routes here are mounted behind loadUser + requireAdmin (see index.ts).
 export const adminRouter: Router = Router();
@@ -72,7 +73,7 @@ adminRouter.get("/users", async (_req: Request, res: Response) => {
 });
 
 const patchUserSchema = z.object({
-  role: z.enum(["ADMIN", "DESIGNER", "CRM", "MANAGER"]).optional(),
+  role: z.enum(["ADMIN", "DESIGNER", "CRM", "MANAGER", "SUPER_DESIGNER"]).optional(),
   isActive: z.boolean().optional(),
 });
 
@@ -97,7 +98,10 @@ adminRouter.patch("/users/:id", async (req: Request, res: Response) => {
   }
 
   // Build the update payload without explicit `undefined` (exactOptionalPropertyTypes).
-  const data: { role?: "ADMIN" | "DESIGNER" | "CRM" | "MANAGER"; isActive?: boolean } = {};
+  const data: {
+    role?: "ADMIN" | "DESIGNER" | "CRM" | "MANAGER" | "SUPER_DESIGNER";
+    isActive?: boolean;
+  } = {};
   if (parsed.data.role !== undefined) data.role = parsed.data.role;
   if (parsed.data.isActive !== undefined) data.isActive = parsed.data.isActive;
 
@@ -183,50 +187,22 @@ adminRouter.post("/brands", async (req: Request, res: Response) => {
     return;
   }
 
-  const existing = await prisma.brand.findUnique({ where: { name }, select: { id: true } });
-  if (existing) {
-    res.status(409).json({ error: "already_exists" });
+  const result = await createBrand({
+    name,
+    categoryIds,
+    personPrompt,
+    stylePrompt,
+    referenceImages,
+    forcedAspectRatio,
+    createdById: req.user!.sub,
+  });
+  if (!result.ok) {
+    res
+      .status(result.error === "already_exists" ? 409 : 500)
+      .json({ error: result.error });
     return;
   }
-
-  // Keep only category IDs that actually exist.
-  const validCategoryIds = categoryIds.length
-    ? (
-        await prisma.brandCategory.findMany({
-          where: { id: { in: categoryIds } },
-          select: { id: true },
-        })
-      ).map((c) => c.id)
-    : [];
-
-  const refs = referenceImages.map((s) => s.trim()).filter(Boolean);
-
-  try {
-    const brand = await prisma.brand.create({
-      data: {
-        name,
-        forcedAspectRatio,
-        categories: { create: validCategoryIds.map((id) => ({ category: { connect: { id } } })) },
-        ...(stylePrompt.trim() || refs.length
-          ? { nanoRef: { create: { referenceImages: refs, stylePrompt: stylePrompt.trim() } } }
-          : {}),
-      },
-      select: { id: true, name: true },
-    });
-
-    // Base PERSON prompt (looked up by brand name in the generation flow).
-    if (personPrompt.trim()) {
-      await prisma.promptTemplate.upsert({
-        where: { type_key: { type: "PERSON", key: name } },
-        create: { type: "PERSON", key: name, content: personPrompt, brandId: brand.id },
-        update: { content: personPrompt, brandId: brand.id },
-      });
-    }
-
-    res.status(201).json({ brand });
-  } catch {
-    res.status(500).json({ error: "create_failed" });
-  }
+  res.status(201).json({ brand: result.brand });
 });
 
 /**

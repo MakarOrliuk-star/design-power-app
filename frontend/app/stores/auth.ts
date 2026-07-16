@@ -5,7 +5,7 @@ export interface AuthUser {
   email: string;
   name?: string | null;
   avatarUrl?: string | null;
-  role: "ADMIN" | "DESIGNER" | "CRM" | "MANAGER";
+  role: "ADMIN" | "DESIGNER" | "CRM" | "MANAGER" | "SUPER_DESIGNER";
 }
 
 /**
@@ -30,10 +30,24 @@ export const useAuthStore = defineStore("auth", () => {
   // Zone access — ADMIN and MANAGER reach both zones; DESIGNER/CRM are walled off
   // to their own. (MANAGER = Design + CRM, but not /admin → see isAdmin.)
   const canDesign = computed(
-    () => user.value?.role === "ADMIN" || user.value?.role === "MANAGER" || user.value?.role === "DESIGNER",
+    () =>
+      user.value?.role === "ADMIN" ||
+      user.value?.role === "MANAGER" ||
+      user.value?.role === "DESIGNER" ||
+      user.value?.role === "SUPER_DESIGNER",
   );
   const canCrm = computed(
     () => user.value?.role === "ADMIN" || user.value?.role === "MANAGER" || user.value?.role === "CRM",
+  );
+  const isSuperDesigner = computed(() => user.value?.role === "SUPER_DESIGNER");
+  // The Create a New Style / Library surface (TASK super-designer): visible to
+  // SUPER_DESIGNER plus ADMIN/MANAGER (Phase 0 decision) — mirrors the backend
+  // requireSuperDesigner guard.
+  const canCreateStyles = computed(
+    () =>
+      user.value?.role === "SUPER_DESIGNER" ||
+      user.value?.role === "ADMIN" ||
+      user.value?.role === "MANAGER",
   );
 
   async function fetchMe() {
@@ -63,6 +77,8 @@ export const useAuthStore = defineStore("auth", () => {
     isCrm,
     isDesigner,
     isManager,
+    isSuperDesigner,
+    canCreateStyles,
     canAdminPanel,
     canDesign,
     canCrm,

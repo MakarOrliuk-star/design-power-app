@@ -214,6 +214,76 @@ export async function createItemBatch(p: ItemParams): Promise<CreateBatchResult>
   return { batchId: batch.id, count: created.length };
 }
 
+/**
+ * Brand test run (TASK super-designer, «Протестировать бренд»). One NANO_REF
+ * Person generation locked to the given brand, marked isTest=true so it stays
+ * out of Results/Archive until the user hits «Сохранить». Reuses the standard
+ * person queue/worker; the i-th-ref pairing degenerates to refs[0] (count=1),
+ * matching what a Home generation of this brand would use.
+ */
+export async function createBrandTestBatch(p: {
+  userId: string;
+  brandId: string;
+  prompt: string;
+  aspectRatio: string;
+}): Promise<{ batchId: string; generationId: string }> {
+  const brand = await prisma.brand.findUnique({
+    where: { id: p.brandId },
+    select: {
+      id: true,
+      name: true,
+      forcedAspectRatio: true,
+      nanoRef: { select: { referenceImages: true } },
+    },
+  });
+  if (!brand) throw new Error("brand_not_found");
+
+  const aspect = brand.forcedAspectRatio || p.aspectRatio;
+  const refs = brand.nanoRef?.referenceImages ?? [];
+  const imageUrls = refs.length > 0 ? [refs[0]!] : [];
+
+  const batch = await prisma.batch.create({
+    data: {
+      userId: p.userId,
+      actionType: "NANO_REF",
+      description: p.prompt,
+    },
+  });
+
+  const gen = await prisma.generation.create({
+    data: {
+      batchId: batch.id,
+      userId: p.userId,
+      brandName: brand.name,
+      brandId: brand.id,
+      isTest: true,
+      description: p.prompt,
+      referenceImages: imageUrls,
+      actionType: "NANO_REF",
+      status: "QUEUED",
+      statusMessage: "⏳ Queued",
+      job: {
+        create: {
+          provider: "FAL",
+          type: "PERSON",
+          status: "QUEUED",
+          batchId: batch.id,
+          cloudinaryFolder: folderFor(brand.name),
+        },
+      },
+    },
+    select: { id: true },
+  });
+
+  await getPersonQueue().add("submit", {
+    generationId: gen.id,
+    batchId: batch.id,
+    aspectRatio: aspect,
+  });
+
+  return { batchId: batch.id, generationId: gen.id };
+}
+
 type ActionType = "FULL" | "CREATE_ITEM" | "NANO_REF" | "TOURNAMENT";
 
 interface EditSource {

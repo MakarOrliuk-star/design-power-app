@@ -99,6 +99,32 @@ const userInitials = computed(() => {
   return (letters || base.slice(0, 2)).toUpperCase();
 });
 
+// Super-designer menu (TASK super-designer): click on the user card opens
+// Create a New Style / Library — visible to SUPER_DESIGNER/ADMIN/MANAGER only.
+const superDesigner = useSuperDesignerStore();
+const userMenuOpen = ref(false);
+const userCardEl = ref<HTMLElement | null>(null);
+
+function toggleUserMenu() {
+  if (!auth.canCreateStyles) return;
+  userMenuOpen.value = !userMenuOpen.value;
+}
+function openCreateStyle() {
+  userMenuOpen.value = false;
+  superDesigner.openCreate();
+}
+function goLibrary() {
+  userMenuOpen.value = false;
+  void navigateTo("/library");
+}
+function onDocClick(e: MouseEvent) {
+  if (userMenuOpen.value && userCardEl.value && !userCardEl.value.contains(e.target as Node)) {
+    userMenuOpen.value = false;
+  }
+}
+onMounted(() => document.addEventListener("click", onDocClick));
+onBeforeUnmount(() => document.removeEventListener("click", onDocClick));
+
 </script>
 
 <template>
@@ -313,15 +339,30 @@ const userInitials = computed(() => {
     </div>
 
     <!-- User -->
-    <div class="card card--user">
-      <span class="user__email">{{ userEmail }}</span>
-      <span class="user__avatar">{{ userInitials }}</span>
-      <button class="user__logout" type="button" aria-label="Выйти" title="Выйти" @click="logout">
-        <svg viewBox="0 0 24 24" width="18" height="18" fill="none">
-          <path d="M15 4H7a2 2 0 00-2 2v12a2 2 0 002 2h8" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" />
-          <path d="M11 12h9m0 0l-3.5-3.5M20 12l-3.5 3.5" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" />
-        </svg>
-      </button>
+    <div ref="userCardEl" class="user-wrap">
+      <div
+        :class="['card', 'card--user', { 'card--user-clickable': auth.canCreateStyles }]"
+        :role="auth.canCreateStyles ? 'button' : undefined"
+        :aria-expanded="auth.canCreateStyles ? userMenuOpen : undefined"
+        @click="toggleUserMenu"
+      >
+        <span class="user__email">{{ userEmail }}</span>
+        <span class="user__avatar">{{ userInitials }}</span>
+        <button class="user__logout" type="button" aria-label="Выйти" title="Выйти" @click.stop="logout">
+          <svg viewBox="0 0 24 24" width="18" height="18" fill="none">
+            <path d="M15 4H7a2 2 0 00-2 2v12a2 2 0 002 2h8" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" />
+            <path d="M11 12h9m0 0l-3.5-3.5M20 12l-3.5 3.5" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" />
+          </svg>
+        </button>
+      </div>
+
+      <!-- Super-designer menu (mock figma/super-designer): Create a New Style / Library -->
+      <div v-if="userMenuOpen && auth.canCreateStyles" class="user-menu">
+        <button class="user-menu__item" type="button" @click="openCreateStyle">
+          Create a New Style
+        </button>
+        <button class="user-menu__item" type="button" @click="goLibrary">Library</button>
+      </div>
     </div>
   </div>
 </template>
@@ -478,10 +519,49 @@ html[data-theme="dark"] .logo {
 }
 
 /* --- user --- */
-.card--user {
+.user-wrap {
+  position: relative;
   flex: 0 0 280px;
+  display: flex;
+}
+.card--user {
+  flex: 1 1 auto;
   justify-content: space-between;
   gap: 12px;
+}
+.card--user-clickable {
+  cursor: pointer;
+}
+
+/* dropdown per the super-designer mock: white card under the user card */
+.user-menu {
+  position: absolute;
+  top: calc(100% + 8px);
+  right: 0;
+  z-index: 60;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  min-width: 250px;
+  padding: 8px;
+  background: var(--color-white);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-lg);
+  box-shadow: 0 10px 30px rgba(30, 30, 60, 0.12);
+}
+.user-menu__item {
+  padding: 12px 16px;
+  border: none;
+  border-radius: 12px;
+  background: none;
+  text-align: right;
+  font-size: var(--fs-user);
+  font-weight: 500;
+  color: var(--color-text);
+  cursor: pointer;
+}
+.user-menu__item:hover {
+  background: var(--color-segment);
 }
 .user__email {
   font-size: var(--fs-user); /* 14px — User Title */
@@ -535,7 +615,7 @@ html[data-theme="dark"] .logo {
     flex-wrap: wrap;
   }
   .card--logo,
-  .card--user {
+  .user-wrap {
     flex: 1 1 auto;
   }
   .card--progress {

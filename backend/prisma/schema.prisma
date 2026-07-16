@@ -26,6 +26,10 @@ enum Role {
   // MANAGER reaches BOTH the Design and CRM zones (but not /admin). Treated like
   // ADMIN by requireZone for zone access; blocked from admin routes by requireAdmin.
   MANAGER
+  // Super-designer (TASK super-designer): DESIGNER zone access + own-brand
+  // management via /api/my-brands (create/edit/delete/test only brands they
+  // created). No CRM, no /admin.
+  SUPER_DESIGNER
 }
 
 model User {
@@ -45,6 +49,7 @@ model User {
   itemFavorites       ItemStyleFavorite[]
   crmFavorites        CrmServiceFavorite[]
   tournamentOverrides UserTournamentPromptOverride[]
+  brandsCreated       Brand[]
 
   @@index([email])
 }
@@ -75,12 +80,20 @@ model Brand {
   // otherwise a MODEL_REGISTRY key (e.g. "xai/grok-imagine-image"). The endpoint
   // (/edit vs text-to-image) and request body are derived from the registry.
   imageModel        String?
+  // Ownership (TASK super-designer): the user who created the brand. Legacy
+  // brands are null ("nobody's") — editable only via the admin panel. A
+  // super-designer may edit/delete/test ONLY brands where createdById = self.
+  createdById       String?
+  createdBy         User?    @relation(fields: [createdById], references: [id], onDelete: SetNull)
   createdAt         DateTime @default(now())
 
-  categories BrandCategoryLink[]
-  nanoRef    BrandNanoRef?
-  prompts    PromptTemplate[]
-  favorites  BrandFavorite[]
+  categories      BrandCategoryLink[]
+  nanoRef         BrandNanoRef?
+  prompts         PromptTemplate[]
+  favorites       BrandFavorite[]
+  testGenerations Generation[]
+
+  @@index([createdById])
 }
 
 /// Brand tabs in the picker: Favorites / All Aramuz / Korea / Sport / ...
@@ -252,6 +265,13 @@ model Generation {
   statusMessage     String? // human-readable status text
   actionType        ActionType
   isEdit            Boolean          @default(false)
+  // Brand test run (TASK super-designer, actionType=NANO_REF): created from the
+  // "Протестировать бренд" panel. isTest=true keeps it OUT of Results/Archive
+  // until the user hits «Сохранить» (flips to false). brandId survives brand
+  // renames so Library keeps showing saved tests; SetNull on brand deletion.
+  isTest            Boolean          @default(false)
+  brandId           String?
+  brand             Brand?           @relation(fields: [brandId], references: [id], onDelete: SetNull)
   // Tournaments page (actionType=TOURNAMENT only, null elsewhere). The final
   // prompt is pre-built at batch creation and stored in `description`; the file
   // name is fixed here too so the ZIP/Result tab never re-derive it.

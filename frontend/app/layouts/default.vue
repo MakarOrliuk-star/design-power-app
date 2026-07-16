@@ -13,6 +13,9 @@
       </div>
     </main>
     <AppToasts />
+    <!-- Super-designer: Create a New Style / edit-brand modal (global, opens
+         from the toolbar user menu and from the Library page). -->
+    <SuperDesignerStyleModal />
   </div>
 </template>
 
