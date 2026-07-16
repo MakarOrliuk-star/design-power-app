@@ -25,8 +25,26 @@ const categoryName = computed(() => {
   return (id: string) => map.get(id) ?? "";
 });
 
-function refPreview(b: MyBrand): string | null {
-  return b.referenceImages.find((s) => s.trim()) ?? null;
+// Card cover: a color-palette tile with the brand name (no reference image).
+// The palette is picked by hashing the brand id — random-looking but stable
+// across reloads.
+const PALETTES = [
+  "linear-gradient(135deg, #6A72D9 0%, #8151AA 55%, #DD88ED 100%)",
+  "linear-gradient(135deg, #F7971E 0%, #FFD200 100%)",
+  "linear-gradient(135deg, #11998E 0%, #38EF7D 100%)",
+  "linear-gradient(135deg, #FC5C7D 0%, #6A82FB 100%)",
+  "linear-gradient(135deg, #FF6A88 0%, #FF99AC 100%)",
+  "linear-gradient(135deg, #4568DC 0%, #B06AB3 100%)",
+  "linear-gradient(135deg, #0BA360 0%, #3CBA92 100%)",
+  "linear-gradient(135deg, #F953C6 0%, #B91D73 100%)",
+  "linear-gradient(135deg, #36D1DC 0%, #5B86E5 100%)",
+  "linear-gradient(135deg, #F2994A 0%, #F2C94C 100%)",
+];
+
+function paletteFor(b: MyBrand): string {
+  let h = 0;
+  for (let i = 0; i < b.id.length; i++) h = (h * 31 + b.id.charCodeAt(i)) >>> 0;
+  return PALETTES[h % PALETTES.length]!;
 }
 
 function formatDate(iso: string): string {
@@ -102,13 +120,11 @@ async function onDelete(b: MyBrand) {
       <div v-else class="lane">
         <div class="grid">
           <article v-for="b in store.brands" :key="b.id" class="card">
-            <div class="card__preview">
-              <img v-if="refPreview(b)" :src="refPreview(b)!" alt="" class="card__img" />
-              <span v-else class="card__noimg">Нет референсов</span>
+            <div class="card__preview" :style="{ background: paletteFor(b) }">
+              <h3 class="card__name" :title="b.name">{{ b.name }}</h3>
             </div>
 
             <div class="card__body">
-              <h3 class="card__name" :title="b.name">{{ b.name }}</h3>
               <div class="card__meta">
                 <span>{{ formatDate(b.createdAt) }}</span>
                 <span v-if="b.forcedAspectRatio" class="pill">9:16</span>
@@ -241,35 +257,30 @@ async function onDelete(b: MyBrand) {
   border-radius: var(--radius-lg);
   overflow: hidden;
 }
+/* palette cover: brand name on a per-brand gradient tile */
 .card__preview {
   display: grid;
   place-items: center;
-  height: 180px;
-  background: var(--color-segment);
+  height: 140px;
+  padding: 0 16px;
 }
-.card__img {
-  width: 100%;
-  height: 100%;
-  object-fit: cover;
-}
-.card__noimg {
-  font-size: 13px;
-  color: var(--color-grey);
+.card__name {
+  margin: 0;
+  max-width: 100%;
+  font-size: 20px;
+  font-weight: 700;
+  color: #fff;
+  text-shadow: 0 1px 3px rgba(0, 0, 0, 0.25);
+  text-align: center;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 .card__body {
   display: flex;
   flex-direction: column;
   gap: 8px;
   padding: 14px 16px 16px;
-}
-.card__name {
-  margin: 0;
-  font-size: 16px;
-  font-weight: 600;
-  color: var(--color-text);
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
 }
 .card__meta {
   display: flex;
@@ -300,20 +311,24 @@ async function onDelete(b: MyBrand) {
   padding: 8px 12px;
   border: 1px solid var(--color-border);
   border-radius: 10px;
-  background: none;
+  background: var(--color-segment);
   font: inherit;
   font-size: 13px;
+  font-weight: 500;
   color: var(--color-text);
   cursor: pointer;
 }
 .act:hover:not(:disabled) {
-  background: var(--color-segment);
+  filter: brightness(0.96);
 }
 .act--open {
-  background: var(--color-segment);
+  background: var(--gradient-active);
+  border-color: transparent;
+  color: #fff;
   font-weight: 600;
 }
 .act--danger {
+  background: rgba(192, 57, 43, 0.08);
   color: #c0392b;
   border-color: rgba(192, 57, 43, 0.35);
 }
