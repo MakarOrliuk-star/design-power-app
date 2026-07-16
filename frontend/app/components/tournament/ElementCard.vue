@@ -28,6 +28,18 @@ watch(
 function onBlur() {
   void tour.saveOverride(props.element, mode.value, draft.value);
 }
+
+// The prompt box auto-grows to its content (Frame 110 / Phase 0: the whole
+// text is always visible, no scroll inside the box). +2 covers the borders.
+const ta = ref<HTMLTextAreaElement | null>(null);
+function autosize() {
+  const el = ta.value;
+  if (!el) return;
+  el.style.height = "auto";
+  el.style.height = `${el.scrollHeight + 2}px`;
+}
+onMounted(autosize);
+watch(draft, () => void nextTick(autosize));
 </script>
 
 <template>
@@ -70,6 +82,7 @@ function onBlur() {
     </div>
 
     <textarea
+      ref="ta"
       v-model="draft"
       :class="['el__prompt', { 'el__prompt--own': overridden }]"
       rows="2"
@@ -80,21 +93,18 @@ function onBlur() {
 </template>
 
 <style scoped>
+/* Frame 110: the checkbox + name row sits straight on the grey container
+   (no white card), the prompt box follows 9px below */
 .el {
   display: flex;
   flex-direction: column;
-  gap: 6px;
+  gap: 9px;
 }
-/* mock: white card 38px, radius 10, 1px #E5E5E5 */
 .el__card {
   display: flex;
   align-items: center;
   gap: 10px;
-  min-height: 38px;
-  padding: 0 12px;
-  background: var(--color-white);
-  border: 1px solid var(--color-bubble);
-  border-radius: 10px;
+  min-height: 14px;
 }
 .el__name {
   font-size: var(--fs-bubble);
@@ -132,16 +142,16 @@ function onBlur() {
   margin-left: 0;
 }
 
-/* checkbox (mock: 18px, radius 5, purple fill when on) */
+/* checkbox (mock: 14px, radius 4, purple fill when on) */
 .cb {
   flex: none;
   display: grid;
   place-items: center;
-  width: 18px;
-  height: 18px;
+  width: 14px;
+  height: 14px;
   padding: 0;
   border: 1.5px solid var(--color-border);
-  border-radius: 5px;
+  border-radius: 4px;
   background: var(--color-white);
 }
 .cb--on {
@@ -178,19 +188,21 @@ function onBlur() {
   color: var(--color-text);
 }
 
-/* prompt input (mock: bordered box, 2 lines of small grey text) */
+/* prompt input (Frame 110: compact white box, ~31px for 2 tiny grey lines).
+   Auto-grown from JS to fit ALL of its text — no inner scroll, ever. */
 .el__prompt {
   width: 100%;
-  padding: 8px 10px;
+  padding: 4px 8px;
   border: 1px solid var(--color-bubble);
   border-radius: 8px;
   background: var(--color-white);
   font-family: inherit;
-  font-size: 11px;
-  line-height: 1.45;
+  font-size: 10px;
+  line-height: 1.3;
   color: var(--color-grey);
-  resize: vertical;
-  min-height: 46px;
+  resize: none;
+  overflow: hidden;
+  min-height: 31px;
   outline: none;
 }
 .el__prompt:focus {

@@ -60,18 +60,18 @@ const modeLabel: Record<TourMode, string> = { BASE: "Base", VIP: "VIP" };
 </template>
 
 <style scoped>
+/* Frame 110: header row (cb 20 + title + Base/VIP), 20px to the grey body */
 .col {
   display: flex;
   flex-direction: column;
-  gap: 12px;
+  gap: 20px;
   min-width: 0;
-  min-height: 0;
 }
 .col__head {
   display: flex;
   align-items: center;
-  gap: 12px;
-  min-height: 30px;
+  gap: 14px;
+  min-height: 24px;
 }
 .col__title {
   margin: 0;
@@ -82,18 +82,18 @@ const modeLabel: Record<TourMode, string> = { BASE: "Base", VIP: "VIP" };
   text-overflow: ellipsis;
 }
 
-/* Base/VIP segmented toggle (mock: pill track, active half = white card) */
+/* Base/VIP segmented toggle (mock: compact 24px pill track, active = white) */
 .seg {
   margin-left: auto;
   flex: none;
   display: flex;
-  padding: 3px;
+  padding: 2px;
   border-radius: var(--radius-pill);
   background: var(--color-segment);
 }
 .seg__btn {
-  min-width: 64px;
-  padding: 4px 14px;
+  min-width: 56px;
+  padding: 2px 12px;
   border: none;
   border-radius: var(--radius-pill);
   background: transparent;
@@ -107,13 +107,13 @@ const modeLabel: Record<TourMode, string> = { BASE: "Base", VIP: "VIP" };
   box-shadow: var(--shadow-card);
 }
 
-/* category checkbox — same look as the element one */
+/* category checkbox (mock: 20px) */
 .cb {
   flex: none;
   display: grid;
   place-items: center;
-  width: 18px;
-  height: 18px;
+  width: 20px;
+  height: 20px;
   padding: 0;
   border: 1.5px solid var(--color-border);
   border-radius: 5px;
@@ -124,14 +124,14 @@ const modeLabel: Record<TourMode, string> = { BASE: "Base", VIP: "VIP" };
   background: var(--gradient-active);
 }
 
-/* grey container with the element cards; grows with its content (no local
-   scroll — the page's .cols grid is the one scroll area, per the mock) */
+/* grey container with the elements; grows with its content — NO local scroll
+   (Frame 110). Mock: 8px padding, 22px between elements. */
 .col__body {
   min-height: 120px; /* an empty category still reads as a card */
   display: flex;
   flex-direction: column;
-  gap: 10px;
-  padding: 12px;
+  gap: 22px;
+  padding: 8px;
   border-radius: var(--radius-md);
   background: var(--color-window);
   border: 1px solid var(--color-bubble);

@@ -39,6 +39,14 @@ const {
   dismissReady,
 } = useResult({ api: useApi() as unknown as ResultApi, gen });
 
+// The Tournament tab owns its selection (useTournamentPack) — the bar's
+// "Select all" delegates to it there; All/Each is passed down as a prop.
+const packRef = ref<{ toggleSelectAll: () => void } | null>(null);
+function onSelectAll() {
+  if (activeTab.value === "tournament") packRef.value?.toggleSelectAll();
+  else toggleSelectAll();
+}
+
 // Per-card copy-link with "copied!" feedback (icon flips to a checkmark).
 const { copiedKey, markCopied } = useCopied();
 function copyImage(img: { id: string; generatedImageUrl: string }) {
@@ -108,8 +116,8 @@ const viewerItems = computed(() =>
           </button>
         </nav>
 
-        <div v-if="activeTab !== 'tournament'" class="bar__right">
-          <button class="select-all" type="button" @click="toggleSelectAll">Select all</button>
+        <div class="bar__right">
+          <button class="select-all" type="button" @click="onSelectAll">Select all</button>
           <div class="seg" role="group" aria-label="Selection mode">
             <button
               type="button"
@@ -125,9 +133,15 @@ const viewerItems = computed(() =>
         </div>
       </div>
 
-      <!-- Tournament Pack (Phase 6): its own batch-grouped body + DES ZIP export.
-           An edit batch queued from the tab jumps to Edited, like everywhere. -->
-      <ResultTournamentPack v-if="activeTab === 'tournament'" @edited="selectTab('edited')" />
+      <!-- Tournament tab (Frame 110-1): category → subcategory grouping + the
+           shared right panel; DES ZIP export. The bar's Select all / All-Each
+           applies here too. An edit batch queued from the tab jumps to Edited. -->
+      <ResultTournamentPack
+        v-if="activeTab === 'tournament'"
+        ref="packRef"
+        :select-mode="selectMode"
+        @edited="selectTab('edited')"
+      />
 
       <!-- Gallery lane + Edit panel -->
       <div v-else class="content">

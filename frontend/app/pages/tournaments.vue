@@ -1,9 +1,9 @@
 <script setup lang="ts">
-// Tournaments (Phase 5) — laid out per figma/tournaments/tournament page.png
-// (design 1920 @1.5x, desktop only): a single white board with the brand
+// Tournaments (Phase 5) — laid out per figma/tournaments/Frame 110.png
+// (1880px board, 1:1 px, desktop only): a single white board with the brand
 // search + chips + Select all + global count stepper + Generate on top, and
-// the 4 category columns below. The board is locked to the screen; each
-// column's element list scrolls locally.
+// the 4 category columns below. NO scroll inside any block (Frame 110): the
+// board grows with its content and the page itself is the one scroll area.
 useHead({ title: "Design Power — Tournaments" });
 
 import { MAX_TOURNAMENT_COUNT, type TourAspect } from "~/stores/tournament";
@@ -149,32 +149,33 @@ const forcedHint = computed(() => {
 </template>
 
 <style scoped>
+/* The page is the ONE scroll area (Frame 110: no scroll inside any block).
+   The app shell is locked to the viewport, so overflow lives here. */
 .page {
   display: flex;
   flex-direction: column;
   gap: var(--space-20);
   height: 100%;
   min-height: 0;
+  overflow-y: auto;
 }
 
-/* unified white content board, as on Home — locked to the screen */
+/* unified white content board — grows with its content (mock: 32px padding) */
 .board {
-  flex: 1;
-  min-height: 0;
-  overflow: hidden;
+  flex: none;
   background: var(--color-white);
   border: 1px solid var(--color-border);
   border-radius: var(--radius-lg);
   padding: var(--space-32);
-  display: flex;
-  flex-direction: column;
-  gap: var(--space-20);
 }
 
+/* mock: top row 38px; 54px of air between the "Selected N/4" line and the
+   category headers (header top = 120px from the board's inner top) */
 .top {
   display: flex;
   align-items: flex-start;
   gap: var(--space-16);
+  margin-bottom: 54px;
 }
 .top__picker {
   flex: 1;
@@ -291,24 +292,28 @@ const forcedHint = computed(() => {
 }
 
 .error {
-  margin: 0;
+  margin: -40px 0 14px;
   font-size: var(--fs-tab);
   color: var(--color-stop-hover);
 }
 
 /* brand-book aspect lock notice (shown only on a real conflict) */
 .forced {
-  margin: 0;
+  margin: -40px 0 14px;
   font-size: var(--fs-tab);
   color: var(--color-grey);
 }
+/* when both notices show, only the first one climbs into the .top margin */
+.forced + .error {
+  margin-top: 0;
+}
 
 .state {
-  flex: 1;
   display: flex;
   align-items: center;
   justify-content: center;
   gap: 12px;
+  padding: var(--space-64) 0;
   color: var(--color-grey);
   font-size: var(--fs-user);
 }
@@ -320,32 +325,20 @@ const forcedHint = computed(() => {
   font-size: var(--fs-tab);
 }
 
-/* 4 columns per row; columns grow with their content (no local scroll — mock:
-   figma/tournaments), the whole grid is the ONE scroll area. The top controls
-   row stays pinned above it. Extra admin categories wrap to further rows. */
+/* 4 columns per row, 32px gaps (Frame 110: 430px columns on the 1880 board);
+   columns grow with their content — no scroll anywhere inside the board.
+   Extra admin categories wrap to further rows. */
 .cols {
-  flex: 1;
-  min-height: 0;
   display: grid;
   grid-template-columns: repeat(4, minmax(0, 1fr));
   grid-auto-rows: auto;
   align-items: start;
-  gap: var(--space-20);
-  overflow-y: auto;
-}
-/* thin scrollbar, same as the Result Generated lane */
-.cols::-webkit-scrollbar {
-  width: 8px;
-}
-.cols::-webkit-scrollbar-thumb {
-  background: var(--color-border);
-  border-radius: var(--radius-pill);
+  gap: var(--space-32);
 }
 
 @media (max-width: 1200px) {
   .cols {
     grid-template-columns: repeat(2, minmax(0, 1fr));
-    overflow-y: auto;
   }
 }
 </style>

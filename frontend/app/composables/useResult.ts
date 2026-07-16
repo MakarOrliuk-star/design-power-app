@@ -215,7 +215,7 @@ export type EditBuildResult =
  */
 export function buildEditBody(
   mode: SelectMode,
-  selected: GalleryImage[],
+  selected: { id: string }[],
   sharedPrompt: string,
   perPrompts: Record<string, string>,
 ): EditBuildResult {
