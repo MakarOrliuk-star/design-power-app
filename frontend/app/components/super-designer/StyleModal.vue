@@ -278,22 +278,20 @@ onBeforeUnmount(() => {
               </div>
             </div>
 
-            <label class="field">
+            <label class="field field--grow">
               <span class="field__label">Базовый промт (PERSON)</span>
               <textarea
                 v-model="draft.personPrompt"
                 class="input input--area"
-                rows="3"
                 placeholder="Системный “prompt writer” для этого бренда (необязательно)"
               />
             </label>
 
-            <label class="field">
+            <label class="field field--grow">
               <span class="field__label">Специфичный стиль</span>
               <textarea
                 v-model="draft.stylePrompt"
                 class="input input--area"
-                rows="3"
                 placeholder="Стилевое описание бренда (необязательно)"
               />
             </label>
@@ -420,7 +418,7 @@ onBeforeUnmount(() => {
               v-else-if="testImageUrl"
               :src="testImageUrl"
               alt="Тестовая генерация"
-              :class="['result__img', testAspect === '9:16' ? 'result__img--tall' : 'result__img--sq']"
+              class="result__img"
             />
             <div v-else class="result__state result__state--empty">
               Результат появится здесь
@@ -459,17 +457,19 @@ onBeforeUnmount(() => {
   background: rgba(30, 30, 50, 0.45);
 }
 
+/* Fixed frame per the mock (new style.png, 1920@1.5x → ~1344×750 CSS px):
+   both columns fit WITHOUT internal scroll; the modal clips instead. */
 .modal {
   position: relative;
   display: grid;
   grid-template-columns: 1fr 1fr;
   gap: 40px;
-  width: min(1400px, 100%);
-  max-height: calc(100dvh - 48px);
-  padding: 40px;
+  width: min(1344px, 100%);
+  height: min(760px, calc(100dvh - 48px));
+  padding: 32px 40px;
   background: var(--color-white);
   border-radius: 24px;
-  overflow: auto;
+  overflow: hidden;
 }
 
 .modal__close {
@@ -492,35 +492,50 @@ onBeforeUnmount(() => {
 
 .col {
   min-width: 0;
+  min-height: 0;
   display: flex;
   flex-direction: column;
+  overflow: hidden;
 }
 .col--off {
   opacity: 0.5;
   pointer-events: none;
 }
 .col__title {
-  margin: 0 0 8px;
-  font-size: 24px;
+  margin: 0 0 6px;
+  font-size: 22px;
   font-weight: 600;
   color: var(--color-text);
 }
 .col__sub {
-  margin: 0 0 20px;
+  margin: 0 0 14px;
   font-size: 13px;
-  line-height: 1.45;
+  line-height: 1.4;
   color: var(--color-grey);
 }
 
 .form {
+  flex: 1;
+  min-height: 0;
   display: flex;
   flex-direction: column;
-  gap: 16px;
+  gap: 10px;
+  overflow: hidden;
 }
 .field {
   display: flex;
   flex-direction: column;
-  gap: 8px;
+  gap: 6px;
+}
+/* the two prompt fields absorb the leftover height (no column scroll) */
+.field--grow {
+  flex: 1 1 0;
+  min-height: 0;
+}
+.field--grow .input--area {
+  flex: 1;
+  min-height: 40px;
+  height: auto;
 }
 .field__label {
   font-size: 13px;
@@ -529,7 +544,7 @@ onBeforeUnmount(() => {
 }
 .input {
   width: 100%;
-  padding: 12px 14px;
+  padding: 10px 12px;
   border: 1px solid var(--color-border);
   border-radius: 12px;
   background: var(--color-white);
@@ -541,8 +556,8 @@ onBeforeUnmount(() => {
   color: var(--color-grey);
 }
 .input--area {
-  resize: vertical;
-  min-height: 76px;
+  resize: none;
+  min-height: 52px;
 }
 .input--url {
   padding: 8px 10px;
@@ -560,11 +575,11 @@ onBeforeUnmount(() => {
 .cat {
   display: inline-flex;
   align-items: center;
-  gap: 8px;
-  padding: 8px 12px;
+  gap: 6px;
+  padding: 6px 10px;
   border: 1px solid var(--color-border);
   border-radius: 12px;
-  font-size: 13px;
+  font-size: 12.5px;
   color: var(--color-text);
   cursor: pointer;
 }
@@ -577,21 +592,22 @@ onBeforeUnmount(() => {
   cursor: pointer;
 }
 
+/* mock: three fixed ~125px slots with a URL input under each */
 .refs {
   display: grid;
-  grid-template-columns: repeat(3, 1fr);
+  grid-template-columns: repeat(3, minmax(0, 124px));
   gap: 16px;
 }
 .ref {
   display: flex;
   flex-direction: column;
-  gap: 8px;
+  gap: 6px;
 }
 .ref__slot {
   position: relative;
   display: grid;
   place-items: center;
-  aspect-ratio: 1 / 1.35;
+  aspect-ratio: 1 / 1.2;
   border: 1px dashed var(--color-border);
   border-radius: 12px;
   overflow: hidden;
@@ -638,6 +654,7 @@ onBeforeUnmount(() => {
   align-items: center;
   justify-content: flex-end;
   gap: 12px;
+  margin-top: auto; /* pin to the column bottom inside the fixed frame */
 }
 .form__msg {
   font-size: 13px;
@@ -681,7 +698,7 @@ onBeforeUnmount(() => {
 .test-row {
   display: flex;
   gap: 12px;
-  margin-top: 16px;
+  margin-top: 14px;
 }
 .aspects {
   display: flex;
@@ -708,13 +725,14 @@ onBeforeUnmount(() => {
 
 .result {
   flex: 1 1 auto;
-  min-height: 260px;
-  margin-top: 16px;
+  min-height: 0;
+  margin-top: 14px;
   padding: 12px;
   border: 1px solid var(--color-border);
   border-radius: 12px;
   display: flex;
   align-items: flex-start;
+  overflow: hidden;
 }
 .result__state {
   display: flex;
@@ -727,16 +745,12 @@ onBeforeUnmount(() => {
 .result__state--error {
   color: #c0392b;
 }
+/* mock: the image sits top-left inside the result area, scaled to fit */
 .result__img {
   max-width: 100%;
+  max-height: 100%;
   border-radius: 8px;
-  object-fit: cover;
-}
-.result__img--tall {
-  max-height: 380px;
-}
-.result__img--sq {
-  max-height: 300px;
+  object-fit: contain;
 }
 
 .spinner {
@@ -757,17 +771,21 @@ onBeforeUnmount(() => {
   display: flex;
   align-items: center;
   gap: 12px;
-  margin-top: 16px;
+  margin-top: 14px;
 }
 .test-foot__hint {
   font-size: 13px;
   color: var(--color-grey);
 }
 
+/* small screens: the fixed frame can't fit — fall back to a scrollable stack */
 @media (max-width: 980px) {
   .modal {
     grid-template-columns: 1fr;
+    height: auto;
+    max-height: calc(100dvh - 48px);
     padding: 24px;
+    overflow: auto;
   }
 }
 </style>
