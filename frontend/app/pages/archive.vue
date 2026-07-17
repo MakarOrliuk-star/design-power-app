@@ -5,21 +5,12 @@
 // + ZIP export.
 import { useArchive } from "~/composables/useArchive";
 import { stripGender, type GalleryImage } from "~/composables/useResult";
+import { downloadUrl } from "~/utils/download";
 
 useHead({ title: "Design Power — Archive" });
 
 const config = useRuntimeConfig();
 const gen = useGeneratorStore();
-
-function download(url: string) {
-  const a = document.createElement("a");
-  a.href = url;
-  a.rel = "noopener";
-  a.download = "";
-  document.body.appendChild(a);
-  a.click();
-  a.remove();
-}
 
 const {
   TABS,
@@ -49,7 +40,7 @@ const {
 } = useArchive({
   api: useApi() as never,
   apiBase: config.public.apiBase,
-  download,
+  download: downloadUrl,
   gen,
 });
 

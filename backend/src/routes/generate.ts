@@ -623,6 +623,9 @@ const exportSchema = gallerySchema
       .string()
       .optional()
       .transform((s) => (s ? s.split(",").map((x) => x.trim()).filter(Boolean) : [])),
+    // Archive filename prefix. An enum (not a free string) so the value can be
+    // dropped into the Content-Disposition header verbatim.
+    prefix: z.enum(["archive", "result"]).default("archive"),
   });
 
 /** Safe, collision-free archive entry name: "0001_Brand.png". */
@@ -639,7 +642,7 @@ generateRouter.get("/generations/export.zip", async (req: Request, res: Response
     res.status(400).json({ error: "invalid_query" });
     return;
   }
-  const { brand, search, period, tab, ids } = parsed.data;
+  const { brand, search, period, tab, ids, prefix } = parsed.data;
   const userId = req.user!.sub;
 
   const where: Prisma.GenerationWhereInput = ids.length
@@ -665,7 +668,7 @@ generateRouter.get("/generations/export.zip", async (req: Request, res: Response
 
   const stamp = new Date().toISOString().slice(0, 10);
   res.setHeader("Content-Type", "application/zip");
-  res.setHeader("Content-Disposition", `attachment; filename="archive-${stamp}.zip"`);
+  res.setHeader("Content-Disposition", `attachment; filename="${prefix}-${stamp}.zip"`);
 
   const archive = archiver("zip", { zlib: { level: 9 } });
   archive.on("error", (err) => {
@@ -676,6 +679,9 @@ generateRouter.get("/generations/export.zip", async (req: Request, res: Response
 
   let index = 0;
   for (const r of rows) {
+    // The client closed the connection (cancelled download / left the page) —
+    // stop fetching images nobody will receive.
+    if (res.destroyed) return;
     if (!r.generatedImageUrl) continue;
     try {
       const resp = await fetch(r.generatedImageUrl);

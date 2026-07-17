@@ -466,4 +466,27 @@ describe("useTournamentPack — selection + export flow", () => {
     expect([...result.selected.value]).toEqual([g1.id]); // ghost pruned
     unmount();
   });
+
+  // Live-generation regression: every poll used to rebuild the selection Set,
+  // firing the sync `selected` watch → dropping the pencil scale target → the
+  // open editor closed (and its zoom reset) as new images streamed in.
+  it("a reload with nothing to prune keeps the selection identity and the pencil target", async () => {
+    const g1 = gen();
+    const g2 = gen();
+    const deps = makeDeps([
+      { id: "b1", status: "COMPLETED", createdAt: "2026-07-10T10:00:00Z", generations: [g1, g2] },
+    ]);
+    const { result, unmount } = withSetup(() => useTournamentPack(deps));
+    await vi.waitFor(() => expect(result.batches.value).toHaveLength(1));
+
+    result.toggleSelect(g1.id);
+    result.setScaleTarget(g2.id);
+    const before = result.selected.value;
+
+    await result.load(); // simulates the 3s auto-refresh landing new data
+    expect(result.selected.value).toBe(before); // same Set — the watch stays quiet
+    expect(result.scaleImage.value).toMatchObject({ id: g2.id }); // editor target survives
+    expect(result.panelScaleImage.value).toMatchObject({ id: g2.id });
+    unmount();
+  });
 });
