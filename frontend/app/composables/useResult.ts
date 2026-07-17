@@ -137,6 +137,20 @@ export function mergeNewImages(
   return { images: added.length ? [...added, ...existing] : existing, added: added.length };
 }
 
+/**
+ * Query string for GET /api/generations/export.zip from the Result page. Unlike
+ * the Archive there is NO filter fallback — the button is enabled only with an
+ * explicit selection — so the query is always `ids` plus the `result-*.zip`
+ * filename prefix. (Not shared with `buildExportQuery`: useArchive imports from
+ * this module, so the reverse import would be circular.)
+ */
+export function buildResultExportQuery(ids: string[]): string {
+  const q = new URLSearchParams();
+  q.set("ids", ids.join(","));
+  q.set("prefix", "result");
+  return q.toString();
+}
+
 /** Extra pixels to outpaint on each side (in SOURCE-image pixels). */
 export interface Pad {
   top: number;
@@ -250,8 +264,15 @@ export interface ResultGen {
   addBatch(id: string, kind: "person" | "item"): void;
 }
 
-export function useResult(deps: { api: ResultApi; gen: ResultGen }) {
-  const { api, gen } = deps;
+export function useResult(deps: {
+  api: ResultApi;
+  gen: ResultGen;
+  /** ZIP export wiring (optional so existing tests stay minimal): the API origin
+   *  and the browser-download side effect, injected like in ArchiveDeps. */
+  apiBase?: string;
+  download?: (url: string) => void;
+}) {
+  const { api, gen, apiBase = "", download } = deps;
 
   const activeTab = ref<TabKey>("generated");
   const selectMode = ref<SelectMode>("ALL");
@@ -315,6 +336,17 @@ export function useResult(deps: { api: ResultApi; gen: ResultGen }) {
   }
 
   const selectedImages = computed(() => images.value.filter((i) => selected.value.has(i.id)));
+
+  // ---- ZIP export (selected only — mirrors useArchive.exportZip) ----
+  const exporting = ref(false);
+  function exportZip() {
+    if (!selected.value.size || exporting.value || !download) return;
+    const qs = buildResultExportQuery([...selected.value]);
+    exporting.value = true;
+    download(`${apiBase}/api/generations/export.zip?${qs}`);
+    // The download is a navigation/anchor; clear the flag on the next tick.
+    setTimeout(() => (exporting.value = false), 800);
+  }
 
   // ---- Edit flow (Phase 4) ----
   const editPrompt = ref(""); // ALL mode: one shared instruction
@@ -562,6 +594,9 @@ export function useResult(deps: { api: ResultApi; gen: ResultGen }) {
     allSelected,
     toggleSelectAll,
     selectedImages,
+    // zip export
+    exportZip,
+    exporting,
     // edit
     editPrompt,
     perEditPrompts,

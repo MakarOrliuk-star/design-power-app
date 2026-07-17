@@ -18,6 +18,7 @@ import {
 } from "~/composables/useTournamentPack";
 import { stripGender } from "~/composables/useResult";
 import type { SelectMode } from "~/composables/useResult";
+import { downloadUrl } from "~/utils/download";
 
 const props = withDefaults(defineProps<{ selectMode?: SelectMode }>(), {
   selectMode: "ALL",
@@ -26,16 +27,6 @@ const emit = defineEmits<{ (e: "edited"): void }>();
 
 const config = useRuntimeConfig();
 const gen = useGeneratorStore();
-
-function download(url: string) {
-  const a = document.createElement("a");
-  a.href = url;
-  a.rel = "noopener";
-  a.download = "";
-  document.body.appendChild(a);
-  a.click();
-  a.remove();
-}
 
 const {
   batches,
@@ -67,7 +58,7 @@ const {
 } = useTournamentPack({
   api: useApi() as unknown as PackApi,
   apiBase: config.public.apiBase as string,
-  download,
+  download: downloadUrl,
   gen,
   onEdited: () => emit("edited"),
 });

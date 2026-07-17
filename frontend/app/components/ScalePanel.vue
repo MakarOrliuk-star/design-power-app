@@ -441,7 +441,11 @@ function probe() {
 // Re-probe on URL change too, not only id: a successful Scale/inpaint swaps the
 // URL in place on the SAME generation id (applyReplacement), and the next editor
 // session must see the new bitmap + its new natural size, not the stale one.
-watch(() => [props.image?.id ?? null, props.image?.generatedImageUrl ?? null], () => {
+// The source is a STRING key, not an array: hosts that rebuild the image object
+// on every poll refresh (Tournament Pack) must not reset the scene/zoom while
+// the id+url values are unchanged (an array source is a fresh ref each run and
+// would fire the watch — and thus resetScene — every 3s).
+watch(() => (props.image ? `${props.image.id}|${props.image.generatedImageUrl}` : null), () => {
   if (!props.image && open.value) closeEditor();
   probe();
 }, { immediate: true });

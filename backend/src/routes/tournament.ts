@@ -389,6 +389,9 @@ tournamentRouter.get("/export.zip", async (req: Request, res: Response) => {
   // Old rows work too (element/brand are denormalized on Generation).
   const used = new Set<string>();
   for (const r of rows) {
+    // The client closed the connection (cancelled download / left the page) —
+    // stop fetching images nobody will receive.
+    if (res.destroyed) return;
     const fileName = r.tourFileName!;
     const element = sanitizeName(r.tourElementName ?? "") || packFolderOf(fileName);
     const { base, gender } = splitBrandGender(r.brandName);

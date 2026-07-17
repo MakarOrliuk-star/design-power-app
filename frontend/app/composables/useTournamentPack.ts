@@ -293,9 +293,13 @@ export function useTournamentPack(deps: PackDeps) {
       batches.value = reset ? res.batches : [...batches.value, ...res.batches];
       total.value = res.total;
       hasMore.value = res.hasMore;
-      // Selection survives refreshes but drops ids that disappeared.
+      // Selection survives refreshes but drops ids that disappeared. Keep the
+      // Set's identity when nothing was dropped: reassigning fires the sync
+      // `selected` watch, which would clear an active pencil scale target (and
+      // close the open editor) on every reload.
       const valid = new Set(exportableIds(batches.value));
-      selected.value = new Set([...selected.value].filter((id) => valid.has(id)));
+      const kept = [...selected.value].filter((id) => valid.has(id));
+      if (kept.length !== selected.value.size) selected.value = new Set(kept);
     } catch {
       if (reset) {
         batches.value = [];

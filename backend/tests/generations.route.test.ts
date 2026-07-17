@@ -243,4 +243,36 @@ describe("GET /api/generations/export.zip", () => {
     expect(zipEntryName(11, "Nike", "https://cdn/y.png")).toBe("0012_Nike.png");
     expect(zipEntryName(0, "", "https://cdn/noext")).toBe("0001_image.png");
   });
+
+  it("prefix=result → result-*.zip filename (Result page export)", async () => {
+    db.findMany.mockResolvedValue([row()]);
+    // Skip the image download inside the zip loop — headers are what we assert.
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue({ ok: false }));
+    try {
+      const res = await request(makeApp()).get("/api/generations/export.zip?ids=g1&prefix=result");
+      expect(res.status).toBe(200);
+      expect(res.headers["content-disposition"]).toMatch(/filename="result-\d{4}-\d{2}-\d{2}\.zip"/);
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+
+  it("no prefix → keeps the legacy archive-*.zip filename", async () => {
+    db.findMany.mockResolvedValue([row()]);
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue({ ok: false }));
+    try {
+      const res = await request(makeApp()).get("/api/generations/export.zip?ids=g1");
+      expect(res.headers["content-disposition"]).toMatch(/filename="archive-\d{4}-\d{2}-\d{2}\.zip"/);
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+
+  it("garbage prefix → 400 invalid_query", async () => {
+    const res = await request(makeApp()).get(
+      "/api/generations/export.zip?ids=g1&prefix=%22evil%22",
+    );
+    expect(res.status).toBe(400);
+    expect(res.body.error).toBe("invalid_query");
+  });
 });

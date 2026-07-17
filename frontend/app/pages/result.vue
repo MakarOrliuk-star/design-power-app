@@ -3,10 +3,13 @@
 // unit-tested without the Nuxt runtime (see app/composables/useResult.ts). This
 // file only binds the composable to the template + reuses TheToolbar.
 import { useResult, stripGender, type ResultApi } from "~/composables/useResult";
+import { downloadUrl } from "~/utils/download";
 
 useHead({ title: "Design Power — Result" });
 
 const gen = useGeneratorStore();
+const config = useRuntimeConfig();
+
 const {
   TABS,
   activeTab,
@@ -20,6 +23,8 @@ const {
   isSelected,
   toggleSelectAll,
   selectedImages,
+  exportZip,
+  exporting,
   editPrompt,
   perEditPrompts,
   editing,
@@ -37,7 +42,12 @@ const {
   openViewer,
   newReadyCount,
   dismissReady,
-} = useResult({ api: useApi() as unknown as ResultApi, gen });
+} = useResult({
+  api: useApi() as unknown as ResultApi,
+  gen,
+  apiBase: config.public.apiBase,
+  download: downloadUrl,
+});
 
 // The Tournament tab owns its selection (useTournamentPack) — the bar's
 // "Select all" delegates to it there; All/Each is passed down as a prop.
@@ -117,6 +127,22 @@ const viewerItems = computed(() =>
         </nav>
 
         <div class="bar__right">
+          <!-- ZIP download of the ticked images. Regular gallery tabs only — the
+               Tournament tab has its own DES-numbered export. -->
+          <button
+            v-if="activeTab !== 'tournament'"
+            class="iconbtn"
+            type="button"
+            aria-label="Download ZIP"
+            title="Скачать выбранные (.zip)"
+            :disabled="exporting || !selectedImages.length"
+            @click="exportZip"
+          >
+            <svg viewBox="0 0 24 24" width="18" height="18" fill="none">
+              <path d="M12 4v10m0 0l-4-4m4 4l4-4" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" />
+              <path d="M5 19h14" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" />
+            </svg>
+          </button>
           <button class="select-all" type="button" @click="onSelectAll">Select all</button>
           <div class="seg" role="group" aria-label="Selection mode">
             <button
@@ -453,6 +479,24 @@ const viewerItems = computed(() =>
   display: inline-flex;
   align-items: center;
   gap: 18px;
+}
+.iconbtn {
+  display: grid;
+  place-items: center;
+  width: 38px;
+  height: 38px;
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md);
+  background: var(--color-white);
+  color: var(--color-text);
+}
+.iconbtn:hover:not(:disabled) {
+  border-color: var(--color-accent);
+  color: var(--color-accent);
+}
+.iconbtn:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
 }
 .select-all {
   border: none;
