@@ -115,6 +115,16 @@ export async function runBriaExpand(
 }
 
 /**
+ * Cut the subject out of its background via `fal-ai/bria/background/remove`
+ * (Image Bundles layered compose, D10 v2): returns a transparent PNG of the
+ * person/item, which the Cloudinary layer compositor places into its zone.
+ */
+export async function runBriaRemoveBg(imageUrl: string): Promise<FalRunResult> {
+  if (!imageUrl) return { success: false, error: "no image_url" };
+  return callFalSync("fal-ai/bria/background/remove", { image_url: imageUrl });
+}
+
+/**
  * Inpaint by prompt in a masked region via `fal-ai/bria/genfill` (Scale window →
  * Inpaint tool). The mask is a binary image (white = area to regenerate) at the
  * SAME dimensions as the source. `prompt` describes what to fill in.

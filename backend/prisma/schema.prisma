@@ -533,6 +533,10 @@ model BundleBrandVariant {
   displayName    String // UI label, e.g. "Betnella (Men)"
   personImageUrl String?
   itemImageUrl   String?
+  // Transparent-cutout Cloudinary public ids (layered compose, D10 v2): the
+  // layer compositor references overlays by public id, not URL.
+  personCutoutId String?
+  itemCutoutId   String?
 
   assets BundleAsset[]
 

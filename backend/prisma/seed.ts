@@ -113,6 +113,9 @@ async function main() {
             person: { x: 0.75, y: 0, w: 0.25, h: 1 },
             protected: { x: 0.25, y: 0, w: 0.5, h: 1 },
           },
+          // Слоёная сборка (D10 v2): фон-слой + прозрачные вырезки person/item
+          // компонуются в секции по пикселям — структура гарантирована.
+          composeMode: "layered",
         },
         { key: "popup", label: "Pop-up", width: 800, height: 600 },
         { key: "push", label: "Push", width: 1024, height: 512 },

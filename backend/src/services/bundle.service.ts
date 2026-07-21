@@ -13,6 +13,10 @@ export interface BundleTypeAsset {
   height: number;
   templateUrl?: string; // stage-B background template (D13, Phase 4)
   zones?: Record<string, { x: number; y: number; w: number; h: number }>;
+  // "ai" (default): single multi-reference generation + canvas fit.
+  // "layered" (D10 v2, email): background layer + transparent person/item
+  // cutouts composited into their zone boxes by pixels — hard guarantee.
+  composeMode?: "ai" | "layered";
 }
 
 // ------------------------------------------------------------------
@@ -133,7 +137,14 @@ export async function launchGeneration(bundleId: string): Promise<LaunchResult |
         where: { bundleId_brandName: { bundleId, brandName: v.brandName } },
         create: { bundleId, ...v },
         // Full re-run regenerates the shared person/item artifacts (stage A).
-        update: { brandId: v.brandId, displayName: v.displayName, personImageUrl: null, itemImageUrl: null },
+        update: {
+          brandId: v.brandId,
+          displayName: v.displayName,
+          personImageUrl: null,
+          itemImageUrl: null,
+          personCutoutId: null,
+          itemCutoutId: null,
+        },
       });
       variantIds.push(row.id);
       for (const a of typeAssets) {
