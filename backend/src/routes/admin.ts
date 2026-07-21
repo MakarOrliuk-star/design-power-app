@@ -416,6 +416,7 @@ const bundleTypeAssetSchema = z.object({
       z.object({ x: z.number(), y: z.number(), w: z.number(), h: z.number() }),
     )
     .optional(),
+  composeMode: z.enum(["ai", "layered"]).optional(),
 });
 
 const bundleTypeSchema = z.object({

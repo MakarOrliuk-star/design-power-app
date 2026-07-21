@@ -8,10 +8,15 @@ const db = vi.hoisted(() => ({
   brand: { findUnique: vi.fn() },
   promptTemplate: { findFirst: vi.fn() },
 }));
-const fal = vi.hoisted(() => ({ runPersonFal: vi.fn(), runBriaExpand: vi.fn() }));
+const fal = vi.hoisted(() => ({
+  runPersonFal: vi.fn(),
+  runBriaExpand: vi.fn(),
+  runBriaRemoveBg: vi.fn(),
+}));
 const cloud = vi.hoisted(() => ({
   uploadFromUrl: vi.fn(),
   uploadFromUrlTransformed: vi.fn(),
+  composeLayersUrl: vi.fn(() => "https://res.cloudinary/composed.png"),
   withRetry: vi.fn((fn: () => unknown) => fn()),
 }));
 const imageSize = vi.hoisted(() => ({
@@ -32,10 +37,12 @@ vi.mock("../src/queues/person.processor.js", () => ({
 vi.mock("../src/services/bundle.service.js", () => ({ recomputeBundleStatus: recompute }));
 
 import {
+  backgroundPrompt,
   buildBundleItemPrompt,
   compositionPrompt,
   computeBleedPlacement,
   computeCanvasPlacement,
+  computeLayerPlacements,
   processEditAssetJob,
   processPrepareVariantJob,
   processRenderAssetJob,
@@ -46,8 +53,10 @@ beforeEach(() => {
     for (const fn of Object.values(delegate)) (fn as ReturnType<typeof vi.fn>).mockReset();
   fal.runPersonFal.mockReset();
   fal.runBriaExpand.mockReset();
+  fal.runBriaRemoveBg.mockReset();
   cloud.uploadFromUrl.mockReset();
   cloud.uploadFromUrlTransformed.mockReset();
+  cloud.composeLayersUrl.mockClear();
   imageSize.probeImageSize.mockReset();
   queue.addBulk.mockReset();
   recompute.mockReset();
@@ -170,7 +179,17 @@ describe("processPrepareVariantJob (stage A)", () => {
     id: "v1",
     bundleId: "bun1",
     brandName: "Betnella(Men)",
-    bundle: { id: "bun1", neuralPrompt: "Weekend reload" },
+    bundle: {
+      id: "bun1",
+      neuralPrompt: "Weekend reload",
+      bundleType: {
+        assets: [
+          { key: "email", label: "Email", width: 1200, height: 600 },
+          { key: "popup", label: "Pop-up", width: 800, height: 600 },
+          { key: "push", label: "Push", width: 1024, height: 512 },
+        ],
+      },
+    },
   };
 
   it("generates person + item, stores artifacts and fans out stage B", async () => {
@@ -198,11 +217,62 @@ describe("processPrepareVariantJob (stage A)", () => {
     expect(fal.runPersonFal.mock.calls[1]![2]).toBe("1:1");
     expect(db.bundleBrandVariant.update).toHaveBeenCalledWith({
       where: { id: "v1" },
-      data: { personImageUrl: "https://cdn/person.png", itemImageUrl: "https://cdn/item.png" },
+      data: {
+        personImageUrl: "https://cdn/person.png",
+        itemImageUrl: "https://cdn/item.png",
+        // No layered assets in the type → no cutouts are produced.
+        personCutoutId: null,
+        itemCutoutId: null,
+      },
     });
+    expect(fal.runBriaRemoveBg).not.toHaveBeenCalled();
     const jobs = queue.addBulk.mock.calls[0]![0] as Array<{ name: string; data: { assetId: string } }>;
     expect(jobs.map((j) => j.data.assetId)).toEqual(["a1", "a2", "a3"]);
     expect(jobs.every((j) => j.name === "render-asset")).toBe(true);
+  });
+
+  it("produces transparent cutouts when the type has a layered asset (D10 v2)", async () => {
+    db.bundleBrandVariant.findUnique.mockResolvedValue({
+      ...variantRow,
+      bundle: {
+        ...variantRow.bundle,
+        bundleType: {
+          assets: [{ key: "email", label: "Email", width: 1200, height: 600, composeMode: "layered" }],
+        },
+      },
+    });
+    db.brand.findUnique.mockResolvedValue({ imageModel: null, nanoRef: null });
+    db.promptTemplate.findFirst.mockResolvedValue(null);
+    fal.runPersonFal
+      .mockResolvedValueOnce({ success: true, imageUrl: "https://fal/person.png" })
+      .mockResolvedValueOnce({ success: true, imageUrl: "https://fal/item.png" });
+    fal.runBriaRemoveBg
+      .mockResolvedValueOnce({ success: true, imageUrl: "https://fal/person_cut.png" })
+      .mockResolvedValueOnce({ success: true, imageUrl: "https://fal/item_cut.png" });
+    cloud.uploadFromUrl
+      .mockResolvedValueOnce({ success: true, secure_url: "https://cdn/person.png", public_id: "b/person" })
+      .mockResolvedValueOnce({ success: true, secure_url: "https://cdn/item.png", public_id: "b/item" })
+      .mockResolvedValueOnce({ success: true, secure_url: "https://cdn/pcut.png", public_id: "b/cut_person" })
+      .mockResolvedValueOnce({ success: true, secure_url: "https://cdn/icut.png", public_id: "b/cut_item" });
+    db.bundleAsset.findMany.mockResolvedValue([{ id: "a1" }]);
+    queue.addBulk.mockResolvedValue([]);
+
+    await processPrepareVariantJob("bun1", "v1");
+
+    // Cutouts are made from the STORED person/item images.
+    expect(fal.runBriaRemoveBg.mock.calls.map((c) => c[0])).toEqual([
+      "https://cdn/person.png",
+      "https://cdn/item.png",
+    ]);
+    expect(db.bundleBrandVariant.update).toHaveBeenCalledWith({
+      where: { id: "v1" },
+      data: {
+        personImageUrl: "https://cdn/person.png",
+        itemImageUrl: "https://cdn/item.png",
+        personCutoutId: "b/cut_person",
+        itemCutoutId: "b/cut_item",
+      },
+    });
   });
 
   it("marks the variant's pending assets FAILED when the person generation fails", async () => {
@@ -356,6 +426,177 @@ describe("processRenderAssetJob (stage B)", () => {
     expect(db.bundleAsset.update).toHaveBeenCalledWith({
       where: { id: "a1" },
       data: { status: "FAILED", errorMessage: "missing person artifact — regenerate the bundle" },
+    });
+  });
+});
+
+/**
+ * BE Test — layered compose math (D10 v2): zone fractions → pixel fit-boxes.
+ * Item is centered against the left edge of its section, person is anchored
+ * bottom-right; 8px pad keeps cutouts off the section lines.
+ */
+describe("computeLayerPlacements / backgroundPrompt", () => {
+  it("maps the email mask zones (25/50/25) to layer boxes on a 1200×600 canvas", () => {
+    const p = computeLayerPlacements(
+      {
+        item: { x: 0, y: 0, w: 0.25, h: 1 },
+        person: { x: 0.75, y: 0, w: 0.25, h: 1 },
+        protected: { x: 0.25, y: 0, w: 0.5, h: 1 },
+      },
+      1200,
+      600,
+    );
+    expect(p.item).toEqual({ w: 284, h: 584, gravity: "west", x: 8, y: 0 });
+    expect(p.person).toEqual({ w: 284, h: 584, gravity: "south_east", x: 8, y: 0 });
+  });
+
+  it("falls back to the default 25/75 sections when zones are missing", () => {
+    const p = computeLayerPlacements(undefined, 1200, 600);
+    expect(p.item.w).toBe(284);
+    expect(p.person.gravity).toBe("south_east");
+  });
+
+  it("background prompt bans objects/characters/text on the backdrop layer", () => {
+    const p = backgroundPrompt("Weekend reload");
+    expect(p).toContain("NO objects, NO characters, NO symbols, NO text");
+    expect(p).toContain("Weekend reload");
+    expect(p).toContain("FULL-BLEED");
+  });
+});
+
+describe("processRenderAssetJob — layered mode (D10 v2)", () => {
+  const layeredRow = {
+    id: "a1",
+    bundleId: "bun1",
+    variantId: "v1",
+    assetKey: "email",
+    width: 1200,
+    height: 600,
+    variant: {
+      id: "v1",
+      brandName: "Betnella(Men)",
+      personImageUrl: "https://cdn/person.png",
+      itemImageUrl: "https://cdn/item.png",
+      personCutoutId: "b/cut_person",
+      itemCutoutId: "b/cut_item",
+      bundle: {
+        id: "bun1",
+        neuralPrompt: "Weekend reload",
+        bundleType: {
+          assets: [
+            {
+              key: "email",
+              label: "Email",
+              width: 1200,
+              height: 600,
+              composeMode: "layered",
+              zones: {
+                item: { x: 0, y: 0, w: 0.25, h: 1 },
+                person: { x: 0.75, y: 0, w: 0.25, h: 1 },
+              },
+            },
+          ],
+        },
+      },
+    },
+  };
+
+  it("generates a background layer and composites the cutouts into their zones", async () => {
+    db.bundleAsset.findUnique.mockResolvedValue(layeredRow);
+    // Background generation (no template configured).
+    fal.runPersonFal.mockResolvedValue({ success: true, imageUrl: "https://fal/bg.png" });
+    fal.runBriaExpand.mockResolvedValue({ success: true, imageUrl: "https://fal/bg_expanded.png" });
+    imageSize.probeImageSize
+      .mockResolvedValueOnce({ width: 1024, height: 576 }) // bg gen
+      .mockResolvedValueOnce({ width: 1200, height: 600 }) // stored bg
+      .mockResolvedValueOnce({ width: 1200, height: 600 }); // final composed
+    cloud.uploadFromUrlTransformed.mockResolvedValue({
+      success: true,
+      secure_url: "https://cdn/bg.png",
+      public_id: "bundles/bun1/bg",
+    });
+    cloud.uploadFromUrl.mockResolvedValue({
+      success: true,
+      secure_url: "https://cdn/final_email.png",
+      public_id: "bundles/bun1/final",
+    });
+
+    await processRenderAssetJob("bun1", "v1", "a1");
+
+    // The backdrop prompt is the layers-only one (no composition directives).
+    expect(fal.runPersonFal.mock.calls[0]![0]).toContain("NO objects, NO characters");
+    // Compose references the background + both cutouts with zone boxes.
+    expect(cloud.composeLayersUrl).toHaveBeenCalledWith("bundles/bun1/bg", [
+      { publicId: "b/cut_item", w: 284, h: 584, gravity: "west", x: 8, y: 0 },
+      { publicId: "b/cut_person", w: 284, h: 584, gravity: "south_east", x: 8, y: 0 },
+    ]);
+    // The flattened composed URL is what gets stored as the asset.
+    expect(cloud.uploadFromUrl).toHaveBeenCalledWith(
+      "https://res.cloudinary/composed.png",
+      expect.any(String),
+      "bundles/bun1",
+    );
+    expect(db.bundleAsset.update).toHaveBeenLastCalledWith({
+      where: { id: "a1" },
+      data: { status: "DONE", imageUrl: "https://cdn/final_email.png", errorMessage: null },
+    });
+  });
+
+  it("uses the admin template as the background layer when configured", async () => {
+    db.bundleAsset.findUnique.mockResolvedValue({
+      ...layeredRow,
+      variant: {
+        ...layeredRow.variant,
+        bundle: {
+          ...layeredRow.variant.bundle,
+          bundleType: {
+            assets: [
+              {
+                key: "email",
+                label: "Email",
+                width: 1200,
+                height: 600,
+                composeMode: "layered",
+                templateUrl: "https://cdn/template.png",
+              },
+            ],
+          },
+        },
+      },
+    });
+    imageSize.probeImageSize.mockResolvedValue({ width: 1200, height: 600 });
+    cloud.uploadFromUrlTransformed.mockResolvedValue({
+      success: true,
+      secure_url: "https://cdn/bg.png",
+      public_id: "bundles/bun1/bg",
+    });
+    cloud.uploadFromUrl.mockResolvedValue({
+      success: true,
+      secure_url: "https://cdn/final.png",
+      public_id: "f",
+    });
+
+    await processRenderAssetJob("bun1", "v1", "a1");
+    // No background generation happens — the template IS the backdrop.
+    expect(fal.runPersonFal).not.toHaveBeenCalled();
+    expect(cloud.uploadFromUrlTransformed).toHaveBeenCalledWith(
+      "https://cdn/template.png",
+      expect.any(String),
+      "bundles/bun1",
+      "c_fill,w_1200,h_600",
+    );
+  });
+
+  it("fails fast when the person cutout is missing", async () => {
+    db.bundleAsset.findUnique.mockResolvedValue({
+      ...layeredRow,
+      variant: { ...layeredRow.variant, personCutoutId: null },
+    });
+    await processRenderAssetJob("bun1", "v1", "a1");
+    expect(fal.runPersonFal).not.toHaveBeenCalled();
+    expect(db.bundleAsset.update).toHaveBeenLastCalledWith({
+      where: { id: "a1" },
+      data: { status: "FAILED", errorMessage: "missing person cutout — regenerate the bundle" },
     });
   });
 });

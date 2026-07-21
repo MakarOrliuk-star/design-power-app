@@ -628,6 +628,7 @@ interface AdminBundleTypeAsset {
   height: number;
   templateUrl?: string;
   zones?: Record<string, { x: number; y: number; w: number; h: number }>;
+  composeMode?: "ai" | "layered";
 }
 interface AdminBundleType {
   id: string;
@@ -676,6 +677,16 @@ async function removeBundleTemplate(t: AdminBundleType, a: AdminBundleTypeAsset)
   try {
     await saveBundleTypeAssets(t);
     btMsg.value[t.id] = `Шаблон ${a.label} убран ✓`;
+  } catch {
+    btMsg.value[t.id] = "Ошибка сохранения";
+  }
+}
+
+async function setComposeMode(t: AdminBundleType, a: AdminBundleTypeAsset, e: Event) {
+  a.composeMode = (e.target as HTMLSelectElement).value as "ai" | "layered";
+  try {
+    await saveBundleTypeAssets(t);
+    btMsg.value[t.id] = `Режим сборки ${a.label}: ${a.composeMode} ✓`;
   } catch {
     btMsg.value[t.id] = "Ошибка сохранения";
   }
@@ -1189,6 +1200,15 @@ onMounted(() => {
               <button v-if="a.templateUrl" class="btn-toggle" @click="removeBundleTemplate(t, a)">
                 Убрать
               </button>
+              <select
+                class="bt__mode"
+                :value="a.composeMode ?? 'ai'"
+                title="layered — фон-слой + вырезки person/item по секциям (пиксельная гарантия зон); ai — одна генерация с промпт-раскладкой"
+                @change="(e) => setComposeMode(t, a, e)"
+              >
+                <option value="ai">AI-сборка</option>
+                <option value="layered">Слои (layered)</option>
+              </select>
             </div>
           </div>
         </div>
@@ -1620,5 +1640,15 @@ select {
   display: flex;
   align-items: center;
   gap: 8px;
+  flex-wrap: wrap;
+}
+.bt__mode {
+  margin-left: auto;
+  font-size: 12px;
+  padding: 4px 6px;
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-sm);
+  background: var(--color-white);
+  color: var(--color-text);
 }
 </style>

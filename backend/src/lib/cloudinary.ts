@@ -101,6 +101,31 @@ export function uploadFromUrlTransformed(
   return upload(imageUrl, fileName, folder, transformation);
 }
 
+export interface ComposeLayer {
+  publicId: string; // transparent cutout asset
+  w: number; // fit-box width, px
+  h: number; // fit-box height, px
+  gravity: string; // e.g. "west", "south_east"
+  x: number; // offset from the gravity corner, px
+  y: number;
+}
+
+/**
+ * Deterministic layer compositor (Image Bundles layered mode, D10 v2): builds
+ * a Cloudinary delivery URL that places transparent cutouts (`c_fit` inside
+ * their zone boxes) over a base background — the composed result is then
+ * re-uploaded as the final asset. Pure URL math, zero AI calls; the zones are
+ * enforced by pixels, not by the prompt.
+ */
+export function composeLayersUrl(basePublicId: string, layers: ComposeLayer[]): string {
+  const segments = layers.map(
+    (l) =>
+      `l_${l.publicId.replaceAll("/", ":")},c_fit,w_${l.w},h_${l.h}/fl_layer_apply,g_${l.gravity},x_${l.x},y_${l.y}`,
+  );
+  const chain = segments.length ? `${segments.join("/")}/` : "";
+  return `https://res.cloudinary.com/${env.CLOUDINARY_CLOUD_NAME}/image/upload/${chain}${basePublicId}.png`;
+}
+
 /**
  * Upload raw image bytes via multipart/form-data (no base64 inflation — keeps
  * memory ≈ the buffer size). Used by the Smartico service, which needs a

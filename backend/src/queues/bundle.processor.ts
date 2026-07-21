@@ -1,6 +1,12 @@
 import { prisma } from "../lib/prisma.js";
-import { runPersonFal, runBriaExpand } from "../lib/fal.js";
-import { uploadFromUrl, uploadFromUrlTransformed, withRetry } from "../lib/cloudinary.js";
+import { runPersonFal, runBriaExpand, runBriaRemoveBg } from "../lib/fal.js";
+import {
+  composeLayersUrl,
+  uploadFromUrl,
+  uploadFromUrlTransformed,
+  withRetry,
+} from "../lib/cloudinary.js";
+import type { ComposeLayer } from "../lib/cloudinary.js";
 import { nearestFalAspect, probeImageSize } from "../lib/imageSize.js";
 import { getPrompt } from "../services/prompts.js";
 import { buildPersonPromptMemoized } from "./person.processor.js";
@@ -202,7 +208,7 @@ export async function fitAndStoreAsset(
   fileName: string,
   folder: string,
   retryLabel: string,
-): Promise<{ ok: true; url: string } | { ok: false; reason: string }> {
+): Promise<{ ok: true; url: string; publicId: string } | { ok: false; reason: string }> {
   const size = await probeImageSize(sourceUrl);
   if (!size) return { ok: false, reason: "probe: could not read the generated image size" };
 
@@ -234,7 +240,74 @@ export async function fitAndStoreAsset(
       reason: `size mismatch: got ${finalSize.width}×${finalSize.height}, want ${targetW}×${targetH}`,
     };
   }
-  return { ok: true, url: up.secure_url };
+  return { ok: true, url: up.secure_url, publicId: up.public_id ?? "" };
+}
+
+// ------------------------------------------------------------------
+// Layered compose (D10 v2 — email): zone boxes → Cloudinary layers.
+// ------------------------------------------------------------------
+
+/** Inset the layer fit-boxes from the zone edges so cutouts don't touch lines. */
+export const LAYER_PAD = 8;
+
+// Default email sections per the customer's mask scheme (D13a) — used when a
+// layered asset has no zones configured.
+const DEFAULT_LAYER_ZONES: AssetZones = {
+  item: { x: 0, y: 0, w: 0.25, h: 1 },
+  person: { x: 0.75, y: 0, w: 0.25, h: 1 },
+};
+
+/**
+ * Compute the Cloudinary layer placements from the fractional zones. The item
+ * sits vertically centered against the LEFT edge of its section; the person is
+ * anchored bottom-right (like the reference banner). Pure — unit-tested.
+ */
+export function computeLayerPlacements(
+  zones: AssetZones | undefined,
+  canvasW: number,
+  canvasH: number,
+): { person: Omit<ComposeLayer, "publicId">; item: Omit<ComposeLayer, "publicId"> } {
+  const z = { ...DEFAULT_LAYER_ZONES, ...(zones ?? {}) };
+  const itemZone = z.item!;
+  const personZone = z.person!;
+
+  const box = (zone: ZoneBox) => ({
+    w: Math.max(1, Math.round(zone.w * canvasW) - 2 * LAYER_PAD),
+    h: Math.max(1, Math.round(zone.h * canvasH) - 2 * LAYER_PAD),
+  });
+
+  const itemBox = box(itemZone);
+  const personBox = box(personZone);
+  return {
+    // g_west + x = left margin of the item section (+pad).
+    item: {
+      ...itemBox,
+      gravity: "west",
+      x: Math.round(itemZone.x * canvasW) + LAYER_PAD,
+      y: 0,
+    },
+    // g_south_east + x = right margin of the person section (+pad): the
+    // character stands on the bottom edge, pressed to the right.
+    person: {
+      ...personBox,
+      gravity: "south_east",
+      x: Math.round((1 - (personZone.x + personZone.w)) * canvasW) + LAYER_PAD,
+      y: 0,
+    },
+  };
+}
+
+/** Background-layer prompt: brand ambience only — objects live on the layers. */
+export function backgroundPrompt(neuralPrompt: string): string {
+  const campaign = neuralPrompt.trim();
+  return [
+    "Abstract advertising background for a casino promo banner: smooth continuous surface with soft ambient glow, gentle bokeh and subtle depth.",
+    campaign ? `Mood and palette should match this campaign: ${campaign}.` : "",
+    "STRICTLY NO objects, NO characters, NO symbols, NO text, NO logos — an empty atmospheric backdrop only.",
+    "FULL-BLEED: cover the entire canvas edge to edge, no borders or frames.",
+  ]
+    .filter(Boolean)
+    .join(" ");
 }
 
 // ------------------------------------------------------------------
@@ -244,7 +317,11 @@ export async function fitAndStoreAsset(
 export async function processPrepareVariantJob(bundleId: string, variantId: string): Promise<void> {
   const variant = await prisma.bundleBrandVariant.findUnique({
     where: { id: variantId },
-    include: { bundle: { select: { id: true, neuralPrompt: true } } },
+    include: {
+      bundle: {
+        select: { id: true, neuralPrompt: true, bundleType: { select: { assets: true } } },
+      },
+    },
   });
   if (!variant || variant.bundleId !== bundleId) return; // deleted → no-op
 
@@ -297,12 +374,55 @@ export async function processPrepareVariantJob(bundleId: string, variantId: stri
     return;
   }
 
+  // 3) Transparent cutouts for the layer compositor (only when the type has
+  //    layered assets, D10 v2): background removed → re-uploaded; the public
+  //    ids are what the Cloudinary overlay references.
+  const typeAssets = variant.bundle.bundleType.assets as unknown as BundleTypeAsset[];
+  let personCutoutId: string | null = null;
+  let itemCutoutId: string | null = null;
+  if (typeAssets.some((a) => a.composeMode === "layered")) {
+    const personCut = await runBriaRemoveBg(personUp.secure_url);
+    if (!personCut.success || !personCut.imageUrl) {
+      await failVariant(`person cutout: ${personCut.error ?? "unknown"}`);
+      return;
+    }
+    const personCutUp = await withRetry(
+      () => uploadFromUrl(personCut.imageUrl!, `cut_person_${variantId}_${Date.now()}`, `bundles/${bundleId}`),
+      `bundle-person-cut#${variantId}`,
+    );
+    if (!personCutUp.success || !personCutUp.public_id) {
+      await failVariant(`person cutout upload: ${personCutUp.error ?? "unknown"}`);
+      return;
+    }
+    personCutoutId = personCutUp.public_id;
+
+    const itemCut = await runBriaRemoveBg(itemUp.secure_url);
+    if (!itemCut.success || !itemCut.imageUrl) {
+      await failVariant(`item cutout: ${itemCut.error ?? "unknown"}`);
+      return;
+    }
+    const itemCutUp = await withRetry(
+      () => uploadFromUrl(itemCut.imageUrl!, `cut_item_${variantId}_${Date.now()}`, `bundles/${bundleId}`),
+      `bundle-item-cut#${variantId}`,
+    );
+    if (!itemCutUp.success || !itemCutUp.public_id) {
+      await failVariant(`item cutout upload: ${itemCutUp.error ?? "unknown"}`);
+      return;
+    }
+    itemCutoutId = itemCutUp.public_id;
+  }
+
   await prisma.bundleBrandVariant.update({
     where: { id: variantId },
-    data: { personImageUrl: personUp.secure_url, itemImageUrl: itemUp.secure_url },
+    data: {
+      personImageUrl: personUp.secure_url,
+      itemImageUrl: itemUp.secure_url,
+      personCutoutId,
+      itemCutoutId,
+    },
   });
 
-  // 3) Stage B fan-out: render every asset that is still in the pipeline.
+  // 4) Stage B fan-out: render every asset that is still in the pipeline.
   const assets = await prisma.bundleAsset.findMany({
     where: { variantId, status: { in: ["PENDING", "GENERATING"] } },
     select: { id: true },
@@ -369,6 +489,96 @@ export async function processRenderAssetJob(
     where: { id: assetId },
     data: { status: "GENERATING", errorMessage: null },
   });
+
+  // Layered mode (D10 v2): the zones are enforced by pixels, not the prompt.
+  if (config?.composeMode === "layered") {
+    if (!variant.personCutoutId) {
+      await fail("missing person cutout — regenerate the bundle");
+      return;
+    }
+
+    // Background layer: the admin template when set, else a generated
+    // ambience-only backdrop — in both cases stored at the exact canvas.
+    let bgPublicId: string;
+    if (config.templateUrl) {
+      const bgUp = await withRetry(
+        () =>
+          uploadFromUrlTransformed(
+            config.templateUrl!,
+            `bg_${assetId}_${Date.now()}`,
+            `bundles/${bundleId}`,
+            `c_fill,w_${targetW},h_${targetH}`,
+          ),
+        `bundle-bg#${assetId}`,
+      );
+      if (!bgUp.success || !bgUp.public_id) {
+        await fail(`background template: ${bgUp.error ?? "upload failed"}`);
+        return;
+      }
+      bgPublicId = bgUp.public_id;
+    } else {
+      const bgGen = await runPersonFal(
+        backgroundPrompt(variant.bundle.neuralPrompt),
+        [],
+        nearestFalAspect(targetW, targetH),
+        null,
+      );
+      if (!bgGen.success || !bgGen.imageUrl) {
+        await fail(`background: ${bgGen.error ?? "unknown"}`);
+        return;
+      }
+      const bgFit = await fitAndStoreAsset(
+        bgGen.imageUrl,
+        targetW,
+        targetH,
+        `bg_${assetId}_${Date.now()}`,
+        `bundles/${bundleId}`,
+        `bundle-bg#${assetId}`,
+      );
+      if (!bgFit.ok) {
+        await fail(`background ${bgFit.reason}`);
+        return;
+      }
+      if (!bgFit.publicId) {
+        await fail("background: missing public id");
+        return;
+      }
+      bgPublicId = bgFit.publicId;
+    }
+
+    // Compose the layers into their zone boxes and store the flattened result.
+    const placements = computeLayerPlacements(config.zones, targetW, targetH);
+    const layers: ComposeLayer[] = [];
+    if (variant.itemCutoutId) layers.push({ publicId: variant.itemCutoutId, ...placements.item });
+    layers.push({ publicId: variant.personCutoutId, ...placements.person });
+    const composedUrl = composeLayersUrl(bgPublicId, layers);
+
+    const finalUp = await withRetry(
+      () =>
+        uploadFromUrl(
+          composedUrl,
+          `${variant.brandName}_${asset.assetKey}_${Date.now()}`,
+          `bundles/${bundleId}`,
+        ),
+      `bundle-asset#${assetId}`,
+    );
+    if (!finalUp.success || !finalUp.secure_url) {
+      await fail(`compose upload: ${finalUp.error ?? "unknown"}`);
+      return;
+    }
+    const finalSize = await probeImageSize(finalUp.secure_url);
+    if (finalSize && (finalSize.width !== targetW || finalSize.height !== targetH)) {
+      await fail(`size mismatch: got ${finalSize.width}×${finalSize.height}, want ${targetW}×${targetH}`);
+      return;
+    }
+
+    await prisma.bundleAsset.update({
+      where: { id: assetId },
+      data: { status: "DONE", imageUrl: finalUp.secure_url, errorMessage: null },
+    });
+    await recomputeBundleStatus(bundleId);
+    return;
+  }
 
   // Compose: [template?, person, item?] + mask-layout directive (D10/D13).
   const imageUrls = [config?.templateUrl, variant.personImageUrl, variant.itemImageUrl].filter(
