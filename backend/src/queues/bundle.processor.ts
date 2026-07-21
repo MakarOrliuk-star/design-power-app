@@ -297,13 +297,17 @@ export function computeLayerPlacements(
   };
 }
 
-/** Background-layer prompt: brand ambience only — objects live on the layers. */
+/**
+ * Background-layer prompt. Эталон (example email.webp): фона «как такового
+ * нет» — very light, almost-white neutral studio wall, no scene. Objects and
+ * the character live on separate layers, so the backdrop must stay invisible.
+ */
 export function backgroundPrompt(neuralPrompt: string): string {
   const campaign = neuralPrompt.trim();
   return [
-    "Abstract advertising background for a casino promo banner: smooth continuous surface with soft ambient glow, gentle bokeh and subtle depth.",
-    campaign ? `Mood and palette should match this campaign: ${campaign}.` : "",
-    "STRICTLY NO objects, NO characters, NO symbols, NO text, NO logos — an empty atmospheric backdrop only.",
+    "An almost empty advertising backdrop like a bright studio wall: very light neutral gray, smooth and flat, with only an extremely subtle soft gradient and at most a few tiny out-of-focus floating particles.",
+    campaign ? `Only a faint hint of this campaign's mood is allowed in the soft accent lighting: ${campaign}.` : "",
+    "The backdrop must look nearly blank — NO scene, NO fabric, NO texture, NO dark or saturated colors, and STRICTLY NO objects, NO characters, NO symbols, NO text, NO logos.",
     "FULL-BLEED: cover the entire canvas edge to edge, no borders or frames.",
   ]
     .filter(Boolean)
@@ -381,13 +385,22 @@ export async function processPrepareVariantJob(bundleId: string, variantId: stri
   let personCutoutId: string | null = null;
   let itemCutoutId: string | null = null;
   if (typeAssets.some((a) => a.composeMode === "layered")) {
+    // `e_trim` cuts the transparent margins off the stored cutout, so the
+    // subject itself — not its original 3:4 canvas — is what c_fit scales
+    // into the zone box (otherwise the character renders far too small).
     const personCut = await runBriaRemoveBg(personUp.secure_url);
     if (!personCut.success || !personCut.imageUrl) {
       await failVariant(`person cutout: ${personCut.error ?? "unknown"}`);
       return;
     }
     const personCutUp = await withRetry(
-      () => uploadFromUrl(personCut.imageUrl!, `cut_person_${variantId}_${Date.now()}`, `bundles/${bundleId}`),
+      () =>
+        uploadFromUrlTransformed(
+          personCut.imageUrl!,
+          `cut_person_${variantId}_${Date.now()}`,
+          `bundles/${bundleId}`,
+          "e_trim",
+        ),
       `bundle-person-cut#${variantId}`,
     );
     if (!personCutUp.success || !personCutUp.public_id) {
@@ -402,7 +415,13 @@ export async function processPrepareVariantJob(bundleId: string, variantId: stri
       return;
     }
     const itemCutUp = await withRetry(
-      () => uploadFromUrl(itemCut.imageUrl!, `cut_item_${variantId}_${Date.now()}`, `bundles/${bundleId}`),
+      () =>
+        uploadFromUrlTransformed(
+          itemCut.imageUrl!,
+          `cut_item_${variantId}_${Date.now()}`,
+          `bundles/${bundleId}`,
+          "e_trim",
+        ),
       `bundle-item-cut#${variantId}`,
     );
     if (!itemCutUp.success || !itemCutUp.public_id) {
