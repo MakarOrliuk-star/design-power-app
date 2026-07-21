@@ -1,6 +1,6 @@
 import { prisma } from "../lib/prisma.js";
 import { runPersonFal, runBriaExpand } from "../lib/fal.js";
-import { uploadFromUrl, withRetry } from "../lib/cloudinary.js";
+import { uploadFromUrl, uploadFromUrlTransformed, withRetry } from "../lib/cloudinary.js";
 import { nearestFalAspect, probeImageSize } from "../lib/imageSize.js";
 import { getPrompt } from "../services/prompts.js";
 import { buildPersonPromptMemoized } from "./person.processor.js";
@@ -70,11 +70,11 @@ export function compositionPrompt(
 
   const layouts: Record<string, string> = {
     email:
-      "Layout (email hero banner): place the character on the RIGHT third of the canvas as the active anchor. Place the detailed graphic objects on the LEFT third as the graphical anchor. KEEP THE CENTRAL THIRD EMPTY — no objects, characters or text there, only a subtly blurred ambient background; that zone is reserved for dynamic text and CTA buttons added later.",
+      "Layout (email hero banner, like a magazine cover): the character stands at the RIGHT EDGE of the canvas, LARGE — filling almost the full canvas height, torso touching or slightly cropped by the right edge. The detailed graphic objects form one large cluster pressed against the LEFT EDGE, partially cropped by it. The CENTRAL HALF of the canvas must stay COMPLETELY EMPTY — no objects, characters, symbols or text there, only the smooth continuous background with a soft ambient glow; that central area is reserved for a large headline and a CTA button added later. Small blurred ambience particles may float near the top and bottom edges only.",
     push:
-      "Layout (push banner): place the character in the CENTER holding a glowing focal medallion. Scatter slot symbols, chips and cherries dynamically around the whole canvas. There is NO protected empty area — the entire canvas may be filled with graphics.",
+      "Layout (push banner): place the character in the CENTER holding a glowing focal medallion, large — nearly the full canvas height. Scatter slot symbols, chips and cherries dynamically around the whole canvas out to its edges. There is NO protected empty area — the entire canvas may be filled with graphics.",
     popup:
-      "Layout (pop-up): main character in the CENTER holding the central artifact. Accent emblems/symbols on the left and right sides, scattered ambient objects around. Detailed graphics are allowed everywhere — no protected text zones.",
+      "Layout (pop-up): main character in the CENTER holding the central artifact, large. Accent emblems/symbols pressed into the left and right sides, scattered ambient objects around, all the way to the edges. Detailed graphics are allowed everywhere — no protected text zones.",
   };
   const layout =
     layouts[assetKey] ??
@@ -86,6 +86,7 @@ export function compositionPrompt(
     ...refs,
     layout,
     campaign ? `Campaign brief: ${campaign}.` : "",
+    "FULL-BLEED: the background scene must cover the entire canvas edge to edge — absolutely no borders, frames, empty bands or transparent margins.",
     "No text, no letters, no logos, no watermarks. Professional advertising quality, coherent lighting across all elements.",
   ]
     .filter(Boolean)
@@ -113,6 +114,88 @@ export function computeCanvasPlacement(
     originX: Math.round((targetW - imgW) / 2),
     originY: Math.round((targetH - imgH) / 2),
   };
+}
+
+// Bria's outpaint can leave a feathered/semi-transparent seam along the outer
+// canvas edges (видимая «прозрачная рамка» на живом прогоне). The fix: expand
+// onto a canvas BLEED px larger on every side, then center-crop back to the
+// exact target at upload time — the artifact ring is cut away deterministically.
+export const EXPAND_BLEED = 32;
+
+/** Placement for the bleed-expanded canvas (target + BLEED on each side). */
+export function computeBleedPlacement(
+  srcW: number,
+  srcH: number,
+  targetW: number,
+  targetH: number,
+  bleed = EXPAND_BLEED,
+): { canvasW: number; canvasH: number; imgW: number; imgH: number; originX: number; originY: number } {
+  const inner = computeCanvasPlacement(srcW, srcH, targetW, targetH);
+  return {
+    canvasW: targetW + 2 * bleed,
+    canvasH: targetH + 2 * bleed,
+    imgW: inner.imgW,
+    imgH: inner.imgH,
+    originX: inner.originX + bleed,
+    originY: inner.originY + bleed,
+  };
+}
+
+const EXPAND_PROMPT =
+  "Seamlessly continue the existing background scene into the new margins, matching its colors, lighting and texture exactly. No borders, no frames, no empty or transparent areas.";
+
+/** Two sizes have the same aspect ratio (within a pixel-rounding tolerance). */
+function sameAspect(w1: number, h1: number, w2: number, h2: number): boolean {
+  return Math.abs(w1 / h1 - w2 / h2) < 0.01;
+}
+
+/**
+ * Fit a generated image to the exact mask canvas (D5) and store it:
+ * - exact size → plain upload;
+ * - same aspect → Cloudinary incoming resize (`c_fill`), no extra fal call;
+ * - different aspect → bleed-expand via Bria, then signed incoming
+ *   center-crop back to the target (cuts the outpaint edge artifacts).
+ */
+export async function fitAndStoreAsset(
+  sourceUrl: string,
+  targetW: number,
+  targetH: number,
+  fileName: string,
+  folder: string,
+  retryLabel: string,
+): Promise<{ ok: true; url: string } | { ok: false; reason: string }> {
+  const size = await probeImageSize(sourceUrl);
+  if (!size) return { ok: false, reason: "probe: could not read the generated image size" };
+
+  let uploadCall: () => ReturnType<typeof uploadFromUrl>;
+  if (size.width === targetW && size.height === targetH) {
+    uploadCall = () => uploadFromUrl(sourceUrl, fileName, folder);
+  } else if (sameAspect(size.width, size.height, targetW, targetH)) {
+    uploadCall = () =>
+      uploadFromUrlTransformed(sourceUrl, fileName, folder, `c_fill,w_${targetW},h_${targetH}`);
+  } else {
+    const placement = computeBleedPlacement(size.width, size.height, targetW, targetH);
+    const expanded = await runBriaExpand(sourceUrl, { ...placement, prompt: EXPAND_PROMPT });
+    if (!expanded.success || !expanded.imageUrl) {
+      return { ok: false, reason: `expand: ${expanded.error ?? "unknown"}` };
+    }
+    const expandedUrl = expanded.imageUrl;
+    uploadCall = () =>
+      uploadFromUrlTransformed(expandedUrl, fileName, folder, `c_crop,g_center,w_${targetW},h_${targetH}`);
+  }
+
+  const up = await withRetry(uploadCall, retryLabel);
+  if (!up.success || !up.secure_url) return { ok: false, reason: `upload: ${up.error ?? "unknown"}` };
+
+  // D5 guarantee: the STORED asset is exactly the canonical canvas.
+  const finalSize = await probeImageSize(up.secure_url);
+  if (finalSize && (finalSize.width !== targetW || finalSize.height !== targetH)) {
+    return {
+      ok: false,
+      reason: `size mismatch: got ${finalSize.width}×${finalSize.height}, want ${targetW}×${targetH}`,
+    };
+  }
+  return { ok: true, url: up.secure_url };
 }
 
 // ------------------------------------------------------------------
@@ -264,46 +347,22 @@ export async function processRenderAssetJob(
     return;
   }
 
-  // Fit to the exact mask canvas (D5): outpaint margins via Bria when the
-  // generated aspect differs; a same-ratio result is just placed full-bleed.
-  let finalUrl = gen.imageUrl;
-  const size = await probeImageSize(gen.imageUrl);
-  if (!size) {
-    await fail("probe: could not read the generated image size");
-    return;
-  }
-  if (size.width !== targetW || size.height !== targetH) {
-    const placement = computeCanvasPlacement(size.width, size.height, targetW, targetH);
-    const expanded = await runBriaExpand(gen.imageUrl, placement);
-    if (!expanded.success || !expanded.imageUrl) {
-      await fail(`expand: ${expanded.error ?? "unknown"}`);
-      return;
-    }
-    finalUrl = expanded.imageUrl;
-    const finalSize = await probeImageSize(finalUrl);
-    if (finalSize && (finalSize.width !== targetW || finalSize.height !== targetH)) {
-      await fail(`size mismatch: got ${finalSize.width}×${finalSize.height}, want ${targetW}×${targetH}`);
-      return;
-    }
-  }
-
-  const up = await withRetry(
-    () =>
-      uploadFromUrl(
-        finalUrl,
-        `${variant.brandName}_${asset.assetKey}_${Date.now()}`,
-        `bundles/${bundleId}`,
-      ),
+  const fitted = await fitAndStoreAsset(
+    gen.imageUrl,
+    targetW,
+    targetH,
+    `${variant.brandName}_${asset.assetKey}_${Date.now()}`,
+    `bundles/${bundleId}`,
     `bundle-asset#${assetId}`,
   );
-  if (!up.success || !up.secure_url) {
-    await fail(`upload: ${up.error ?? "unknown"}`);
+  if (!fitted.ok) {
+    await fail(fitted.reason);
     return;
   }
 
   await prisma.bundleAsset.update({
     where: { id: assetId },
-    data: { status: "DONE", imageUrl: up.secure_url, errorMessage: null },
+    data: { status: "DONE", imageUrl: fitted.url, errorMessage: null },
   });
   await recomputeBundleStatus(bundleId);
 }
@@ -341,46 +400,30 @@ export async function processEditAssetJob(
 
   const prompt =
     `Based on the reference image, keep the same composition, characters, style and layout. ${editPrompt.trim()} ` +
-    "Do not add text, letters, logos or watermarks. Keep the protected empty areas empty.";
+    "Do not add text, letters, logos or watermarks. Keep the protected empty areas empty. " +
+    "Full-bleed: the background must cover the entire canvas edge to edge, no borders or frames.";
   const run = await runPersonFal(prompt, [sourceUrl], nearestFalAspect(asset.width, asset.height), null);
   if (!run.success || !run.imageUrl) {
     await fail(`edit: ${run.error ?? "unknown"}`);
     return;
   }
 
-  let finalUrl = run.imageUrl;
-  const size = await probeImageSize(run.imageUrl);
-  if (!size) {
-    await fail("edit probe: could not read the edited image size");
-    return;
-  }
-  if (size.width !== asset.width || size.height !== asset.height) {
-    const placement = computeCanvasPlacement(size.width, size.height, asset.width, asset.height);
-    const expanded = await runBriaExpand(run.imageUrl, placement);
-    if (!expanded.success || !expanded.imageUrl) {
-      await fail(`edit expand: ${expanded.error ?? "unknown"}`);
-      return;
-    }
-    finalUrl = expanded.imageUrl;
-  }
-
-  const up = await withRetry(
-    () =>
-      uploadFromUrl(
-        finalUrl,
-        `${asset.variant.brandName}_${asset.assetKey}_edit_${Date.now()}`,
-        `bundles/${bundleId}`,
-      ),
+  const fitted = await fitAndStoreAsset(
+    run.imageUrl,
+    asset.width,
+    asset.height,
+    `${asset.variant.brandName}_${asset.assetKey}_edit_${Date.now()}`,
+    `bundles/${bundleId}`,
     `bundle-edit#${assetId}`,
   );
-  if (!up.success || !up.secure_url) {
-    await fail(`edit upload: ${up.error ?? "unknown"}`);
+  if (!fitted.ok) {
+    await fail(`edit ${fitted.reason}`);
     return;
   }
 
   await prisma.bundleAsset.update({
     where: { id: assetId },
-    data: { status: "DONE", imageUrl: up.secure_url, errorMessage: null },
+    data: { status: "DONE", imageUrl: fitted.url, errorMessage: null },
   });
   await recomputeBundleStatus(bundleId);
 }
