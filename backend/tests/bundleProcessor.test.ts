@@ -251,7 +251,8 @@ describe("processPrepareVariantJob (stage A)", () => {
       .mockResolvedValueOnce({ success: true, imageUrl: "https://fal/item_cut.png" });
     cloud.uploadFromUrl
       .mockResolvedValueOnce({ success: true, secure_url: "https://cdn/person.png", public_id: "b/person" })
-      .mockResolvedValueOnce({ success: true, secure_url: "https://cdn/item.png", public_id: "b/item" })
+      .mockResolvedValueOnce({ success: true, secure_url: "https://cdn/item.png", public_id: "b/item" });
+    cloud.uploadFromUrlTransformed
       .mockResolvedValueOnce({ success: true, secure_url: "https://cdn/pcut.png", public_id: "b/cut_person" })
       .mockResolvedValueOnce({ success: true, secure_url: "https://cdn/icut.png", public_id: "b/cut_item" });
     db.bundleAsset.findMany.mockResolvedValue([{ id: "a1" }]);
@@ -264,6 +265,8 @@ describe("processPrepareVariantJob (stage A)", () => {
       "https://cdn/person.png",
       "https://cdn/item.png",
     ]);
+    // Stored cutouts are e_trim'ed so c_fit scales the SUBJECT, not the canvas.
+    expect(cloud.uploadFromUrlTransformed.mock.calls.map((c) => c[3])).toEqual(["e_trim", "e_trim"]);
     expect(db.bundleBrandVariant.update).toHaveBeenCalledWith({
       where: { id: "v1" },
       data: {
@@ -456,9 +459,11 @@ describe("computeLayerPlacements / backgroundPrompt", () => {
     expect(p.person.gravity).toBe("south_east");
   });
 
-  it("background prompt bans objects/characters/text on the backdrop layer", () => {
+  it("background prompt = почти пустая светлая студия (эталон example email)", () => {
     const p = backgroundPrompt("Weekend reload");
     expect(p).toContain("NO objects, NO characters, NO symbols, NO text");
+    expect(p).toContain("very light neutral gray");
+    expect(p).toContain("NO dark or saturated colors");
     expect(p).toContain("Weekend reload");
     expect(p).toContain("FULL-BLEED");
   });
