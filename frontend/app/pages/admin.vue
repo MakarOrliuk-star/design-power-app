@@ -13,7 +13,7 @@ interface AdminUser {
   id: string;
   email: string;
   name: string | null;
-  role: "ADMIN" | "DESIGNER" | "CRM" | "MANAGER" | "SUPER_DESIGNER";
+  role: "ADMIN" | "DESIGNER" | "CRM" | "MANAGER" | "SUPER_DESIGNER" | "CRM_SUPER";
   isActive: boolean;
   lastLoginAt: string | null;
 }
@@ -675,11 +675,12 @@ onMounted(() => {
               <select
                 :value="u.role"
                 :disabled="u.id === auth.user?.id"
-                @change="patchUser(u, { role: ($event.target as HTMLSelectElement).value as 'ADMIN' | 'DESIGNER' | 'CRM' | 'MANAGER' | 'SUPER_DESIGNER' })"
+                @change="patchUser(u, { role: ($event.target as HTMLSelectElement).value as 'ADMIN' | 'DESIGNER' | 'CRM' | 'MANAGER' | 'SUPER_DESIGNER' | 'CRM_SUPER' })"
               >
                 <option value="DESIGNER">DESIGNER</option>
                 <option value="SUPER_DESIGNER">SUPER_DESIGNER</option>
                 <option value="CRM">CRM</option>
+                <option value="CRM_SUPER">CRM_SUPER</option>
                 <option value="MANAGER">MANAGER</option>
                 <option value="ADMIN">ADMIN</option>
               </select>

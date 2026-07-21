@@ -73,7 +73,7 @@ adminRouter.get("/users", async (_req: Request, res: Response) => {
 });
 
 const patchUserSchema = z.object({
-  role: z.enum(["ADMIN", "DESIGNER", "CRM", "MANAGER", "SUPER_DESIGNER"]).optional(),
+  role: z.enum(["ADMIN", "DESIGNER", "CRM", "MANAGER", "SUPER_DESIGNER", "CRM_SUPER"]).optional(),
   isActive: z.boolean().optional(),
 });
 
@@ -99,7 +99,7 @@ adminRouter.patch("/users/:id", async (req: Request, res: Response) => {
 
   // Build the update payload without explicit `undefined` (exactOptionalPropertyTypes).
   const data: {
-    role?: "ADMIN" | "DESIGNER" | "CRM" | "MANAGER" | "SUPER_DESIGNER";
+    role?: "ADMIN" | "DESIGNER" | "CRM" | "MANAGER" | "SUPER_DESIGNER" | "CRM_SUPER";
     isActive?: boolean;
   } = {};
   if (parsed.data.role !== undefined) data.role = parsed.data.role;
@@ -393,6 +393,158 @@ adminRouter.delete("/smartico-brands/:id", async (req: Request, res: Response) =
   }
   try {
     await prisma.smarticoBrand.delete({ where: { id } });
+    res.json({ ok: true });
+  } catch {
+    res.status(404).json({ error: "not_found" });
+  }
+});
+
+// ============================================================
+// Image Bundles maintenance (TASK crm-bundle, D8/D13)
+// Bundle types (extensible asset configs) + Neural prompt presets.
+// ============================================================
+
+const bundleTypeAssetSchema = z.object({
+  key: z.string().min(1).max(40),
+  label: z.string().min(1).max(80),
+  width: z.number().int().min(64).max(4096),
+  height: z.number().int().min(64).max(4096),
+  templateUrl: z.string().url().optional(),
+  zones: z
+    .record(
+      z.string(),
+      z.object({ x: z.number(), y: z.number(), w: z.number(), h: z.number() }),
+    )
+    .optional(),
+});
+
+const bundleTypeSchema = z.object({
+  key: z.string().min(1).max(60),
+  title: z.string().min(1).max(120),
+  description: z.string().max(500).optional(),
+  isActive: z.boolean().optional(),
+  assets: z.array(bundleTypeAssetSchema).min(1).max(20),
+});
+
+adminRouter.get("/bundle-types", async (_req: Request, res: Response) => {
+  const bundleTypes = await prisma.bundleType.findMany({ orderBy: { createdAt: "asc" } });
+  res.json({ bundleTypes });
+});
+
+adminRouter.post("/bundle-types", async (req: Request, res: Response) => {
+  const parsed = bundleTypeSchema.safeParse(req.body);
+  if (!parsed.success) {
+    res.status(400).json({ error: "invalid_body", details: parsed.error.flatten().fieldErrors });
+    return;
+  }
+  const existing = await prisma.bundleType.findUnique({
+    where: { key: parsed.data.key },
+    select: { id: true },
+  });
+  if (existing) {
+    res.status(409).json({ error: "already_exists" });
+    return;
+  }
+  const created = await prisma.bundleType.create({
+    data: {
+      key: parsed.data.key,
+      title: parsed.data.title,
+      description: parsed.data.description ?? null,
+      isActive: parsed.data.isActive ?? true,
+      assets: parsed.data.assets,
+    },
+  });
+  res.status(201).json({ bundleType: created });
+});
+
+adminRouter.patch("/bundle-types/:id", async (req: Request, res: Response) => {
+  const id = req.params.id;
+  if (typeof id !== "string" || !id) {
+    res.status(400).json({ error: "id_required" });
+    return;
+  }
+  const parsed = bundleTypeSchema.partial().safeParse(req.body);
+  if (!parsed.success) {
+    res.status(400).json({ error: "invalid_body", details: parsed.error.flatten().fieldErrors });
+    return;
+  }
+  const data: Record<string, unknown> = {};
+  if (parsed.data.key !== undefined) data.key = parsed.data.key;
+  if (parsed.data.title !== undefined) data.title = parsed.data.title;
+  if (parsed.data.description !== undefined) data.description = parsed.data.description;
+  if (parsed.data.isActive !== undefined) data.isActive = parsed.data.isActive;
+  if (parsed.data.assets !== undefined) data.assets = parsed.data.assets;
+  try {
+    const updated = await prisma.bundleType.update({ where: { id }, data });
+    res.json({ bundleType: updated });
+  } catch {
+    res.status(404).json({ error: "not_found" });
+  }
+});
+
+const promptPresetSchema = z.object({
+  title: z.string().min(1).max(120),
+  text: z.string().min(1).max(1500),
+  order: z.number().int().min(0).max(10_000).optional(),
+  isActive: z.boolean().optional(),
+});
+
+adminRouter.get("/prompt-presets", async (_req: Request, res: Response) => {
+  const presets = await prisma.neuralPromptPreset.findMany({
+    orderBy: [{ order: "asc" }, { createdAt: "asc" }],
+  });
+  res.json({ presets });
+});
+
+adminRouter.post("/prompt-presets", async (req: Request, res: Response) => {
+  const parsed = promptPresetSchema.safeParse(req.body);
+  if (!parsed.success) {
+    res.status(400).json({ error: "invalid_body", details: parsed.error.flatten().fieldErrors });
+    return;
+  }
+  const created = await prisma.neuralPromptPreset.create({
+    data: {
+      title: parsed.data.title,
+      text: parsed.data.text,
+      order: parsed.data.order ?? 0,
+      isActive: parsed.data.isActive ?? true,
+    },
+  });
+  res.status(201).json({ preset: created });
+});
+
+adminRouter.patch("/prompt-presets/:id", async (req: Request, res: Response) => {
+  const id = req.params.id;
+  if (typeof id !== "string" || !id) {
+    res.status(400).json({ error: "id_required" });
+    return;
+  }
+  const parsed = promptPresetSchema.partial().safeParse(req.body);
+  if (!parsed.success) {
+    res.status(400).json({ error: "invalid_body", details: parsed.error.flatten().fieldErrors });
+    return;
+  }
+  const data: Record<string, unknown> = {};
+  if (parsed.data.title !== undefined) data.title = parsed.data.title;
+  if (parsed.data.text !== undefined) data.text = parsed.data.text;
+  if (parsed.data.order !== undefined) data.order = parsed.data.order;
+  if (parsed.data.isActive !== undefined) data.isActive = parsed.data.isActive;
+  try {
+    const updated = await prisma.neuralPromptPreset.update({ where: { id }, data });
+    res.json({ preset: updated });
+  } catch {
+    res.status(404).json({ error: "not_found" });
+  }
+});
+
+adminRouter.delete("/prompt-presets/:id", async (req: Request, res: Response) => {
+  const id = req.params.id;
+  if (typeof id !== "string" || !id) {
+    res.status(400).json({ error: "id_required" });
+    return;
+  }
+  try {
+    await prisma.neuralPromptPreset.delete({ where: { id } });
     res.json({ ok: true });
   } catch {
     res.status(404).json({ error: "not_found" });

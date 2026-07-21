@@ -12,7 +12,7 @@ const { theme, toggle: toggleTheme } = useTheme();
 
 // Only services with real logic are openable (and favoritable). The "soon"
 // tiles are disabled placeholders — see SERVICES below.
-type ServiceKey = "calculator" | "bonuscalc" | "auditor" | "smartico"| "prioritycalc";
+type ServiceKey = "calculator" | "bonuscalc" | "auditor" | "smartico" | "prioritycalc" | "bundles";
 const activeService = ref<null | ServiceKey>(null);
 
 const route = useRoute();
@@ -26,6 +26,7 @@ const OPENABLE = new Set<ServiceKey>([
   "auditor",
   "smartico",
   "prioritycalc",
+  "bundles",
 ]);
 
 // How we arrived: captured once so a Drive OAuth return (/crm?drive=...) can be
@@ -50,6 +51,10 @@ interface Service {
   footer: string;
   soon: boolean;
   externalUrl?: string;
+  // Role gate (TASK crm-bundle, D4): when set, the tile is shown only to these
+  // roles. FE-hiding is cosmetic — the real wall is the backend guard
+  // (requireCrmSuper on /api/bundles).
+  roles?: Array<"ADMIN" | "DESIGNER" | "CRM" | "MANAGER" | "SUPER_DESIGNER" | "CRM_SUPER">;
 }
 
 const SERVICES: Service[] = [
@@ -113,10 +118,20 @@ const SERVICES: Service[] = [
     key: "prioritycalc",
     title: "Калькулятор Приоритетов",
     desc: "Быстрый скоринг при постановке задач на основе сложности, уверенности и финансового импакта.",
-    icon: "⚖️", 
-    iconBg: "#f5f3ff", 
+    icon: "⚖️",
+    iconBg: "#f5f3ff",
     footer: "Оценить задачу →",
     soon: false,
+  },
+  {
+    key: "bundles",
+    title: "Image Bundles",
+    desc: "Массовая генерация рекламных креативов (email / pop-up / push) по брендам с отправкой в Smartico.",
+    icon: "📦",
+    iconBg: "#ecfeff",
+    footer: "Запустить сервис →",
+    soon: false,
+    roles: ["CRM_SUPER", "ADMIN", "MANAGER"],
   }
 ];
 
@@ -125,20 +140,31 @@ const SERVICE_TITLES: Record<ServiceKey, string> = {
   bonuscalc: "Калькулятор Бонусов",
   auditor: "Массовый аудит",
   smartico: "Unique Image Smartico",
-  prioritycalc: "Калькулятор Приоритетов"
+  prioritycalc: "Калькулятор Приоритетов",
+  bundles: "Image Bundles",
 };
 
 const displayName = computed(() => auth.user?.name || auth.user?.email || "");
 
+// Role-gated tiles (Image Bundles) are dropped entirely for other roles — not
+// shown in Избранное, Все сервисы, or via the ?service= URL restore.
+const visibleServices = computed(() =>
+  SERVICES.filter((s) => !s.roles || (auth.user && s.roles.includes(auth.user.role))),
+);
+
+function canOpen(key: ServiceKey): boolean {
+  return visibleServices.value.some((s) => s.key === key);
+}
+
 // Favorited services that are still real (soon tiles can't be favorited).
 const favoriteServices = computed(() =>
-  SERVICES.filter((s) => !s.soon && crm.isFavorite(s.key)),
+  visibleServices.value.filter((s) => !s.soon && crm.isFavorite(s.key)),
 );
 
 // "Все сервисы" excludes whatever is already pinned to Избранное, so a
 // favorited service isn't shown twice on the page.
 const otherServices = computed(() =>
-  SERVICES.filter((s) => !(!s.soon && crm.isFavorite(s.key))),
+  visibleServices.value.filter((s) => !(!s.soon && crm.isFavorite(s.key))),
 );
 
 function openService(s: Service) {
@@ -162,8 +188,13 @@ onMounted(() => {
     // ?drive=... with ?service=smartico so a reload no longer re-opens it.
     activeService.value = "smartico";
     router.replace({ query: { service: "smartico" } });
-  } else if (typeof route.query.service === "string" && OPENABLE.has(route.query.service as ServiceKey)) {
-    // Restore the previously open service after a reload.
+  } else if (
+    typeof route.query.service === "string" &&
+    OPENABLE.has(route.query.service as ServiceKey) &&
+    canOpen(route.query.service as ServiceKey)
+  ) {
+    // Restore the previously open service after a reload. Role-gated services
+    // (bundles) silently fall back to the dashboard for other roles.
     activeService.value = route.query.service as ServiceKey;
   }
 });
@@ -315,6 +346,7 @@ onMounted(() => {
           <CrmAuditor v-else-if="activeService === 'auditor'" />
           <CrmSmartico v-else-if="activeService === 'smartico'" :drive-return="driveReturn" />
           <PriorityCalculator v-else-if="activeService === 'prioritycalc'" />
+          <CrmBundles v-else-if="activeService === 'bundles'" />
         </div>
       </div>
     </div>

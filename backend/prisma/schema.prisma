@@ -30,6 +30,10 @@ enum Role {
   // management via /api/my-brands (create/edit/delete/test only brands they
   // created). No CRM, no /admin.
   SUPER_DESIGNER
+  // CRM-super (TASK crm-bundle, D4): CRM zone access + the Image Bundles
+  // service via /api/bundles. Bundles are also open to ADMIN and MANAGER;
+  // plain CRM users never see them. No Design zone, no /admin.
+  CRM_SUPER
 }
 
 model User {
@@ -50,6 +54,7 @@ model User {
   crmFavorites        CrmServiceFavorite[]
   tournamentOverrides UserTournamentPromptOverride[]
   brandsCreated       Brand[]
+  bundles             Bundle[]
 
   @@index([email])
 }
@@ -453,4 +458,129 @@ model ZipExport {
   batchId   String? // set for whole-batch exports
   imageIds  String[] // Generation ids that went into the archive
   createdAt DateTime @default(now())
+}
+
+// ============================================================
+// Image Bundles (TASK crm-bundle) — CRM mass-creative generation
+// ============================================================
+
+// D1: no Scheduled status — plannedSendAt is a label only, never drives status.
+enum BundleStatus {
+  DRAFT
+  GENERATING
+  COMPLETED
+  FAILED
+}
+
+enum BundleAssetStatus {
+  PENDING
+  GENERATING
+  DONE
+  FAILED
+}
+
+/// Extensible bundle type (D2/D13): the asset list with canonical pixel sizes,
+/// template backgrounds and zone coordinates lives in `assets` Json so new
+/// types are added from the admin panel without frontend changes.
+/// assets: [{ key: "email"|"popup"|"push", label, width, height,
+///            templateUrl?, zones?: { person?, item?, protected?: {x,y,w,h} } }]
+model BundleType {
+  id          String   @id @default(cuid())
+  key         String   @unique // e.g. "simple_sendout"
+  title       String
+  description String?
+  isActive    Boolean  @default(true)
+  assets      Json
+  createdAt   DateTime @default(now())
+
+  bundles Bundle[]
+}
+
+/// A bundle project (left-panel card). brandNames snapshots the BASE brand
+/// names picked in the wizard (one toggle covers both (Men)/(Women), D3/D7);
+/// they are expanded into concrete BundleBrandVariant rows at generate time.
+model Bundle {
+  id            String       @id @default(cuid())
+  name          String
+  plannedSendAt DateTime? // label only (D1)
+  neuralPrompt  String       @default("") // <= 1500 chars, enforced in the API
+  status        BundleStatus @default(DRAFT)
+  brandNames    Json // string[] of base brand names
+  bundleTypeId  String
+  bundleType    BundleType   @relation(fields: [bundleTypeId], references: [id])
+  createdById   String?
+  createdBy     User?        @relation(fields: [createdById], references: [id], onDelete: SetNull)
+  createdAt     DateTime     @default(now())
+  updatedAt     DateTime     @updatedAt
+
+  variants BundleBrandVariant[]
+  sends    BundleSend[]
+
+  @@index([status])
+  @@index([createdAt])
+}
+
+/// One tone-of-voice brand variant inside a bundle (e.g. "Betnella(Men)").
+/// brandId is a plain snapshot (no FK) so bundles survive brand deletes.
+/// personImageUrl/itemImageUrl are the stage-A pipeline artifacts (D11/D12),
+/// reused by all assets of the variant and by per-asset regenerates.
+model BundleBrandVariant {
+  id             String  @id @default(cuid())
+  bundleId       String
+  bundle         Bundle  @relation(fields: [bundleId], references: [id], onDelete: Cascade)
+  brandId        String?
+  brandName      String // internal name snapshot, e.g. "Betnella(Men)"
+  displayName    String // UI label, e.g. "Betnella (Men)"
+  personImageUrl String?
+  itemImageUrl   String?
+
+  assets BundleAsset[]
+
+  @@unique([bundleId, brandName])
+}
+
+/// One generated creative (email / popup / push card on the Result screen).
+/// Regeneration reuses this row (idempotent — no duplicates) and resets
+/// `approved`. width/height snapshot the canonical mask size (D2).
+model BundleAsset {
+  id           String            @id @default(cuid())
+  bundleId     String
+  variantId    String
+  variant      BundleBrandVariant @relation(fields: [variantId], references: [id], onDelete: Cascade)
+  assetKey     String // "email" | "popup" | "push" (from BundleType.assets)
+  width        Int
+  height       Int
+  imageUrl     String?
+  status       BundleAssetStatus @default(PENDING)
+  approved     Boolean           @default(false)
+  errorMessage String?
+  createdAt    DateTime          @default(now())
+  updatedAt    DateTime          @updatedAt
+
+  @@unique([variantId, assetKey])
+  @@index([bundleId])
+}
+
+/// Global admin-editable Neural prompt suggestions shown on textarea focus (D8).
+model NeuralPromptPreset {
+  id        String   @id @default(cuid())
+  title     String
+  text      String
+  order     Int      @default(0)
+  isActive  Boolean  @default(true)
+  createdAt DateTime @default(now())
+}
+
+/// One "Send to Smartico" run (D6): approved assets → Cloudinary + generated
+/// JS snippets (Unique Smartico contract). Kept as history + idempotent retry.
+model BundleSend {
+  id        String   @id @default(cuid())
+  bundleId  String
+  bundle    Bundle   @relation(fields: [bundleId], references: [id], onDelete: Cascade)
+  status    String   @default("PENDING") // PENDING | DONE | FAILED
+  outputs   Json?
+  stats     Json?
+  createdAt DateTime @default(now())
+
+  @@index([bundleId])
 }

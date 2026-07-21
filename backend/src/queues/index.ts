@@ -12,6 +12,7 @@ import { env } from "../env.js";
 export const PERSON_QUEUE = "person";
 export const ITEM_QUEUE = "item";
 export const SMARTICO_QUEUE = "smartico";
+export const BUNDLE_QUEUE = "bundle";
 
 export interface GenerationJobData {
   generationId: string;
@@ -41,6 +42,25 @@ export interface DriveSmarticoJobData {
 
 export type SmarticoQueueData = SmarticoJobData | DriveSmarticoJobData;
 export type SmarticoJobName = "generate" | "drive";
+
+// Image Bundles (TASK crm-bundle, R-PLAN §6): two-stage pipeline.
+// "prepare-variant" generates the variant's shared person + item (stage A) and
+// then enqueues one "render-asset" per asset (stage B: template composition).
+// A per-asset regenerate enqueues "render-asset" directly, reusing stage A.
+// "edit-asset" (D9) is a text-prompt img2img edit of the CURRENT asset image,
+// preserving the canonical canvas size.
+export interface BundleVariantJobData {
+  bundleId: string;
+  variantId: string;
+}
+export interface BundleAssetJobData {
+  bundleId: string;
+  variantId: string;
+  assetId: string;
+  editPrompt?: string; // set for "edit-asset" jobs only
+}
+export type BundleQueueData = BundleVariantJobData | BundleAssetJobData;
+export type BundleJobName = "prepare-variant" | "render-asset" | "edit-asset";
 
 let _connection: Redis | null = null;
 export function getBullConnection(): Redis {
@@ -90,6 +110,17 @@ const smarticoJobOptions = {
   removeOnComplete: { age: 3600, count: 500 },
   removeOnFail: { age: 3600, count: 500 },
 };
+
+let _bundleQueue: Queue<BundleQueueData, void, BundleJobName> | null = null;
+export function getBundleQueue(): Queue<BundleQueueData, void, BundleJobName> {
+  if (!_bundleQueue) {
+    _bundleQueue = new Queue<BundleQueueData, void, BundleJobName>(BUNDLE_QUEUE, {
+      connection: getBullConnection(),
+      defaultJobOptions,
+    });
+  }
+  return _bundleQueue;
+}
 
 let _smarticoQueue: Queue<SmarticoQueueData, unknown, SmarticoJobName> | null = null;
 export function getSmarticoQueue(): Queue<SmarticoQueueData, unknown, SmarticoJobName> {
