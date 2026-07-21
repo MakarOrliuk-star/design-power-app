@@ -11,6 +11,7 @@ const db = vi.hoisted(() => ({
 const fal = vi.hoisted(() => ({ runPersonFal: vi.fn(), runBriaExpand: vi.fn() }));
 const cloud = vi.hoisted(() => ({
   uploadFromUrl: vi.fn(),
+  uploadFromUrlTransformed: vi.fn(),
   withRetry: vi.fn((fn: () => unknown) => fn()),
 }));
 const imageSize = vi.hoisted(() => ({
@@ -33,6 +34,7 @@ vi.mock("../src/services/bundle.service.js", () => ({ recomputeBundleStatus: rec
 import {
   buildBundleItemPrompt,
   compositionPrompt,
+  computeBleedPlacement,
   computeCanvasPlacement,
   processEditAssetJob,
   processPrepareVariantJob,
@@ -45,6 +47,7 @@ beforeEach(() => {
   fal.runPersonFal.mockReset();
   fal.runBriaExpand.mockReset();
   cloud.uploadFromUrl.mockReset();
+  cloud.uploadFromUrlTransformed.mockReset();
   imageSize.probeImageSize.mockReset();
   queue.addBulk.mockReset();
   recompute.mockReset();
@@ -72,6 +75,11 @@ describe("computeCanvasPlacement", () => {
     const p = computeCanvasPlacement(1024, 768, 800, 600);
     expect(p).toEqual({ canvasW: 800, canvasH: 600, imgW: 800, imgH: 600, originX: 0, originY: 0 });
   });
+
+  it("bleed placement pads the canvas so the outpaint seam can be cropped away", () => {
+    const p = computeBleedPlacement(1024, 576, 1200, 600, 32);
+    expect(p).toEqual({ canvasW: 1264, canvasH: 664, imgW: 1067, imgH: 600, originX: 99, originY: 32 });
+  });
 });
 
 /**
@@ -79,13 +87,15 @@ describe("computeCanvasPlacement", () => {
  * protects the central text zone; push/popup explicitly do not.
  */
 describe("compositionPrompt", () => {
-  it("email: right person / left items / protected empty center", () => {
+  it("email: person at the right EDGE / items at the left EDGE / empty central half", () => {
     const p = compositionPrompt("email", { hasTemplate: true, hasItem: true, neuralPrompt: "Weekend reload" });
-    expect(p).toContain("RIGHT third");
-    expect(p).toContain("LEFT third");
-    expect(p).toContain("KEEP THE CENTRAL THIRD EMPTY");
+    expect(p).toContain("RIGHT EDGE");
+    expect(p).toContain("LEFT EDGE");
+    expect(p).toContain("CENTRAL HALF of the canvas must stay COMPLETELY EMPTY");
     expect(p).toContain("first reference image as the background template");
     expect(p).toContain("Campaign brief: Weekend reload.");
+    // Anti-frame directive (живой прогон показал прозрачные поля/рамку).
+    expect(p).toContain("FULL-BLEED");
   });
 
   it("push/popup: centered character, no protected zones", () => {
@@ -213,27 +223,39 @@ describe("processRenderAssetJob (stage B)", () => {
     },
   };
 
-  it("composes, expands to the exact canvas, validates and stores (D5/D10)", async () => {
+  it("composes, bleed-expands, center-crops to the exact canvas and stores (D5/D10)", async () => {
     db.bundleAsset.findUnique.mockResolvedValue(assetRow);
     fal.runPersonFal.mockResolvedValue({ success: true, imageUrl: "https://fal/composed.png" });
     imageSize.probeImageSize
       .mockResolvedValueOnce({ width: 1024, height: 576 }) // generated 16:9
-      .mockResolvedValueOnce({ width: 1200, height: 600 }); // after expand
+      .mockResolvedValueOnce({ width: 1200, height: 600 }); // stored asset
     fal.runBriaExpand.mockResolvedValue({ success: true, imageUrl: "https://fal/expanded.png" });
-    cloud.uploadFromUrl.mockResolvedValue({ success: true, secure_url: "https://cdn/email.png" });
+    cloud.uploadFromUrlTransformed.mockResolvedValue({ success: true, secure_url: "https://cdn/email.png" });
 
     await processRenderAssetJob("bun1", "v1", "a1");
 
     // Composition refs: person + item (no template configured yet, R9).
     expect(fal.runPersonFal.mock.calls[0]![1]).toEqual(["https://cdn/person.png", "https://cdn/item.png"]);
-    expect(fal.runBriaExpand).toHaveBeenCalledWith("https://fal/composed.png", {
-      canvasW: 1200,
-      canvasH: 600,
-      imgW: 1067,
-      imgH: 600,
-      originX: 67,
-      originY: 0,
-    });
+    // Expand happens on a 32px-bled canvas with a continuation prompt…
+    expect(fal.runBriaExpand).toHaveBeenCalledWith(
+      "https://fal/composed.png",
+      expect.objectContaining({
+        canvasW: 1264,
+        canvasH: 664,
+        imgW: 1067,
+        imgH: 600,
+        originX: 99,
+        originY: 32,
+        prompt: expect.stringContaining("Seamlessly continue"),
+      }),
+    );
+    // …and the upload center-crops back to the exact mask canvas.
+    expect(cloud.uploadFromUrlTransformed).toHaveBeenCalledWith(
+      "https://fal/expanded.png",
+      expect.any(String),
+      "bundles/bun1",
+      "c_crop,g_center,w_1200,h_600",
+    );
     expect(db.bundleAsset.update).toHaveBeenLastCalledWith({
       where: { id: "a1" },
       data: { status: "DONE", imageUrl: "https://cdn/email.png", errorMessage: null },
@@ -253,6 +275,36 @@ describe("processRenderAssetJob (stage B)", () => {
       where: { id: "a1" },
       data: { status: "DONE", imageUrl: "https://cdn/email.png", errorMessage: null },
     });
+  });
+
+  it("same-aspect render (popup 4:3) is resized via Cloudinary, no Bria call", async () => {
+    db.bundleAsset.findUnique.mockResolvedValue({
+      ...assetRow,
+      assetKey: "popup",
+      width: 800,
+      height: 600,
+      variant: {
+        ...assetRow.variant,
+        bundle: {
+          ...assetRow.variant.bundle,
+          bundleType: { assets: [{ key: "popup", label: "Pop-up", width: 800, height: 600 }] },
+        },
+      },
+    });
+    fal.runPersonFal.mockResolvedValue({ success: true, imageUrl: "https://fal/composed.png" });
+    imageSize.probeImageSize
+      .mockResolvedValueOnce({ width: 1024, height: 768 }) // generated 4:3
+      .mockResolvedValueOnce({ width: 800, height: 600 });
+    cloud.uploadFromUrlTransformed.mockResolvedValue({ success: true, secure_url: "https://cdn/popup.png" });
+
+    await processRenderAssetJob("bun1", "v1", "a1");
+    expect(fal.runBriaExpand).not.toHaveBeenCalled();
+    expect(cloud.uploadFromUrlTransformed).toHaveBeenCalledWith(
+      "https://fal/composed.png",
+      expect.any(String),
+      "bundles/bun1",
+      "c_fill,w_800,h_600",
+    );
   });
 
   it("fails the asset with a reason when the compose call fails", async () => {
@@ -312,17 +364,25 @@ describe("processEditAssetJob (D9)", () => {
     expect(recompute).toHaveBeenCalledWith("bun1");
   });
 
-  it("re-expands to the canvas when the edit drifts the size", async () => {
+  it("re-expands (with bleed) to the canvas when the edit drifts the size", async () => {
     db.bundleAsset.findUnique.mockResolvedValue(editRow);
     fal.runPersonFal.mockResolvedValue({ success: true, imageUrl: "https://fal/edited.png" });
-    imageSize.probeImageSize.mockResolvedValue({ width: 1024, height: 576 });
+    imageSize.probeImageSize
+      .mockResolvedValueOnce({ width: 1024, height: 576 })
+      .mockResolvedValueOnce({ width: 1200, height: 600 });
     fal.runBriaExpand.mockResolvedValue({ success: true, imageUrl: "https://fal/expanded.png" });
-    cloud.uploadFromUrl.mockResolvedValue({ success: true, secure_url: "https://cdn/edited.png" });
+    cloud.uploadFromUrlTransformed.mockResolvedValue({ success: true, secure_url: "https://cdn/edited.png" });
 
     await processEditAssetJob("bun1", "v1", "a1", "x");
     expect(fal.runBriaExpand).toHaveBeenCalledWith(
       "https://fal/edited.png",
-      expect.objectContaining({ canvasW: 1200, canvasH: 600 }),
+      expect.objectContaining({ canvasW: 1264, canvasH: 664 }),
+    );
+    expect(cloud.uploadFromUrlTransformed).toHaveBeenCalledWith(
+      "https://fal/expanded.png",
+      expect.any(String),
+      "bundles/bun1",
+      "c_crop,g_center,w_1200,h_600",
     );
   });
 

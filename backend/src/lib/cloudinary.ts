@@ -29,11 +29,18 @@ function sign(params: Record<string, string | number>): string {
 }
 
 /** `file` is either a base64 data URI or a remote URL Cloudinary fetches itself. */
-async function upload(file: string, fileName: string, folder: string): Promise<CloudinaryResult> {
+async function upload(
+  file: string,
+  fileName: string,
+  folder: string,
+  transformation?: string,
+): Promise<CloudinaryResult> {
   try {
     const timestamp = Math.round(Date.now() / 1000);
     const publicId = fileName.replace(/\.[^/.]+$/, "");
-    const signature = sign({ folder, public_id: publicId, timestamp });
+    const signParams: Record<string, string | number> = { folder, public_id: publicId, timestamp };
+    if (transformation) signParams.transformation = transformation;
+    const signature = sign(signParams);
 
     const body = new URLSearchParams({
       file,
@@ -42,6 +49,7 @@ async function upload(file: string, fileName: string, folder: string): Promise<C
       folder,
       public_id: publicId,
       signature,
+      ...(transformation ? { transformation } : {}),
     });
 
     const res = await fetch(UPLOAD_URL(), {
@@ -76,6 +84,21 @@ export function uploadFromUrl(
   folder: string,
 ): Promise<CloudinaryResult> {
   return upload(imageUrl, fileName, folder);
+}
+
+/**
+ * Upload with a signed INCOMING transformation (applied by Cloudinary before
+ * storing — the stored asset already has the target pixels). Used by the
+ * bundle pipeline to cut the exact mask canvas out of a bleed-expanded image
+ * (`c_crop,g_center`) or to resize a same-aspect render (`c_fill`).
+ */
+export function uploadFromUrlTransformed(
+  imageUrl: string,
+  fileName: string,
+  folder: string,
+  transformation: string,
+): Promise<CloudinaryResult> {
+  return upload(imageUrl, fileName, folder, transformation);
 }
 
 /**
