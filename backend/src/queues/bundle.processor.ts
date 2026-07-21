@@ -45,15 +45,53 @@ export async function buildBundleItemPrompt(brandName: string, userPrompt: strin
   return u ? `${wrapper}\n${u}` : wrapper;
 }
 
+/** Fractional zone box (0..1 of the canvas) from BundleType.assets[].zones. */
+export interface ZoneBox {
+  x: number;
+  y: number;
+  w: number;
+  h: number;
+}
+export type AssetZones = Record<string, ZoneBox>;
+
+/**
+ * Hard numeric boundaries from the admin-configured zones (email mask scheme,
+ * figma/crm-bundle: item ≤ 25%, person ≥ 75%, protected 25–75%). Explicit
+ * percentages hold the model to the frame far better than "left third" prose;
+ * the frames are editable from the admin panel without code changes (D13).
+ */
+export function zoneDirectives(zones: AssetZones | undefined): string[] {
+  if (!zones) return [];
+  const pct = (v: number) => `${Math.round(v * 100)}%`;
+  const out: string[] = [];
+  if (zones.item) {
+    out.push(
+      `HARD BOUNDARY for the decorative object cluster: it must stay strictly inside the left section, between the left edge and ${pct(zones.item.x + zones.item.w)} of the canvas width — no part of any object may cross that line toward the center.`,
+    );
+  }
+  if (zones.person) {
+    out.push(
+      `HARD BOUNDARY for the character: it must stay strictly inside the right section, between ${pct(zones.person.x)} of the canvas width and the right edge — no part of the character (hair, arms, held items) may cross that line toward the center.`,
+    );
+  }
+  if (zones.protected) {
+    out.push(
+      `PROTECTED CLEAN ZONE: the central band between ${pct(zones.protected.x)} and ${pct(zones.protected.x + zones.protected.w)} of the width is reserved for a large headline and a CTA button — keep it completely free of objects, characters and symbols. Only tiny, soft-focus decorative particles are allowed there, and only near its very top and bottom edges, never in the middle.`,
+    );
+  }
+  return out;
+}
+
 /**
  * Mask-layout composition directive per asset type (figma/crm-bundle stencils).
  * The reference images are passed in the order [template?, person, item?] and
  * the prompt addresses them by role. Unknown asset keys (future bundle types)
- * get a generic full-canvas composition.
+ * get a generic full-canvas composition. Admin-configured `zones` add hard
+ * numeric boundaries on top of the prose layout.
  */
 export function compositionPrompt(
   assetKey: string,
-  opts: { hasTemplate: boolean; hasItem: boolean; neuralPrompt: string },
+  opts: { hasTemplate: boolean; hasItem: boolean; neuralPrompt: string; zones?: AssetZones },
 ): string {
   const refs: string[] = [];
   if (opts.hasTemplate)
@@ -85,6 +123,7 @@ export function compositionPrompt(
     "Compose a single polished advertising creative.",
     ...refs,
     layout,
+    ...zoneDirectives(opts.zones),
     campaign ? `Campaign brief: ${campaign}.` : "",
     "FULL-BLEED: the background scene must cover the entire canvas edge to edge — absolutely no borders, frames, empty bands or transparent margins.",
     "No text, no letters, no logos, no watermarks. Professional advertising quality, coherent lighting across all elements.",
@@ -339,6 +378,7 @@ export async function processRenderAssetJob(
     hasTemplate: Boolean(config?.templateUrl),
     hasItem: Boolean(variant.itemImageUrl),
     neuralPrompt: variant.bundle.neuralPrompt,
+    ...(config?.zones ? { zones: config.zones } : {}),
   });
 
   const gen = await runPersonFal(prompt, imageUrls, nearestFalAspect(targetW, targetH), null);

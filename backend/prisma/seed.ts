@@ -100,7 +100,20 @@ async function main() {
       title: "Simple sendout",
       description: "Standard assets for email, pop-up and push.",
       assets: [
-        { key: "email", label: "Email", width: 1200, height: 600 },
+        {
+          key: "email",
+          label: "Email",
+          width: 1200,
+          height: 600,
+          // Схема email mask (figma/crm-bundle): item ≤ 25% ширины, персонаж
+          // ≥ 75%, центральные 50% — защищённая чистая зона под оффер и CTA.
+          // Доли холста (0..1); правятся через PATCH /api/admin/bundle-types.
+          zones: {
+            item: { x: 0, y: 0, w: 0.25, h: 1 },
+            person: { x: 0.75, y: 0, w: 0.25, h: 1 },
+            protected: { x: 0.25, y: 0, w: 0.5, h: 1 },
+          },
+        },
         { key: "popup", label: "Pop-up", width: 800, height: 600 },
         { key: "push", label: "Push", width: 1024, height: 512 },
       ],

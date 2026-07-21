@@ -114,6 +114,33 @@ describe("compositionPrompt", () => {
     const p = compositionPrompt("story", { hasTemplate: false, hasItem: true, neuralPrompt: "x" });
     expect(p).toContain("balanced advertising composition");
   });
+
+  // Схема email mask: item ≤ 25%, персонаж ≥ 75%, центр 25–75% чистый.
+  it("admin-configured zones add HARD numeric boundaries to the prompt", () => {
+    const p = compositionPrompt("email", {
+      hasTemplate: false,
+      hasItem: true,
+      neuralPrompt: "",
+      zones: {
+        item: { x: 0, y: 0, w: 0.25, h: 1 },
+        person: { x: 0.75, y: 0, w: 0.25, h: 1 },
+        protected: { x: 0.25, y: 0, w: 0.5, h: 1 },
+      },
+    });
+    expect(p).toContain("between the left edge and 25% of the canvas width");
+    expect(p).toContain("between 75% of the canvas width and the right edge");
+    expect(p).toContain("between 25% and 75% of the width");
+    expect(p).toContain("PROTECTED CLEAN ZONE");
+    // Decor pockets (области декора на схеме): only tiny soft-focus particles
+    // near the band's edges, never in the middle.
+    expect(p).toContain("only near its very top and bottom edges");
+  });
+
+  it("no zones configured → no HARD BOUNDARY lines (push/popup unchanged)", () => {
+    const p = compositionPrompt("push", { hasTemplate: false, hasItem: true, neuralPrompt: "" });
+    expect(p).not.toContain("HARD BOUNDARY");
+    expect(p).not.toContain("PROTECTED CLEAN ZONE");
+  });
 });
 
 /** BE Test — ITEM source resolution (D12): brand template → bundle_default → built-in. */
