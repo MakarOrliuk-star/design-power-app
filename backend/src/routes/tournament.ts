@@ -81,6 +81,7 @@ tournamentRouter.get("/config", async (req: Request, res: Response) => {
         return {
           id: e.id,
           name: e.name,
+          nameVip: e.nameVip,
           order: e.order,
           referenceImages: e.referenceImages,
           prompts,
