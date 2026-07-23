@@ -5,7 +5,7 @@ export const qatoolsRouter: Router = Router();
 
 // Адрес запущенного локально (или в Railway) Python-воркера
 // Получаем URL из Railway и гарантируем наличие протокола
-const rawUrl = process.env.QA_TOOLS_URL || "http://127.0.0.1:8000";
+const rawUrl = process.env.QA_TOOLS_URL || "http://127.0.0.1:8000".replace(/\/$/, "");
 const QA_TOOLS_URL = rawUrl.startsWith("http://") || rawUrl.startsWith("https://")
   ? rawUrl
   : `http://${rawUrl}`;
