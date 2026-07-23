@@ -4,7 +4,11 @@ import type { Request, Response } from "express";
 export const qatoolsRouter: Router = Router();
 
 // Адрес запущенного локально (или в Railway) Python-воркера
-const QA_TOOLS_URL = process.env.QA_TOOLS_URL || "http://127.0.0.1:8000";
+// Получаем URL из Railway и гарантируем наличие протокола
+const rawUrl = process.env.QA_TOOLS_URL || "http://127.0.0.1:8000";
+const QA_TOOLS_URL = rawUrl.startsWith("http://") || rawUrl.startsWith("https://")
+  ? rawUrl
+  : `http://${rawUrl}`;
 
 /**
  * Хелпер 1: Проксирование обычных JSON-запросов (Модуль Brands)
