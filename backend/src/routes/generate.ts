@@ -628,12 +628,16 @@ const exportSchema = gallerySchema
     prefix: z.enum(["archive", "result"]).default("archive"),
   });
 
+/** File extension from an image URL, defaulting to png. */
+export function imageExtOf(url: string): string {
+  const m = /\.([a-zA-Z0-9]{2,4})(?:\?|$)/.exec(url);
+  return m?.[1] ? m[1].toLowerCase() : "png";
+}
+
 /** Safe, collision-free archive entry name: "0001_Brand.png". */
 export function zipEntryName(index: number, brandName: string, url: string): string {
   const safeBrand = (brandName || "image").replace(/[^a-zA-Z0-9._-]+/g, "_").slice(0, 40);
-  const m = /\.([a-zA-Z0-9]{2,4})(?:\?|$)/.exec(url);
-  const ext = m?.[1] ? m[1].toLowerCase() : "png";
-  return `${String(index + 1).padStart(4, "0")}_${safeBrand}.${ext}`;
+  return `${String(index + 1).padStart(4, "0")}_${safeBrand}.${imageExtOf(url)}`;
 }
 
 generateRouter.get("/generations/export.zip", async (req: Request, res: Response) => {
@@ -695,6 +699,61 @@ generateRouter.get("/generations/export.zip", async (req: Request, res: Response
   }
 
   await archive.finalize();
+});
+
+// ---- Direct single-image download (TASK download-and-edit-style §1) ----
+// The gallery images live on Cloudinary (cross-origin), where an
+// <a download> is silently ignored — so the file is proxied through the
+// backend with a Content-Disposition attachment. Same-origin GET navigation,
+// like export.zip above, so the session cookie rides along.
+
+/** RFC 5987 value: encodeURIComponent plus the chars it leaves bare. */
+export function rfc5987(value: string): string {
+  return encodeURIComponent(value).replace(
+    /['()!*]/g,
+    (c) => `%${c.charCodeAt(0).toString(16).toUpperCase()}`,
+  );
+}
+
+generateRouter.get("/generations/:id/download", async (req: Request, res: Response) => {
+  const id = String(req.params.id ?? "");
+  if (!id) {
+    res.status(400).json({ error: "id_required" });
+    return;
+  }
+  const row = await prisma.generation.findFirst({
+    where: { id, userId: req.user!.sub, status: "DONE", generatedImageUrl: { not: null } },
+    select: { brandName: true, generatedImageUrl: true },
+  });
+  if (!row?.generatedImageUrl) {
+    res.status(404).json({ error: "generation_not_found" });
+    return;
+  }
+
+  try {
+    const resp = await fetch(row.generatedImageUrl);
+    if (!resp.ok) {
+      res.status(502).json({ error: "image_fetch_failed" });
+      return;
+    }
+    const ext = imageExtOf(row.generatedImageUrl);
+    const base = (row.brandName || "image").trim() || "image";
+    // ASCII fallback + RFC 5987 filename* so cyrillic/bracketed brand names survive.
+    const ascii =
+      base.replace(/[^a-zA-Z0-9._-]+/g, "_").replace(/^_+|_+$/g, "").slice(0, 60) || "image";
+    res.setHeader(
+      "Content-Type",
+      resp.headers.get("content-type") ?? "application/octet-stream",
+    );
+    res.setHeader(
+      "Content-Disposition",
+      `attachment; filename="${ascii}.${ext}"; filename*=UTF-8''${rfc5987(`${base}.${ext}`)}`,
+    );
+    res.send(Buffer.from(await resp.arrayBuffer()));
+  } catch (err) {
+    console.warn(`download: fetch failed for ${id}`, err);
+    res.status(502).json({ error: "image_fetch_failed" });
+  }
 });
 
 // ---- Batch status (polling) ----

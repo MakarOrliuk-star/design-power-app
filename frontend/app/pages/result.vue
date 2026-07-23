@@ -25,6 +25,7 @@ const {
   selectedImages,
   exportZip,
   exporting,
+  downloadOne,
   editPrompt,
   perEditPrompts,
   editing,
@@ -246,7 +247,7 @@ const viewerItems = computed(() =>
                       <path d="M5 15V6a2 2 0 012-2h9" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" />
                     </svg>
                   </button>
-                  <button type="button" class="card__tool" aria-label="Download">
+                  <button type="button" class="card__tool" aria-label="Download" @click="downloadOne(img)">
                     <svg viewBox="0 0 24 24" width="15" height="15" fill="none">
                       <path d="M12 4v10m0 0l-4-4m4 4l4-4" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" />
                       <path d="M5 19h14" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" />

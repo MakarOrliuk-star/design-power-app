@@ -67,6 +67,8 @@ export interface UpdateBrandInput {
   stylePrompt?: string;
   referenceImages?: string[];
   forcedAspectRatio?: string | null;
+  imageModel?: string | null;
+  isActive?: boolean;
 }
 
 export type UpdateBrandResult =
@@ -98,10 +100,14 @@ export async function updateBrand(
     const data: {
       name?: string;
       forcedAspectRatio?: string | null;
+      imageModel?: string | null;
+      isActive?: boolean;
       categories?: { deleteMany: Record<string, never>; create: { category: { connect: { id: string } } }[] };
     } = {};
     if (newName) data.name = newName;
     if (input.forcedAspectRatio !== undefined) data.forcedAspectRatio = input.forcedAspectRatio;
+    if (input.imageModel !== undefined) data.imageModel = input.imageModel;
+    if (input.isActive !== undefined) data.isActive = input.isActive;
     if (input.categoryIds !== undefined) {
       const validCategoryIds = await filterCategoryIds(input.categoryIds);
       data.categories = {
@@ -175,6 +181,136 @@ export async function deleteBrand(brandId: string): Promise<boolean> {
   await prisma.promptTemplate.deleteMany({ where: { type: "PERSON", key: brand.name } });
   await prisma.brand.delete({ where: { id: brandId } });
   return true;
+}
+
+// ============================================================
+// Audited editing (TASK download-and-edit-style §2): any-brand edits by a
+// super-designer, with a full before/after trail in BrandChangeLog + rollback.
+// ============================================================
+
+/** Everything the edit modal can change — also the audit-log snapshot shape. */
+export interface BrandSnapshot {
+  name: string;
+  categoryIds: string[];
+  personPrompt: string;
+  stylePrompt: string;
+  referenceImages: string[];
+  forcedAspectRatio: string | null;
+  imageModel: string | null;
+  isActive: boolean;
+}
+
+export interface BrandActor {
+  userId: string;
+  userEmail: string;
+}
+
+/** Full editable state of a brand, or null when it does not exist. */
+export async function getBrandSnapshot(brandId: string): Promise<BrandSnapshot | null> {
+  const b = await prisma.brand.findUnique({
+    where: { id: brandId },
+    select: {
+      name: true,
+      isActive: true,
+      forcedAspectRatio: true,
+      imageModel: true,
+      categories: { select: { categoryId: true } },
+      nanoRef: { select: { referenceImages: true, stylePrompt: true } },
+    },
+  });
+  if (!b) return null;
+  // The PERSON prompt is looked up by name case-insensitively in the
+  // generation flow — mirror that here rather than relying on the brandId FK.
+  const prompt = await prisma.promptTemplate.findFirst({
+    where: { type: "PERSON", key: { equals: b.name, mode: "insensitive" } },
+    select: { content: true },
+  });
+  return {
+    name: b.name,
+    categoryIds: b.categories.map((c) => c.categoryId),
+    personPrompt: prompt?.content ?? "",
+    stylePrompt: b.nanoRef?.stylePrompt ?? "",
+    referenceImages: b.nanoRef?.referenceImages ?? [],
+    forcedAspectRatio: b.forcedAspectRatio,
+    imageModel: b.imageModel,
+    isActive: b.isActive,
+  };
+}
+
+export type AuditedUpdateResult =
+  | { ok: true; brand: { id: string; name: string }; changed: boolean }
+  | { ok: false; error: "brand_not_found" | "already_exists" | "update_failed" };
+
+/**
+ * updateBrand + a BrandChangeLog entry with before/after snapshots. No entry is
+ * written when nothing actually changed (a no-op save must not pollute the log
+ * nor become a rollback target).
+ */
+export async function updateBrandAudited(
+  brandId: string,
+  input: UpdateBrandInput,
+  actor: BrandActor,
+  action: "UPDATE" | "ROLLBACK" = "UPDATE",
+): Promise<AuditedUpdateResult> {
+  const before = await getBrandSnapshot(brandId);
+  if (!before) return { ok: false, error: "brand_not_found" };
+
+  const result = await updateBrand(brandId, input);
+  if (!result.ok) return result;
+
+  const after = await getBrandSnapshot(brandId);
+  const changed = after !== null && JSON.stringify(before) !== JSON.stringify(after);
+  if (changed) {
+    await prisma.brandChangeLog.create({
+      data: {
+        brandId,
+        brandName: after.name,
+        userId: actor.userId,
+        userEmail: actor.userEmail,
+        action,
+        before: before as object,
+        after: after as object,
+      },
+    });
+  }
+  return { ok: true, brand: result.brand, changed };
+}
+
+export type RollbackResult =
+  | { ok: true; brand: { id: string; name: string }; restored: BrandSnapshot }
+  | { ok: false; error: "brand_not_found" | "nothing_to_rollback" | "already_exists" | "update_failed" };
+
+/**
+ * Restore the `before` snapshot of the brand's latest change-log entry. The
+ * rollback itself is logged as a ROLLBACK entry, so it is repeatable and the
+ * trail stays complete.
+ */
+export async function rollbackBrand(brandId: string, actor: BrandActor): Promise<RollbackResult> {
+  const last = await prisma.brandChangeLog.findFirst({
+    where: { brandId },
+    orderBy: { createdAt: "desc" },
+    select: { before: true },
+  });
+  if (!last) return { ok: false, error: "nothing_to_rollback" };
+
+  const snap = last.before as unknown as BrandSnapshot;
+  const result = await updateBrandAudited(
+    brandId,
+    {
+      name: snap.name,
+      categoryIds: snap.categoryIds,
+      personPrompt: snap.personPrompt,
+      stylePrompt: snap.stylePrompt,
+      referenceImages: snap.referenceImages,
+      forcedAspectRatio: snap.forcedAspectRatio,
+      imageModel: snap.imageModel,
+      isActive: snap.isActive,
+    },
+    actor,
+    "ROLLBACK",
+  );
+  if (!result.ok) return result;
+  return { ok: true, brand: result.brand, restored: snap };
 }
 
 /** Keep only category IDs that actually exist. */
