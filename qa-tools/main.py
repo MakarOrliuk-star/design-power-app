@@ -7,13 +7,9 @@ from fastapi.middleware.cors import CORSMiddleware
 from bo_auditor import run_backoffice_stream, BackofficeAuditRequest
 from pydantic import BaseModel
 
-# 1. ИМПОРТ МОДУЛЕЙ
-try:
-    import single_report
-    import mass_report
-    import brands_audit
-except ImportError as e:
-    print(f"[WARNING] Ошибка импорта модуля: {e}")
+import single_report
+import mass_report
+import brands_audit
 
 # 2. ЗАГРУЖАЕМ ПЕРЕМЕННЫЕ ОКРУЖЕНИЯ
 load_dotenv()
@@ -104,10 +100,6 @@ def verify_token_live(request: TokenVerifyRequest):
         print(f"[PING ERROR] Ошибка связи с {host}: {e}")
         return TokenVerifyResponse(status="ERROR")
 
-# Подключение роутеров из других модулей:
-try:
-    app.include_router(single_report.router, prefix="/api/single-report")
-    app.include_router(mass_report.router, prefix="/api/mass-report")
-    app.include_router(brands_audit.router, prefix="/api/brands")
-except NameError:
-    pass # Игнорируем ошибку, если модули не загрузились из-за старого кода
+app.include_router(single_report.router, prefix="/api/single-report")
+app.include_router(mass_report.router, prefix="/api/mass-report")
+app.include_router(brands_audit.router, prefix="/api/brands")
