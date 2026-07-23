@@ -1,4 +1,5 @@
 import { calculatorCache } from "./calculator-cache.service.js";
+import { redis } from "../lib/redis.js"; // Добавлен импорт redis для хранения таймстампов
 import { 
   CURRENCY_DATA, FIAT_CURRENCIES, CRYPTO_CODES, STABLECOINS_HARDCODED,
   SECOND_CRM_OVERRIDES, THIRD_CRM_OVERRIDES, ALWAYS_FORCE_BLUE
@@ -33,6 +34,39 @@ export const calculatorService = {
       });
     } catch (e) {
       console.error("❌ Slack notification error:", e);
+    }
+  },
+
+  async checkAndRefreshRates(): Promise<void> {
+    const now = Math.floor(Date.now() / 1000);
+    const ONE_DAY = 24 * 60 * 60;
+
+    try {
+      const lastFiat = await redis.get("rate:last_fiat_api_fetch");
+      const lastFiatTime = lastFiat ? parseInt(lastFiat, 10) : 0;
+      
+      if (now - lastFiatTime >= ONE_DAY) {
+        console.log("🔄 Делаем плановый запрос к Fiat API...");
+        await this.fetchFiatRates();
+        await redis.set("rate:last_fiat_api_fetch", now.toString());
+      } else {
+        const remainingMin = Math.round((ONE_DAY - (now - lastFiatTime)) / 60);
+        console.log(`ℹ️ Fiat API актуален. Запрос пропущен. Следующий через: ${remainingMin} мин.`);
+      }
+
+      const lastCrypto = await redis.get("rate:last_crypto_api_fetch");
+      const lastCryptoTime = lastCrypto ? parseInt(lastCrypto, 10) : 0;
+
+      if (now - lastCryptoTime >= ONE_DAY) {
+        console.log("🔄 Делаем плановый запрос к Crypto API...");
+        await this.fetchCryptoRates(CRYPTO_CODES);
+        await redis.set("rate:last_crypto_api_fetch", now.toString());
+      } else {
+        const remainingMin = Math.round((ONE_DAY - (now - lastCryptoTime)) / 60);
+        console.log(`ℹ️ Crypto API актуален. Запрос пропущен. Следующий через: ${remainingMin} мин.`);
+      }
+    } catch (e) {
+      console.error("❌ Ошибка при проверке расписания курсов валют:", e);
     }
   },
 
@@ -87,7 +121,6 @@ export const calculatorService = {
         for (const code of cleanCodes) {
           const price = data[code]?.EUR;
           if (price && price > 0) {
-            // Сохраняем оригинальную математику ценности 1 EUR в отношении к крипте (1 / цена)
             await calculatorCache.setRate(code, 1 / price);
           } else {
             console.warn(`⚠️ No rate returned from CryptoCompare for ${code}`);
@@ -107,15 +140,7 @@ export const calculatorService = {
       throw new Error("Enter an amount in EUR.");
     }
 
-    const missingCrypto = [];
-    for (const c of CRYPTO_CODES) {
-      const rate = await calculatorCache.getRate(c);
-      if (CURRENCY_DATA[c] && rate === null) missingCrypto.push(c);
-    }
-    
-    if (missingCrypto.length > 0) {
-      await this.fetchCryptoRates(missingCrypto);
-    }
+  
 
     const realRates: Record<string, number> = {};
     for (const c of [...CRYPTO_CODES, ...FIAT_CURRENCIES]) {
