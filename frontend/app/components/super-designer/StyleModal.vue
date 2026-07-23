@@ -40,7 +40,6 @@ const isEditAny = computed(() => store.editAnyMode);
 const editableLoading = ref(false);
 const canRollback = ref(false);
 const rollingBack = ref(false);
-const draftImageModel = ref<string | null>(null);
 const draftIsActive = ref(true);
 /** Serialized last-saved state — the dirty check for unsaved-changes guards. */
 const savedState = ref("");
@@ -53,7 +52,6 @@ function currentPatch() {
     stylePrompt: draft.value.stylePrompt,
     referenceImages: draft.value.referenceImages.map((s) => s.trim()).filter(Boolean),
     forcedAspectRatio: draft.value.force916 ? "9:16" : null,
-    imageModel: draftImageModel.value,
     isActive: draftIsActive.value,
   };
 }
@@ -77,7 +75,6 @@ async function selectEditable(id: string) {
       referenceImages: padTo3(b.referenceImages),
       force916: b.forcedAspectRatio === "9:16",
     };
-    draftImageModel.value = b.imageModel;
     draftIsActive.value = b.isActive;
     canRollback.value = b.canRollback;
     brandId.value = id;
@@ -134,7 +131,6 @@ watch(
     formMsg.value = "";
     resetTest();
     canRollback.value = false;
-    draftImageModel.value = null;
     draftIsActive.value = true;
     savedState.value = "";
     if (store.editAnyMode) {
@@ -303,7 +299,6 @@ async function runTest() {
           aspectRatio: testAspect.value,
           personPrompt: draft.value.personPrompt,
           referenceImages: draft.value.referenceImages.map((s) => s.trim()).filter(Boolean),
-          imageModel: draftImageModel.value,
         })
       : await store.runTest(brandId.value, testPrompt.value.trim(), testAspect.value);
     testGenerationId.value = generationId;
@@ -455,25 +450,13 @@ onBeforeUnmount(() => {
               </label>
             </div>
 
-            <template v-if="isEditAny">
-              <label class="field">
-                <span class="field__label">Модель генерации</span>
-                <select v-model="draftImageModel" class="input">
-                  <option :value="null">По умолчанию (nano-banana-2)</option>
-                  <option v-for="m in store.models" :key="m.key" :value="m.key">
-                    {{ m.label }}
-                  </option>
-                </select>
+            <div v-if="isEditAny" class="field">
+              <span class="field__label">Статус</span>
+              <label class="check">
+                <input v-model="draftIsActive" type="checkbox" />
+                <span>Бренд активен (виден в пикере на Home)</span>
               </label>
-
-              <div class="field">
-                <span class="field__label">Статус</span>
-                <label class="check">
-                  <input v-model="draftIsActive" type="checkbox" />
-                  <span>Бренд активен (виден в пикере на Home)</span>
-                </label>
-              </div>
-            </template>
+            </div>
 
             <div class="field">
               <span class="field__label">Референсы (до 3)</span>
@@ -714,7 +697,10 @@ onBeforeUnmount(() => {
   display: flex;
   flex-direction: column;
   gap: 10px;
-  overflow: hidden;
+  /* edit-any mode adds fields (brand dropdown, status) — when the fixed frame
+     runs out of height the form scrolls instead of collapsing the fields. */
+  overflow-y: auto;
+  overflow-x: hidden;
 }
 /* edit-any mode before a brand is picked: the form waits for the dropdown */
 .form--off {
@@ -726,14 +712,15 @@ onBeforeUnmount(() => {
   flex-direction: column;
   gap: 6px;
 }
-/* the two prompt fields absorb the leftover height (no column scroll) */
+/* the two prompt fields absorb the leftover height, but never collapse below
+   label + a usable textarea (bug-edit.PNG: fields overlapped at min-height 0) */
 .field--grow {
   flex: 1 1 0;
-  min-height: 0;
+  min-height: 84px;
 }
 .field--grow .input--area {
   flex: 1;
-  min-height: 40px;
+  min-height: 52px;
   height: auto;
 }
 .field__label {

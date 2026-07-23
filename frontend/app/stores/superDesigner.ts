@@ -68,6 +68,9 @@ export interface EditableBrand {
   canRollback: boolean;
 }
 
+// imageModel is deliberately absent: the model override stays admin-only (the
+// «Модель генерации» select was dropped from the edit modal), so the PATCH
+// never touches it and the draft test always uses the brand's saved model.
 export interface EditablePatch {
   name: string;
   categoryIds: string[];
@@ -75,7 +78,6 @@ export interface EditablePatch {
   stylePrompt: string;
   referenceImages: string[];
   forcedAspectRatio: string | null;
-  imageModel: string | null;
   isActive: boolean;
 }
 
@@ -227,7 +229,6 @@ export const useSuperDesignerStore = defineStore("superDesigner", () => {
       aspectRatio: "1:1" | "9:16";
       personPrompt: string;
       referenceImages: string[];
-      imageModel: string | null;
     },
   ): Promise<{ batchId: string; generationId: string }> {
     return await useApi()<{ batchId: string; generationId: string }>(
