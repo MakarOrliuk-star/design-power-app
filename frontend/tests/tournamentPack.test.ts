@@ -122,6 +122,22 @@ describe("groupPackByElement — the Frame 110-1 subcategory level", () => {
     expect(groups.map((g) => g.title)).toEqual(["Tournament_1_Base", "Tournament_1_VIP"]);
   });
 
+  it("admin-set names already ending with the mode never get a doubled suffix", () => {
+    // Separate Base/VIP names (crm-bundle): tourElementName arrives mode-specific.
+    const base = gen({
+      tourElementName: "Tournament_1_BASE",
+      tourFileName: "Bonuskong_Tournament_1_BASE_1",
+      tourMode: "BASE",
+    });
+    const vip = gen({
+      tourElementName: "Tournament_1_VIP",
+      tourFileName: "Bonuskong_Tournament_1_VIP_1",
+      tourMode: "VIP",
+    });
+    const groups = groupPackByElement([base, vip]);
+    expect(groups.map((g) => g.title)).toEqual(["Tournament_1_BASE", "Tournament_1_VIP"]);
+  });
+
   it("skips rows without a fixed file name (never crashes the tab)", () => {
     expect(groupPackByElement([gen({ tourFileName: null })])).toEqual([]);
   });

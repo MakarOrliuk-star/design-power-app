@@ -39,6 +39,7 @@ tournamentAdminRouter.get("/config", async (_req: Request, res: Response) => {
           select: {
             id: true,
             name: true,
+            nameVip: true,
             order: true,
             isActive: true,
             referenceImages: true,
@@ -157,7 +158,21 @@ tournamentAdminRouter.delete("/categories/:id", async (req: Request, res: Respon
 const createElementSchema = z.object({
   categoryId: z.string().min(1),
   name: z.string().trim().min(1).max(120),
+  nameVip: z.string().trim().min(1).max(120).optional(),
 });
+
+/** VIP-name clash: another element of the category already uses it (as nameVip). */
+async function vipNameClash(
+  categoryId: string,
+  nameVip: string,
+  excludeId?: string,
+): Promise<boolean> {
+  const clash = await prisma.tournamentElement.findFirst({
+    where: { categoryId, nameVip, ...(excludeId ? { id: { not: excludeId } } : {}) },
+    select: { id: true },
+  });
+  return Boolean(clash);
+}
 
 tournamentAdminRouter.post("/elements", async (req: Request, res: Response) => {
   const parsed = createElementSchema.safeParse(req.body);
@@ -175,11 +190,17 @@ tournamentAdminRouter.post("/elements", async (req: Request, res: Response) => {
     res.status(404).json({ error: "category_not_found" });
     return;
   }
+  // hasModes categories carry a separate VIP name (required); fixed-mode ones never do.
+  if (category.hasModes && !parsed.data.nameVip) {
+    res.status(400).json({ error: "invalid_body", details: { nameVip: ["required"] } });
+    return;
+  }
+  const nameVip = category.hasModes ? (parsed.data.nameVip as string) : null;
   const clash = await prisma.tournamentElement.findUnique({
     where: { categoryId_name: { categoryId, name } },
     select: { id: true },
   });
-  if (clash) {
+  if (clash || (nameVip && (await vipNameClash(categoryId, nameVip)))) {
     res.status(409).json({ error: "already_exists" });
     return;
   }
@@ -195,6 +216,7 @@ tournamentAdminRouter.post("/elements", async (req: Request, res: Response) => {
     data: {
       categoryId,
       name,
+      nameVip,
       order: (last?.order ?? -1) + 1,
       prompts: {
         create: modesOf(category).map((mode) => ({
@@ -203,13 +225,14 @@ tournamentAdminRouter.post("/elements", async (req: Request, res: Response) => {
         })),
       },
     },
-    select: { id: true, name: true, order: true, isActive: true, referenceImages: true },
+    select: { id: true, name: true, nameVip: true, order: true, isActive: true, referenceImages: true },
   });
   res.status(201).json({ element });
 });
 
 const patchElementSchema = z.object({
   name: z.string().trim().min(1).max(120).optional(),
+  nameVip: z.string().trim().min(1).max(120).optional(),
   order: z.number().int().min(0).optional(),
   isActive: z.boolean().optional(),
   referenceImages: z.array(z.string().trim()).max(2).optional(), // provider refs
@@ -224,7 +247,7 @@ tournamentAdminRouter.patch("/elements/:id", async (req: Request, res: Response)
   }
   const existing = await prisma.tournamentElement.findUnique({
     where: { id },
-    select: { categoryId: true },
+    select: { categoryId: true, category: { select: { hasModes: true } } },
   });
   if (!existing) {
     res.status(404).json({ error: "not_found" });
@@ -241,15 +264,28 @@ tournamentAdminRouter.patch("/elements/:id", async (req: Request, res: Response)
       return;
     }
   }
+  if (parsed.data.nameVip) {
+    // VIP names exist only on hasModes categories; same clash rule as `name`.
+    if (!existing.category.hasModes) {
+      res.status(400).json({ error: "invalid_body", details: { nameVip: ["not_applicable"] } });
+      return;
+    }
+    if (await vipNameClash(existing.categoryId, parsed.data.nameVip, id)) {
+      res.status(409).json({ error: "already_exists" });
+      return;
+    }
+  }
 
   // Only write the keys the client actually sent (exactOptionalPropertyTypes).
   const data: {
     name?: string;
+    nameVip?: string;
     order?: number;
     isActive?: boolean;
     referenceImages?: string[];
   } = {};
   if (parsed.data.name !== undefined) data.name = parsed.data.name;
+  if (parsed.data.nameVip !== undefined) data.nameVip = parsed.data.nameVip;
   if (parsed.data.order !== undefined) data.order = parsed.data.order;
   if (parsed.data.isActive !== undefined) data.isActive = parsed.data.isActive;
   if (parsed.data.referenceImages !== undefined)
@@ -258,7 +294,7 @@ tournamentAdminRouter.patch("/elements/:id", async (req: Request, res: Response)
   const element = await prisma.tournamentElement.update({
     where: { id },
     data,
-    select: { id: true, name: true, order: true, isActive: true, referenceImages: true },
+    select: { id: true, name: true, nameVip: true, order: true, isActive: true, referenceImages: true },
   });
   res.json({ element });
 });

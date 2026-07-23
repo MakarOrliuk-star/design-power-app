@@ -420,7 +420,10 @@ model TournamentElement {
   id              String             @id @default(cuid())
   categoryId      String
   category        TournamentCategory @relation(fields: [categoryId], references: [id], onDelete: Cascade)
-  name            String // "Tournament_1", "Playson & Booongo"
+  name            String // BASE name (and the only name for fixed-mode categories), e.g. "Tournament_1_BASE"
+  // VIP display name for hasModes categories ("Tournament_1_VIP"); null falls
+  // back to `name` everywhere (generation, page, ZIP file names).
+  nameVip         String?
   order           Int                @default(0)
   isActive        Boolean            @default(true)
   // Provider category only: the 2 provider reference images (Cloudinary URLs)

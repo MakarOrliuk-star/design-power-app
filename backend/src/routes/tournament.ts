@@ -39,6 +39,7 @@ tournamentRouter.get("/config", async (req: Request, res: Response) => {
           select: {
             id: true,
             name: true,
+            nameVip: true,
             order: true,
             referenceImages: true,
             prompts: { select: { mode: true, content: true, updatedAt: true } },
