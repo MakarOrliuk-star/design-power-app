@@ -311,10 +311,34 @@ model Job {
   responseUrl       String?
   cloudinaryFolder  String?
   attempts          Int         @default(0)
+  // Draft brand-test overrides (TASK download-and-edit-style §2): unsaved
+  // personPrompt / imageModel values a super-designer is trying out before
+  // hitting «Сохранить». The person processor prefers these over the DB rows.
+  draftOverrides    Json?
   createdAt         DateTime    @default(now())
   updatedAt         DateTime    @updatedAt
 
   @@index([status, type])
+}
+
+/// Audit trail for brand edits made outside the admin panel (TASK
+/// download-and-edit-style §2): who changed which brand, full before/after
+/// snapshots and when. brandName/userEmail are denormalized so the log
+/// survives brand or user deletion. Rollback restores `before` of the latest
+/// entry and writes its own ROLLBACK entry.
+model BrandChangeLog {
+  id        String   @id @default(cuid())
+  brandId   String? // no FK — the log must outlive the brand
+  brandName String
+  userId    String?
+  userEmail String
+  action    String // UPDATE | ROLLBACK
+  before    Json
+  after     Json
+  createdAt DateTime @default(now())
+
+  @@index([brandId, createdAt])
+  @@index([createdAt])
 }
 
 // ============================================================

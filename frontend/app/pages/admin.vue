@@ -692,6 +692,88 @@ async function setComposeMode(t: AdminBundleType, a: AdminBundleTypeAsset, e: Ev
   }
 }
 
+// ---- Brand change log (TASK download-and-edit-style §2) ----
+// Every «Edit current style» save/rollback lands here: who, when, before → after.
+interface BrandLogEntry {
+  id: string;
+  brandId: string | null;
+  brandName: string;
+  userEmail: string;
+  action: string;
+  before: Record<string, unknown>;
+  after: Record<string, unknown>;
+  createdAt: string;
+}
+
+const brandLogs = ref<BrandLogEntry[]>([]);
+const brandLogsTotal = ref(0);
+const brandLogsHasMore = ref(false);
+const brandLogsFilter = ref(""); // brandId, "" = all
+const brandLogsLoading = ref(false);
+const LOGS_PAGE = 50;
+
+async function loadBrandLogs(reset = true) {
+  brandLogsLoading.value = true;
+  try {
+    const offset = reset ? 0 : brandLogs.value.length;
+    const res = await api<{ logs: BrandLogEntry[]; total: number; hasMore: boolean }>(
+      "/api/admin/brand-logs",
+      {
+        query: {
+          limit: LOGS_PAGE,
+          offset,
+          ...(brandLogsFilter.value ? { brandId: brandLogsFilter.value } : {}),
+        },
+      },
+    );
+    brandLogs.value = reset ? res.logs : [...brandLogs.value, ...res.logs];
+    brandLogsTotal.value = res.total;
+    brandLogsHasMore.value = res.hasMore;
+  } catch {
+    error.value = "Не удалось загрузить историю изменений брендов.";
+  } finally {
+    brandLogsLoading.value = false;
+  }
+}
+
+function fmtLogVal(v: unknown): string {
+  if (v === null || v === undefined || v === "") return "—";
+  if (Array.isArray(v)) return v.length ? v.join(", ") : "—";
+  if (typeof v === "boolean") return v ? "да" : "нет";
+  const s = String(v);
+  return s.length > 300 ? `${s.slice(0, 300)}…` : s;
+}
+
+const LOG_FIELD_LABELS: Record<string, string> = {
+  name: "Название",
+  categoryIds: "Категории",
+  personPrompt: "Промпт (PERSON)",
+  stylePrompt: "Стиль",
+  referenceImages: "Референсы",
+  forcedAspectRatio: "Формат",
+  imageModel: "Модель",
+  isActive: "Активен",
+};
+
+/** Only the fields whose value actually changed, ready for the table cell. */
+function logDiff(l: BrandLogEntry): { field: string; from: string; to: string }[] {
+  const keys = new Set([...Object.keys(l.before ?? {}), ...Object.keys(l.after ?? {})]);
+  const out: { field: string; from: string; to: string }[] = [];
+  for (const k of keys) {
+    if (JSON.stringify(l.before?.[k] ?? null) === JSON.stringify(l.after?.[k] ?? null)) continue;
+    out.push({
+      field: LOG_FIELD_LABELS[k] ?? k,
+      from: fmtLogVal(l.before?.[k]),
+      to: fmtLogVal(l.after?.[k]),
+    });
+  }
+  return out;
+}
+
+function fmtLogDate(iso: string): string {
+  return new Date(iso).toLocaleString("ru-RU");
+}
+
 onMounted(() => {
   // MANAGER only reaches the Tournaments section — the ADMIN-only loads would
   // just 403 on /api/admin, so they are skipped entirely.
@@ -700,6 +782,7 @@ onMounted(() => {
     void loadCatalog();
     void loadSmarticoBrands();
     void loadBundleTypes();
+    void loadBrandLogs();
   }
   void loadTournaments();
 });
@@ -940,6 +1023,56 @@ onMounted(() => {
         </div>
         <p v-if="!filteredBrands.length" class="muted">Ничего не найдено.</p>
       </div>
+    </section>
+
+    <!-- Brand change log (Edit current style audit trail) -->
+    <section v-if="auth.isAdmin" class="panel">
+      <h2>История изменений брендов</h2>
+      <p class="muted small">
+        Правки через «Edit current style» (супер-дизайнеры): кто, когда и что
+        поменял — до → после. Откаты тоже логируются.
+      </p>
+
+      <div class="log-filter">
+        <select v-model="brandLogsFilter" class="field__input" @change="loadBrandLogs()">
+          <option value="">Все бренды</option>
+          <option v-for="b in brands" :key="b.id" :value="b.id">{{ b.name }}</option>
+        </select>
+        <span class="muted small">Всего записей: {{ brandLogsTotal }}</span>
+      </div>
+
+      <table class="table">
+        <thead>
+          <tr><th>Когда</th><th>Кто</th><th>Бренд</th><th>Действие</th><th>Изменения (до → после)</th></tr>
+        </thead>
+        <tbody>
+          <tr v-for="l in brandLogs" :key="l.id">
+            <td class="log-when">{{ fmtLogDate(l.createdAt) }}</td>
+            <td>{{ l.userEmail }}</td>
+            <td>{{ l.brandName }}</td>
+            <td>{{ l.action === "ROLLBACK" ? "Откат" : "Правка" }}</td>
+            <td class="log-cell">
+              <div v-for="d in logDiff(l)" :key="d.field" class="log-diff">
+                <b>{{ d.field }}:</b>
+                <span class="log-old">{{ d.from }}</span> →
+                <span class="log-new">{{ d.to }}</span>
+              </div>
+              <span v-if="!logDiff(l).length" class="muted">—</span>
+            </td>
+          </tr>
+          <tr v-if="!brandLogs.length && !brandLogsLoading">
+            <td colspan="5" class="muted">Изменений пока нет.</td>
+          </tr>
+        </tbody>
+      </table>
+      <button
+        v-if="brandLogsHasMore"
+        class="btn-primary"
+        :disabled="brandLogsLoading"
+        @click="loadBrandLogs(false)"
+      >
+        {{ brandLogsLoading ? "Загрузка…" : "Показать ещё" }}
+      </button>
     </section>
 
     <!-- Item style prompts -->
@@ -1311,6 +1444,35 @@ select {
   border: 1px solid var(--color-border);
   border-radius: var(--radius-sm);
   background: var(--color-white);
+}
+
+/* ---- brand change log ---- */
+.log-filter {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin-bottom: 12px;
+}
+.log-filter select {
+  max-width: 320px;
+}
+.log-when {
+  white-space: nowrap;
+}
+.log-cell {
+  max-width: 560px;
+}
+.log-diff {
+  margin-bottom: 4px;
+  word-break: break-word;
+  font-size: 12.5px;
+}
+.log-old {
+  color: #c0392b;
+  text-decoration: line-through;
+}
+.log-new {
+  color: #1e8e3e;
 }
 
 /* ---- catalog management ---- */

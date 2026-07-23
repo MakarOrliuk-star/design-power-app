@@ -226,6 +226,14 @@ export async function createBrandTestBatch(p: {
   brandId: string;
   prompt: string;
   aspectRatio: string;
+  // Draft edit-modal values (TASK download-and-edit-style §2): test the UNSAVED
+  // state. referenceImages land on the Generation row as usual; personPrompt /
+  // imageModel ride on Job.draftOverrides for the person processor.
+  overrides?: {
+    personPrompt?: string;
+    imageModel?: string | null;
+    referenceImages?: string[];
+  };
 }): Promise<{ batchId: string; generationId: string }> {
   const brand = await prisma.brand.findUnique({
     where: { id: p.brandId },
@@ -239,8 +247,12 @@ export async function createBrandTestBatch(p: {
   if (!brand) throw new Error("brand_not_found");
 
   const aspect = brand.forcedAspectRatio || p.aspectRatio;
-  const refs = brand.nanoRef?.referenceImages ?? [];
+  const refs = p.overrides?.referenceImages ?? brand.nanoRef?.referenceImages ?? [];
   const imageUrls = refs.length > 0 ? [refs[0]!] : [];
+
+  const draftOverrides: { personPrompt?: string; imageModel?: string | null } = {};
+  if (p.overrides?.personPrompt !== undefined) draftOverrides.personPrompt = p.overrides.personPrompt;
+  if (p.overrides && "imageModel" in p.overrides) draftOverrides.imageModel = p.overrides.imageModel ?? null;
 
   const batch = await prisma.batch.create({
     data: {
@@ -269,6 +281,7 @@ export async function createBrandTestBatch(p: {
           status: "QUEUED",
           batchId: batch.id,
           cloudinaryFolder: folderFor(brand.name),
+          ...(Object.keys(draftOverrides).length ? { draftOverrides } : {}),
         },
       },
     },

@@ -317,6 +317,45 @@ adminRouter.post("/upload", async (req: Request, res: Response) => {
 });
 
 // ============================================================
+// Brand change log (TASK download-and-edit-style §2): who edited which brand,
+// full before/after snapshots — written by the super-designer edit surface.
+// ============================================================
+const brandLogsSchema = z.object({
+  brandId: z.string().optional(),
+  limit: z.coerce.number().int().min(1).max(200).default(50),
+  offset: z.coerce.number().int().min(0).default(0),
+});
+adminRouter.get("/brand-logs", async (req: Request, res: Response) => {
+  const parsed = brandLogsSchema.safeParse(req.query);
+  if (!parsed.success) {
+    res.status(400).json({ error: "invalid_query" });
+    return;
+  }
+  const { brandId, limit, offset } = parsed.data;
+  const where = brandId ? { brandId } : {};
+  const [logs, total] = await Promise.all([
+    prisma.brandChangeLog.findMany({
+      where,
+      orderBy: { createdAt: "desc" },
+      take: limit,
+      skip: offset,
+      select: {
+        id: true,
+        brandId: true,
+        brandName: true,
+        userEmail: true,
+        action: true,
+        before: true,
+        after: true,
+        createdAt: true,
+      },
+    }),
+    prisma.brandChangeLog.count({ where }),
+  ]);
+  res.json({ logs, total, hasMore: offset + logs.length < total });
+});
+
+// ============================================================
 // Smartico brands (Unique-Image-Smartico maintenance)
 // Canonical brand_id list used to normalize ZIP folder names. CRUD for the CRM
 // service; seeded from the legacy SMARTICO_BRANDS list.

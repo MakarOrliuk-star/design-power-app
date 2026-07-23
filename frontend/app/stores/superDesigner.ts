@@ -40,6 +40,45 @@ export interface BrandDraft {
   force916: boolean;
 }
 
+// ---- «Edit current style» (TASK download-and-edit-style §2) ----
+// Any-brand editing, audited on the backend (BrandChangeLog + rollback).
+
+export interface EditableBrandListItem {
+  id: string;
+  name: string;
+  isActive: boolean;
+}
+
+export interface ModelOption {
+  key: string;
+  label: string;
+}
+
+/** Full editable state of a brand, as served by GET /editable/:id. */
+export interface EditableBrand {
+  id: string;
+  name: string;
+  categoryIds: string[];
+  personPrompt: string;
+  stylePrompt: string;
+  referenceImages: string[];
+  forcedAspectRatio: string | null;
+  imageModel: string | null;
+  isActive: boolean;
+  canRollback: boolean;
+}
+
+export interface EditablePatch {
+  name: string;
+  categoryIds: string[];
+  personPrompt: string;
+  stylePrompt: string;
+  referenceImages: string[];
+  forcedAspectRatio: string | null;
+  imageModel: string | null;
+  isActive: boolean;
+}
+
 interface BatchStatusLite {
   isComplete: boolean;
   generations: {
@@ -55,18 +94,28 @@ export const useSuperDesignerStore = defineStore("superDesigner", () => {
   const modalOpen = ref(false);
   /** Brand being edited; null → create mode. */
   const editing = ref<MyBrand | null>(null);
+  /** «Edit current style»: any-brand edit mode (dropdown inside the modal). */
+  const editAnyMode = ref(false);
 
   function openCreate() {
     editing.value = null;
+    editAnyMode.value = false;
     modalOpen.value = true;
   }
   function openEdit(brand: MyBrand) {
     editing.value = brand;
+    editAnyMode.value = false;
+    modalOpen.value = true;
+  }
+  function openEditCurrent() {
+    editing.value = null;
+    editAnyMode.value = true;
     modalOpen.value = true;
   }
   function close() {
     modalOpen.value = false;
     editing.value = null;
+    editAnyMode.value = false;
   }
 
   // ---- Library data ----
@@ -137,6 +186,56 @@ export const useSuperDesignerStore = defineStore("superDesigner", () => {
     return res.secure_url;
   }
 
+  // ---- «Edit current style»: any-brand editing (audited on the backend) ----
+  const editableBrands = ref<EditableBrandListItem[]>([]);
+  const models = ref<ModelOption[]>([]);
+
+  async function loadEditable(): Promise<void> {
+    const res = await useApi()<{
+      brands: EditableBrandListItem[];
+      categories: BrandCategoryOption[];
+      models: ModelOption[];
+    }>("/api/my-brands/editable");
+    editableBrands.value = res.brands;
+    categories.value = res.categories;
+    models.value = res.models;
+  }
+
+  async function loadEditableBrand(id: string): Promise<EditableBrand> {
+    return await useApi()<EditableBrand>(`/api/my-brands/editable/${id}`);
+  }
+
+  /** «Сохранить»: applies GLOBALLY for every user; logged with before/after. */
+  async function updateEditable(id: string, patch: EditablePatch): Promise<EditableBrand | null> {
+    const res = await useApi()<{ snapshot: Omit<EditableBrand, "id" | "canRollback"> | null }>(
+      `/api/my-brands/editable/${id}`,
+      { method: "PATCH", body: patch },
+    );
+    return res.snapshot ? { ...res.snapshot, id, canRollback: true } : null;
+  }
+
+  /** «Вернуть предыдущую версию»: restore the latest change-log `before`. */
+  async function rollbackEditable(id: string): Promise<void> {
+    await useApi()(`/api/my-brands/editable/${id}/rollback`, { method: "POST" });
+  }
+
+  /** Test the DRAFT (unsaved) state — nothing is written to the brand. */
+  async function runDraftTest(
+    id: string,
+    body: {
+      prompt: string;
+      aspectRatio: "1:1" | "9:16";
+      personPrompt: string;
+      referenceImages: string[];
+      imageModel: string | null;
+    },
+  ): Promise<{ batchId: string; generationId: string }> {
+    return await useApi()<{ batchId: string; generationId: string }>(
+      `/api/my-brands/editable/${id}/test`,
+      { method: "POST", body },
+    );
+  }
+
   // ---- «Протестировать бренд» ----
   async function runTest(
     brandId: string,
@@ -167,9 +266,18 @@ export const useSuperDesignerStore = defineStore("superDesigner", () => {
   return {
     modalOpen,
     editing,
+    editAnyMode,
     openCreate,
     openEdit,
+    openEditCurrent,
     close,
+    editableBrands,
+    models,
+    loadEditable,
+    loadEditableBrand,
+    updateEditable,
+    rollbackEditable,
+    runDraftTest,
     brands,
     categories,
     loading,
