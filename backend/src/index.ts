@@ -26,6 +26,7 @@ import { auditorRouter } from "./routes/auditor.js";
 import { crmRouter } from "./routes/crm.js";
 import { smarticoRouter } from "./routes/smartico.js";
 import { startSmarticoWorker, stopSmarticoWorker } from "./queues/smartico.worker.js";
+import { qatoolsRouter } from "./routes/qatools.js";
 
 import { calculatorService } from "./services/calculator.service.js";
 import { CRYPTO_CODES } from "./config/calculator.config.js";
@@ -55,6 +56,7 @@ app.use("/api/catalog", loadUser, requireAuth, requireZone("DESIGNER"), catalogR
 app.use("/api/calculator", loadUser, requireAuth, requireZone("CRM"), calculatorRouter);
 app.use("/api/auditor", loadUser, requireAuth, requireZone("CRM"), auditorRouter);
 app.use("/api/smartico", loadUser, requireAuth, requireZone("CRM"), smarticoRouter);
+app.use("/api/qa-tools", loadUser, requireAuth, requireZone("CRM"), qatoolsRouter);
 app.use("/api/crm", loadUser, requireAuth, requireZone("CRM"), crmRouter);
 // Image Bundles (TASK crm-bundle): CRM_SUPER / ADMIN / MANAGER only (D4).
 app.use("/api/bundles", loadUser, requireAuth, requireCrmSuper, bundlesRouter);

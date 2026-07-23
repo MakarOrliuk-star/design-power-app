@@ -4,14 +4,14 @@ import type { Request, Response } from "express";
 export const qatoolsRouter: Router = Router();
 
 // Адрес запущенного локально (или в Railway) Python-воркера
-const PYTHON_API_URL = process.env.PYTHON_API_URL || "http://127.0.0.1:8000";
+const QA_TOOLS_URL = process.env.QA_TOOLS_URL || "http://127.0.0.1:8000";
 
 /**
  * Хелпер 1: Проксирование обычных JSON-запросов (Модуль Brands)
  */
 async function proxyJson(req: Request, res: Response, pythonPath: string) {
   try {
-    const response = await fetch(`${PYTHON_API_URL}${pythonPath}`, {
+    const response = await fetch(`${QA_TOOLS_URL}${pythonPath}`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(req.body),
@@ -29,8 +29,13 @@ async function proxyJson(req: Request, res: Response, pythonPath: string) {
  * Хелпер 2: Проксирование потокового вещания SSE (Модули Аудита)
  */
 async function proxyStream(req: Request, res: Response, pythonPath: string) {
+  // Сразу устанавливаем заголовки потока
+  res.setHeader("Content-Type", "text/event-stream");
+  res.setHeader("Cache-Control", "no-cache");
+  res.setHeader("Connection", "keep-alive");
+
   try {
-    const response = await fetch(`${PYTHON_API_URL}${pythonPath}`, {
+    const response = await fetch(`${QA_TOOLS_URL}${pythonPath}`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(req.body),
@@ -38,14 +43,10 @@ async function proxyStream(req: Request, res: Response, pythonPath: string) {
 
     if (!response.ok || !response.body) {
       const err = await response.text();
-      res.status(response.status).json({ error: err || "Ошибка Python-сервиса" });
-      return;
+      // Отправляем ошибку в формате SSE, чтобы Vue мог ее распарсить
+      res.write(`data: ${JSON.stringify({ type: "error", msg: err || "Ошибка Python-сервиса" })}\n\n`);
+      return res.end();
     }
-
-    // Настраиваем Express для трансляции потока браузеру
-    res.setHeader("Content-Type", "text/event-stream");
-    res.setHeader("Cache-Control", "no-cache");
-    res.setHeader("Connection", "keep-alive");
 
     const reader = response.body.getReader();
     const decoder = new TextDecoder();
@@ -57,9 +58,10 @@ async function proxyStream(req: Request, res: Response, pythonPath: string) {
     }
     
     res.end();
-  } catch (error) {
+  } catch (error: any) {
     console.error(`[Proxy Stream Error] ${pythonPath}:`, error);
-    res.status(500).json({ error: "Внутренняя ошибка трансляции потока" });
+    res.write(`data: ${JSON.stringify({ type: "error", msg: error.message || "Внутренняя ошибка трансляции потока" })}\n\n`);
+    res.end();
   }
 }
 
