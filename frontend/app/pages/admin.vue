@@ -408,6 +408,7 @@ interface TourPrompt {
 interface TourElement {
   id: string;
   name: string;
+  nameVip: string | null;
   order: number;
   isActive: boolean;
   referenceImages: string[];
@@ -426,7 +427,8 @@ interface TourCategory {
 const tourCategories = ref<TourCategory[]>([]);
 const tourSystemPrompt = ref("");
 const tourMsg = ref<Record<string, string>>({}); // element id | "system" | category id
-const newElementName = ref<Record<string, string>>({}); // per category id
+const newElementName = ref<Record<string, string>>({}); // per category id (Base name)
+const newElementNameVip = ref<Record<string, string>>({}); // per category id (VIP name, hasModes only)
 
 function padTo2(arr: string[]): string[] {
   const a = [...arr];
@@ -515,13 +517,19 @@ async function deleteTourCategory(cat: TourCategory) {
 async function addTourElement(cat: TourCategory) {
   const name = (newElementName.value[cat.id] ?? "").trim();
   if (!name) return;
+  const nameVip = (newElementNameVip.value[cat.id] ?? "").trim();
+  if (cat.hasModes && !nameVip) {
+    tourMsg.value[cat.id] = "Укажите название для VIP.";
+    return;
+  }
   tourMsg.value[cat.id] = "";
   try {
     await api("/api/tournament-admin/elements", {
       method: "POST",
-      body: { categoryId: cat.id, name },
+      body: { categoryId: cat.id, name, ...(cat.hasModes ? { nameVip } : {}) },
     });
     newElementName.value[cat.id] = "";
+    newElementNameVip.value[cat.id] = "";
     tourMsg.value[cat.id] = "Элемент добавлен ✓";
     await loadTournaments();
   } catch (e: unknown) {
@@ -544,11 +552,18 @@ async function saveTourPrompt(el: TourElement, p: TourPrompt) {
   }
 }
 
-/** Save the element's name (+ provider refs) — the card's Сохранить button. */
+/** Save the element's names (+ provider refs) — the card's Сохранить button. */
 async function saveTourElement(cat: TourCategory, el: TourElement) {
   tourMsg.value[el.id] = "";
+  if (cat.hasModes && !(el.nameVip ?? "").trim()) {
+    tourMsg.value[el.id] = "Укажите название для VIP.";
+    return;
+  }
   try {
-    const body: { name: string; referenceImages?: string[] } = { name: el.name.trim() };
+    const body: { name: string; nameVip?: string; referenceImages?: string[] } = {
+      name: el.name.trim(),
+    };
+    if (cat.hasModes) body.nameVip = (el.nameVip ?? "").trim();
     if (cat.key === "provider")
       body.referenceImages = el.referenceImages.map((s) => s.trim()).filter(Boolean);
     await api(`/api/tournament-admin/elements/${el.id}`, { method: "PATCH", body });
@@ -1180,7 +1195,19 @@ onMounted(() => {
           <input
             v-model="newElementName[cat.id]"
             type="text"
-            :placeholder="cat.key === 'provider' ? 'Новый провайдер…' : 'Новый элемент…'"
+            :placeholder="
+              cat.hasModes
+                ? 'Название для Base…'
+                : cat.key === 'provider'
+                  ? 'Новый провайдер…'
+                  : 'Новый элемент…'
+            "
+          />
+          <input
+            v-if="cat.hasModes"
+            v-model="newElementNameVip[cat.id]"
+            type="text"
+            placeholder="Название для VIP…"
           />
           <button type="submit" class="btn-primary">Добавить</button>
         </form>
@@ -1192,7 +1219,22 @@ onMounted(() => {
             :class="['brand-card', { 'tour-el--off': !el.isActive }]"
           >
             <div class="brand-card__head">
-              <input v-model="el.name" class="field__input tour-el__name" type="text" />
+              <template v-if="cat.hasModes">
+                <label class="tour-el__namefield">
+                  <span class="badge badge--ok">Base</span>
+                  <input v-model="el.name" class="field__input tour-el__name" type="text" />
+                </label>
+                <label class="tour-el__namefield">
+                  <span class="badge badge--warn">VIP</span>
+                  <input
+                    v-model="el.nameVip"
+                    class="field__input tour-el__name"
+                    type="text"
+                    placeholder="Название для VIP"
+                  />
+                </label>
+              </template>
+              <input v-else v-model="el.name" class="field__input tour-el__name" type="text" />
               <span v-if="!el.isActive" class="badge badge--warn">выключен</span>
               <span v-if="tourMsg[el.id]" class="brand-card__msg">{{ tourMsg[el.id] }}</span>
             </div>
@@ -1731,6 +1773,11 @@ select {
 .tour-el__name {
   max-width: 320px;
   font-weight: 600;
+}
+.tour-el__namefield {
+  display: flex;
+  align-items: center;
+  gap: 6px;
 }
 .refs--two {
   grid-template-columns: repeat(2, minmax(0, 220px));
