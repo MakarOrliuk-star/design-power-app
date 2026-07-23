@@ -109,7 +109,8 @@ describe("GET /api/tournament/config", () => {
         elements: [
           {
             id: "e1",
-            name: "Tournament_1",
+            name: "Tournament_1_Base",
+            nameVip: "Tournament_1_VIP",
             order: 0,
             referenceImages: [],
             prompts: [
@@ -131,6 +132,10 @@ describe("GET /api/tournament/config", () => {
 
     expect(res.status).toBe(200);
     const el = res.body.categories[0].elements[0];
+    // Both mode names must survive the response mapping — the page's Base/VIP
+    // toggle relies on nameVip (the bug fixed here: the DTO dropped it).
+    expect(el.name).toBe("Tournament_1_Base");
+    expect(el.nameVip).toBe("Tournament_1_VIP");
     expect(el.prompts.BASE.content).toBe("default base");
     expect(el.overrides.BASE).toEqual({ content: "mine base", defaultChanged: true });
     expect(el.overrides.VIP).toEqual({ content: "mine vip", defaultChanged: false });
