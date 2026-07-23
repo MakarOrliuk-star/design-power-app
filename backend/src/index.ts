@@ -16,9 +16,11 @@ import {
   requireAdmin,
   requireAdminOrManager,
   requireAuth,
+  requireCrmSuper,
   requireSuperDesigner,
   requireZone,
 } from "./middleware/auth.js";
+import { bundlesRouter } from "./routes/bundles.js";
 import { calculatorRouter } from "./routes/calculator.js";
 import { auditorRouter } from "./routes/auditor.js";
 import { crmRouter } from "./routes/crm.js";
@@ -53,6 +55,8 @@ app.use("/api/calculator", loadUser, requireAuth, requireZone("CRM"), calculator
 app.use("/api/auditor", loadUser, requireAuth, requireZone("CRM"), auditorRouter);
 app.use("/api/smartico", loadUser, requireAuth, requireZone("CRM"), smarticoRouter);
 app.use("/api/crm", loadUser, requireAuth, requireZone("CRM"), crmRouter);
+// Image Bundles (TASK crm-bundle): CRM_SUPER / ADMIN / MANAGER only (D4).
+app.use("/api/bundles", loadUser, requireAuth, requireCrmSuper, bundlesRouter);
 app.use("/api/tournament-admin", loadUser, requireAuth, requireAdminOrManager, tournamentAdminRouter);
 app.use("/api/tournament", loadUser, requireAuth, requireZone("DESIGNER"), tournamentRouter);
 // Super-designer surface (own-brand CRUD + brand test runs).

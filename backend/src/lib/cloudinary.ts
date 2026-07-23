@@ -29,11 +29,18 @@ function sign(params: Record<string, string | number>): string {
 }
 
 /** `file` is either a base64 data URI or a remote URL Cloudinary fetches itself. */
-async function upload(file: string, fileName: string, folder: string): Promise<CloudinaryResult> {
+async function upload(
+  file: string,
+  fileName: string,
+  folder: string,
+  transformation?: string,
+): Promise<CloudinaryResult> {
   try {
     const timestamp = Math.round(Date.now() / 1000);
     const publicId = fileName.replace(/\.[^/.]+$/, "");
-    const signature = sign({ folder, public_id: publicId, timestamp });
+    const signParams: Record<string, string | number> = { folder, public_id: publicId, timestamp };
+    if (transformation) signParams.transformation = transformation;
+    const signature = sign(signParams);
 
     const body = new URLSearchParams({
       file,
@@ -42,6 +49,7 @@ async function upload(file: string, fileName: string, folder: string): Promise<C
       folder,
       public_id: publicId,
       signature,
+      ...(transformation ? { transformation } : {}),
     });
 
     const res = await fetch(UPLOAD_URL(), {
@@ -76,6 +84,46 @@ export function uploadFromUrl(
   folder: string,
 ): Promise<CloudinaryResult> {
   return upload(imageUrl, fileName, folder);
+}
+
+/**
+ * Upload with a signed INCOMING transformation (applied by Cloudinary before
+ * storing — the stored asset already has the target pixels). Used by the
+ * bundle pipeline to cut the exact mask canvas out of a bleed-expanded image
+ * (`c_crop,g_center`) or to resize a same-aspect render (`c_fill`).
+ */
+export function uploadFromUrlTransformed(
+  imageUrl: string,
+  fileName: string,
+  folder: string,
+  transformation: string,
+): Promise<CloudinaryResult> {
+  return upload(imageUrl, fileName, folder, transformation);
+}
+
+export interface ComposeLayer {
+  publicId: string; // transparent cutout asset
+  w: number; // fit-box width, px
+  h: number; // fit-box height, px
+  gravity: string; // e.g. "west", "south_east"
+  x: number; // offset from the gravity corner, px
+  y: number;
+}
+
+/**
+ * Deterministic layer compositor (Image Bundles layered mode, D10 v2): builds
+ * a Cloudinary delivery URL that places transparent cutouts (`c_fit` inside
+ * their zone boxes) over a base background — the composed result is then
+ * re-uploaded as the final asset. Pure URL math, zero AI calls; the zones are
+ * enforced by pixels, not by the prompt.
+ */
+export function composeLayersUrl(basePublicId: string, layers: ComposeLayer[]): string {
+  const segments = layers.map(
+    (l) =>
+      `l_${l.publicId.replaceAll("/", ":")},c_fit,w_${l.w},h_${l.h}/fl_layer_apply,g_${l.gravity},x_${l.x},y_${l.y}`,
+  );
+  const chain = segments.length ? `${segments.join("/")}/` : "";
+  return `https://res.cloudinary.com/${env.CLOUDINARY_CLOUD_NAME}/image/upload/${chain}${basePublicId}.png`;
 }
 
 /**

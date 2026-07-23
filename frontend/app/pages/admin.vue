@@ -13,7 +13,7 @@ interface AdminUser {
   id: string;
   email: string;
   name: string | null;
-  role: "ADMIN" | "DESIGNER" | "CRM" | "MANAGER" | "SUPER_DESIGNER";
+  role: "ADMIN" | "DESIGNER" | "CRM" | "MANAGER" | "SUPER_DESIGNER" | "CRM_SUPER";
   isActive: boolean;
   lastLoginAt: string | null;
 }
@@ -618,6 +618,80 @@ async function saveTourSystemPrompt() {
   }
 }
 
+// ---- Image Bundles: шаблоны типов (TASK crm-bundle, D13) ----
+// Фон-шаблон подаётся генерации ПЕРВЫМ референсом — модель копирует его
+// композиционные зоны. Хранится в BundleType.assets[].templateUrl.
+interface AdminBundleTypeAsset {
+  key: string;
+  label: string;
+  width: number;
+  height: number;
+  templateUrl?: string;
+  zones?: Record<string, { x: number; y: number; w: number; h: number }>;
+  composeMode?: "ai" | "layered";
+}
+interface AdminBundleType {
+  id: string;
+  key: string;
+  title: string;
+  description: string | null;
+  isActive: boolean;
+  assets: AdminBundleTypeAsset[];
+}
+
+const bundleTypes = ref<AdminBundleType[]>([]);
+const btMsg = ref<Record<string, string>>({});
+
+async function loadBundleTypes() {
+  try {
+    const res = await api<{ bundleTypes: AdminBundleType[] }>("/api/admin/bundle-types");
+    bundleTypes.value = res.bundleTypes;
+  } catch {
+    error.value = "Не удалось загрузить типы бандлов.";
+  }
+}
+
+async function saveBundleTypeAssets(t: AdminBundleType) {
+  await api(`/api/admin/bundle-types/${t.id}`, { method: "PATCH", body: { assets: t.assets } });
+}
+
+async function uploadBundleTemplate(t: AdminBundleType, a: AdminBundleTypeAsset, e: Event) {
+  const input = e.target as HTMLInputElement;
+  const file = input.files?.[0];
+  input.value = "";
+  if (!file) return;
+  btMsg.value[t.id] = `Загрузка шаблона ${a.label}…`;
+  try {
+    const dataUrl = await fileToDataUrl(file);
+    const res = await api<{ secure_url: string }>("/api/admin/upload", { method: "POST", body: { dataUrl } });
+    a.templateUrl = res.secure_url;
+    await saveBundleTypeAssets(t);
+    btMsg.value[t.id] = `Шаблон ${a.label} сохранён ✓ — применится при следующей генерации`;
+  } catch {
+    btMsg.value[t.id] = `Ошибка загрузки шаблона ${a.label}`;
+  }
+}
+
+async function removeBundleTemplate(t: AdminBundleType, a: AdminBundleTypeAsset) {
+  delete a.templateUrl;
+  try {
+    await saveBundleTypeAssets(t);
+    btMsg.value[t.id] = `Шаблон ${a.label} убран ✓`;
+  } catch {
+    btMsg.value[t.id] = "Ошибка сохранения";
+  }
+}
+
+async function setComposeMode(t: AdminBundleType, a: AdminBundleTypeAsset, e: Event) {
+  a.composeMode = (e.target as HTMLSelectElement).value as "ai" | "layered";
+  try {
+    await saveBundleTypeAssets(t);
+    btMsg.value[t.id] = `Режим сборки ${a.label}: ${a.composeMode} ✓`;
+  } catch {
+    btMsg.value[t.id] = "Ошибка сохранения";
+  }
+}
+
 onMounted(() => {
   // MANAGER only reaches the Tournaments section — the ADMIN-only loads would
   // just 403 on /api/admin, so they are skipped entirely.
@@ -625,6 +699,7 @@ onMounted(() => {
     void load();
     void loadCatalog();
     void loadSmarticoBrands();
+    void loadBundleTypes();
   }
   void loadTournaments();
 });
@@ -675,11 +750,12 @@ onMounted(() => {
               <select
                 :value="u.role"
                 :disabled="u.id === auth.user?.id"
-                @change="patchUser(u, { role: ($event.target as HTMLSelectElement).value as 'ADMIN' | 'DESIGNER' | 'CRM' | 'MANAGER' | 'SUPER_DESIGNER' })"
+                @change="patchUser(u, { role: ($event.target as HTMLSelectElement).value as 'ADMIN' | 'DESIGNER' | 'CRM' | 'MANAGER' | 'SUPER_DESIGNER' | 'CRM_SUPER' })"
               >
                 <option value="DESIGNER">DESIGNER</option>
                 <option value="SUPER_DESIGNER">SUPER_DESIGNER</option>
                 <option value="CRM">CRM</option>
+                <option value="CRM_SUPER">CRM_SUPER</option>
                 <option value="MANAGER">MANAGER</option>
                 <option value="ADMIN">ADMIN</option>
               </select>
@@ -1096,6 +1172,50 @@ onMounted(() => {
         </tbody>
       </table>
     </section>
+
+    <section v-if="auth.isAdmin" class="panel">
+      <h2>Image Bundles — шаблоны типов</h2>
+      <p class="muted">
+        Фон-шаблон подаётся генерации первым референсом: модель копирует его композицию
+        (email — персонаж справа, объекты слева, центр пустой под текст). Загружайте чистые
+        макеты <b>без текста и логотипов</b> — надписи с шаблона просочатся в креативы.
+      </p>
+      <div v-for="t in bundleTypes" :key="t.id" class="bt">
+        <h3 class="bt__title">{{ t.title }} <span class="muted">({{ t.key }})</span></h3>
+        <div class="bt__grid">
+          <div v-for="a in t.assets" :key="a.key" class="bt__asset">
+            <div class="bt__head">
+              <b>{{ a.label }}</b>
+              <span class="muted">{{ a.width }}×{{ a.height }}</span>
+            </div>
+            <div class="bt__preview" :style="{ aspectRatio: `${a.width} / ${a.height}` }">
+              <img v-if="a.templateUrl" :src="a.templateUrl" :alt="`Шаблон ${a.label}`" />
+              <span v-else class="muted">нет шаблона — генерация по промпту</span>
+            </div>
+            <div class="bt__actions">
+              <label class="ref__upload">
+                Загрузить
+                <input type="file" accept="image/*" hidden @change="(e) => uploadBundleTemplate(t, a, e)" />
+              </label>
+              <button v-if="a.templateUrl" class="btn-toggle" @click="removeBundleTemplate(t, a)">
+                Убрать
+              </button>
+              <select
+                class="bt__mode"
+                :value="a.composeMode ?? 'ai'"
+                title="layered — фон-слой + вырезки person/item по секциям (пиксельная гарантия зон); ai — одна генерация с промпт-раскладкой"
+                @change="(e) => setComposeMode(t, a, e)"
+              >
+                <option value="ai">AI-сборка</option>
+                <option value="layered">Слои (layered)</option>
+              </select>
+            </div>
+          </div>
+        </div>
+        <p v-if="btMsg[t.id]" class="muted">{{ btMsg[t.id] }}</p>
+      </div>
+      <p v-if="!bundleTypes.length" class="muted">Типы бандлов не найдены (нужен сид).</p>
+    </section>
   </div>
 </template>
 
@@ -1466,5 +1586,69 @@ select {
   padding: 4px 12px;
   font-size: 12px;
   margin-left: auto;
+}
+
+/* Image Bundles — шаблоны типов (D13) */
+.bt {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  margin-top: 8px;
+}
+.bt__title {
+  margin: 0;
+  font-size: 15px;
+}
+.bt__grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(260px, 1fr));
+  gap: 14px;
+}
+.bt__asset {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md);
+  padding: 12px;
+}
+.bt__head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 8px;
+  font-size: 13px;
+}
+.bt__preview {
+  display: grid;
+  place-items: center;
+  background: var(--color-segment);
+  border-radius: var(--radius-sm);
+  overflow: hidden;
+  font-size: 11px;
+  text-align: center;
+  padding: 2px;
+}
+.bt__preview img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  display: block;
+  border-radius: var(--radius-xs);
+}
+.bt__actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+.bt__mode {
+  margin-left: auto;
+  font-size: 12px;
+  padding: 4px 6px;
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-sm);
+  background: var(--color-white);
+  color: var(--color-text);
 }
 </style>

@@ -5,7 +5,7 @@ export interface AuthUser {
   email: string;
   name?: string | null;
   avatarUrl?: string | null;
-  role: "ADMIN" | "DESIGNER" | "CRM" | "MANAGER" | "SUPER_DESIGNER";
+  role: "ADMIN" | "DESIGNER" | "CRM" | "MANAGER" | "SUPER_DESIGNER" | "CRM_SUPER";
 }
 
 /**
@@ -37,9 +37,22 @@ export const useAuthStore = defineStore("auth", () => {
       user.value?.role === "SUPER_DESIGNER",
   );
   const canCrm = computed(
-    () => user.value?.role === "ADMIN" || user.value?.role === "MANAGER" || user.value?.role === "CRM",
+    () =>
+      user.value?.role === "ADMIN" ||
+      user.value?.role === "MANAGER" ||
+      user.value?.role === "CRM" ||
+      user.value?.role === "CRM_SUPER",
   );
   const isSuperDesigner = computed(() => user.value?.role === "SUPER_DESIGNER");
+  const isCrmSuper = computed(() => user.value?.role === "CRM_SUPER");
+  // Image Bundles service (TASK crm-bundle, D4): CRM_SUPER plus ADMIN/MANAGER —
+  // mirrors the backend requireCrmSuper guard. Plain CRM users never see it.
+  const canBundles = computed(
+    () =>
+      user.value?.role === "CRM_SUPER" ||
+      user.value?.role === "ADMIN" ||
+      user.value?.role === "MANAGER",
+  );
   // The Create a New Style / Library surface (TASK super-designer): visible to
   // SUPER_DESIGNER plus ADMIN/MANAGER (Phase 0 decision) — mirrors the backend
   // requireSuperDesigner guard.
@@ -78,6 +91,8 @@ export const useAuthStore = defineStore("auth", () => {
     isDesigner,
     isManager,
     isSuperDesigner,
+    isCrmSuper,
+    canBundles,
     canCreateStyles,
     canAdminPanel,
     canDesign,

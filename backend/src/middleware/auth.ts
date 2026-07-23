@@ -106,6 +106,41 @@ export async function requireSuperDesigner(
 }
 
 /**
+ * 403 unless the user is CRM_SUPER, ADMIN or MANAGER (TASK crm-bundle, D4: the
+ * Image Bundles service is visible to all three; plain CRM users are 403'd).
+ * Role is read FRESH from the DB, mirroring requireSuperDesigner.
+ */
+export async function requireCrmSuper(
+  req: Request,
+  res: Response,
+  next: NextFunction,
+): Promise<void> {
+  if (!req.user) {
+    res.status(401).json({ error: "unauthorized" });
+    return;
+  }
+  try {
+    const user = await prisma.user.findUnique({
+      where: { id: req.user.sub },
+      select: { role: true, isActive: true },
+    });
+    if (!user || !user.isActive) {
+      res.status(401).json({ error: "unauthorized" });
+      return;
+    }
+    if (user.role !== "CRM_SUPER" && user.role !== "ADMIN" && user.role !== "MANAGER") {
+      res.status(403).json({ error: "forbidden" });
+      return;
+    }
+    req.user.role = user.role;
+    next();
+  } catch (err) {
+    console.error("requireCrmSuper DB lookup failed:", err);
+    res.status(500).json({ error: "server_error" });
+  }
+}
+
+/**
  * 403 unless the authenticated user's role is in `roles`. ADMIN always passes
  * (full access across zones). Used to wall off the Design zone from CRM-only
  * users and vice-versa. Assumes loadUser + requireAuth ran earlier.
@@ -132,8 +167,10 @@ export function requireZone(...roles: SessionPayload["role"][]) {
       }
       // ADMIN and MANAGER pass every zone (MANAGER = Design + CRM). Admin routes
       // are guarded separately by requireAdmin, so MANAGER never reaches them.
-      // SUPER_DESIGNER is a DESIGNER-zone role (Design only, never CRM).
-      const effectiveRole = user.role === "SUPER_DESIGNER" ? "DESIGNER" : user.role;
+      // SUPER_DESIGNER is a DESIGNER-zone role (Design only, never CRM);
+      // CRM_SUPER is a CRM-zone role (CRM only, never Design).
+      const effectiveRole =
+        user.role === "SUPER_DESIGNER" ? "DESIGNER" : user.role === "CRM_SUPER" ? "CRM" : user.role;
       if (user.role !== "ADMIN" && user.role !== "MANAGER" && !roles.includes(effectiveRole)) {
         res.status(403).json({ error: "forbidden" });
         return;
