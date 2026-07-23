@@ -1,23 +1,15 @@
-# Используем легкую версию Python 3.11
+# 1. Используем легкую версию Python 3.11
 FROM python:3.11-slim
 
-# Устанавливаем системные утилиты Linux, нужные для скачивания браузера
-RUN apt-get update && apt-get install -y wget gnupg curl && rm -rf /var/lib/apt/lists/*
-
-# Создаем рабочую папку на сервере
+# 2. Создаем рабочую папку внутри сервера
 WORKDIR /app
 
-# Сначала копируем список библиотек и устанавливаем их
-COPY qa-tools/requirements.txt .
+# 3. Копируем файл с библиотеками и устанавливаем их
+COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
-# Устанавливаем Chromium и все его системные зависимости (шрифты, графику)
-RUN playwright install chromium
-RUN playwright install-deps chromium
+# 4. Копируем все остальные файлы (питоновские скрипты)
+COPY . .
 
-# Копируем все остальные файлы проекта (наши питон скрипты)
-COPY qa-tools/ .
-
-# Команда запуска Streamlit. 
-# $PORT — это переменная, которую Railway выдает автоматически.
-CMD ["sh", "-c", "streamlit run web_auditor_external_prod.py --server.port $PORT --server.address 0.0.0.0 --server.enableCORS false --server.enableXsrfProtection false"]
+# 5. Запускаем FastAPI сервер (Railway сам подставит нужный порт)
+CMD uvicorn main:app --host 0.0.0.0 --port ${PORT:-8000}

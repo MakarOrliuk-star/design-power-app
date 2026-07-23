@@ -12,7 +12,7 @@ const { theme, toggle: toggleTheme } = useTheme();
 
 // Only services with real logic are openable (and favoritable). The "soon"
 // tiles are disabled placeholders — see SERVICES below.
-type ServiceKey = "calculator" | "bonuscalc" | "auditor" | "smartico" | "prioritycalc" | "bundles";
+type ServiceKey = "calculator" | "bonuscalc" | "auditor" | "smartico"| "prioritycalc" | "qatools" | "bundles";
 const activeService = ref<null | ServiceKey>(null);
 
 const route = useRoute();
@@ -26,6 +26,7 @@ const OPENABLE = new Set<ServiceKey>([
   "auditor",
   "smartico",
   "prioritycalc",
+  "qatools",
   "bundles",
 ]);
 
@@ -123,6 +124,16 @@ const SERVICES: Service[] = [
     footer: "Оценить задачу →",
     soon: false,
   },
+
+  {
+    key: "qatools",
+    title: "QA tools",
+    desc: "Сканирование настроек кампаний в Smartico и Octo, валидация лейблов и генерация отчетов",
+    icon: "⚡",
+    iconBg: "#e0e7ff",
+    footer: "Запустить сервис →",
+    soon: false,
+  },
   {
     key: "bundles",
     title: "Image Bundles",
@@ -141,6 +152,7 @@ const SERVICE_TITLES: Record<ServiceKey, string> = {
   auditor: "Массовый аудит",
   smartico: "Unique Image Smartico",
   prioritycalc: "Калькулятор Приоритетов",
+  qatools: "QA tools",
   bundles: "Image Bundles",
 };
 
@@ -346,6 +358,7 @@ onMounted(() => {
           <CrmAuditor v-else-if="activeService === 'auditor'" />
           <CrmSmartico v-else-if="activeService === 'smartico'" :drive-return="driveReturn" />
           <PriorityCalculator v-else-if="activeService === 'prioritycalc'" />
+          <CrmQatools v-else-if="activeService === 'qatools'" />
           <CrmBundles v-else-if="activeService === 'bundles'" />
         </div>
       </div>

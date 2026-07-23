@@ -1,5 +1,4 @@
-streamlit
+fastapi
+uvicorn
 requests
-playwright
-extra_streamlit_components
-python-dotenv
+pydantic
