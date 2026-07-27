@@ -15,7 +15,11 @@ import {
   layoutSpecSchema,
   validateLayoutSpec,
   EMAIL_HERO_V1,
+  EMAIL_HERO_V2,
   EMAIL_HERO_KEY,
+  PUSH_HERO_V1,
+  POPUP_HERO_V1,
+  SPEC_KEY_BY_ASSET,
   createLayoutSpecVersion,
   getActiveLayoutSpec,
   getLayoutSpecVersion,
@@ -98,6 +102,80 @@ describe("email.hero.v1 calibration vs reference measurements", () => {
   it("background is a static asset (DI-Q6) and decor layout is seeded", () => {
     expect(spec.background.source).toBe("static");
     expect(spec.decor?.seeded).toBe(true);
+  });
+});
+
+// ------------------------------------------------------------------
+// Transparent delivery (требование заказчика: альфа-канал вместо вшитого фона)
+// ------------------------------------------------------------------
+describe("transparent specs — email v2, push, pop-up", () => {
+  it("all three ship an alpha canvas of the canonical size", () => {
+    expect(EMAIL_HERO_V2.background.source).toBe("transparent");
+    expect(PUSH_HERO_V1.background.source).toBe("transparent");
+    expect(POPUP_HERO_V1.background.source).toBe("transparent");
+    expect([EMAIL_HERO_V2.canvas.w, EMAIL_HERO_V2.canvas.h]).toEqual([1200, 600]);
+    expect([PUSH_HERO_V1.canvas.w, PUSH_HERO_V1.canvas.h]).toEqual([1024, 512]);
+    expect([POPUP_HERO_V1.canvas.w, POPUP_HERO_V1.canvas.h]).toEqual([800, 600]);
+    for (const s of [EMAIL_HERO_V2, PUSH_HERO_V1, POPUP_HERO_V1]) {
+      expect(layoutSpecSchema.safeParse(s).success).toBe(true);
+      expect(s.canvas.scales).toEqual([1, 2]); // @2x retina (D-E2)
+    }
+  });
+
+  it("email v2 keeps v1 geometry but widens the item bleed to the Фаза 0 default", () => {
+    expect(EMAIL_HERO_V2.subjects.person).toEqual(EMAIL_HERO_V1.subjects.person);
+    expect(EMAIL_HERO_V2.safe).toEqual(EMAIL_HERO_V1.safe);
+    expect(EMAIL_HERO_V2.baseline).toBe(EMAIL_HERO_V1.baseline);
+    expect(EMAIL_HERO_V2.subjects.item.overflow.left).toBe(0.06);
+  });
+
+  it("push/pop-up match the эталоны: centered character, props scattered, no text zone", () => {
+    // Measured on figma/crm-bundle/*эталон.png (pixel scan 2026-07-27):
+    // push — character y 0.025..0.949, popup — y 0.072..0.948, both centered.
+    const MEASURED = {
+      push: { height: 0.924, baseline: 0.949, propHeights: [0.117, 0.377] },
+      popup: { height: 0.877, baseline: 0.948, propHeights: [0.1, 0.347] },
+    };
+    for (const [name, s] of [
+      ["push", PUSH_HERO_V1],
+      ["popup", POPUP_HERO_V1],
+    ] as const) {
+      const m = MEASURED[name];
+      expect(s.safe).toBeUndefined(); // no protected text area on push/pop-up
+      // No standing item cluster — every object is a scattered prop.
+      expect(s.subjects.item).toBeUndefined();
+      expect(s.subjects.person.anchor).toBe("bottom-center");
+      const center = s.subjects.person.zone.x + s.subjects.person.zone.w / 2;
+      expect(Math.abs(center - 0.5)).toBeLessThan(0.01);
+      expect(Math.abs(s.subjects.person.fitHeight.target - m.height)).toBeLessThan(TOL);
+      expect(Math.abs(s.baseline - m.baseline)).toBeLessThan(TOL);
+      // Props come from the ITEM layer, tilted, sized like the measured ones.
+      expect(s.decor?.source).toBe("static+item");
+      expect(s.decor!.rotationMaxDeg).toBeGreaterThan(0);
+      expect(s.decor!.minItemSize!).toBeLessThanOrEqual(m.propHeights[0] + TOL);
+      expect(s.decor!.maxItemSize).toBeGreaterThanOrEqual(m.propHeights[1] - TOL);
+      // Bands sit in the side margins, clear of the centered character.
+      for (const band of s.decor!.bands) {
+        const clearLeft = band.x + band.w <= s.subjects.person.zone.x + 0.03;
+        const clearRight = band.x >= s.subjects.person.zone.x + s.subjects.person.zone.w - 0.03;
+        expect(clearLeft || clearRight).toBe(true);
+      }
+    }
+  });
+
+  it("email v2 scatters the leftover item pieces as decor", () => {
+    expect(EMAIL_HERO_V2.decor?.source).toBe("static+item");
+    expect(EMAIL_HERO_V2.decor?.maxPieces).toBeGreaterThan(0);
+    // The item subject survives — the hero piece still stands on the left.
+    expect(EMAIL_HERO_V2.subjects.item).toBeDefined();
+  });
+
+  it("maps asset keys to their spec keys for configs that pin none", () => {
+    expect(SPEC_KEY_BY_ASSET).toEqual({
+      email: "email.hero",
+      push: "push.hero",
+      popup: "popup.hero",
+    });
   });
 });
 

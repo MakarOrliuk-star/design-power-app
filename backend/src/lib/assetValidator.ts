@@ -135,12 +135,13 @@ export async function validateComposedAsset(
   }
 
   // 3–4) Subject position, baseline and scale from the engine boxes.
-  const subjects: Array<[string, Box | null, (typeof spec.subjects)["person"]]> = [
+  const subjects: Array<[string, Box | null, (typeof spec.subjects)["person"] | undefined]> = [
     ["person", inputs.metadata.layers.person, spec.subjects.person],
+    // push/pop-up have no item subject — their props are scattered decor.
     ["item", inputs.metadata.layers.item, spec.subjects.item],
   ];
   for (const [name, box, subj] of subjects) {
-    if (!box) continue;
+    if (!box || !subj) continue;
     const limitL = (subj.zone.x - subj.overflow.left) * W - POSITION_TOLERANCE_PX;
     const limitR = (subj.zone.x + subj.zone.w + subj.overflow.right) * W + POSITION_TOLERANCE_PX;
     const inZone = box.x >= limitL && box.x + box.w <= limitR;

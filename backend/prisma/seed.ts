@@ -2,7 +2,15 @@ import { readFile } from "node:fs/promises";
 import { prisma } from "../src/lib/prisma.js";
 import { BRANDS, CATEGORIES, THEMES, BRAND_CATEGORIES } from "./seed-data/catalog.ts";
 import { BRAND_NANO_REFS } from "./seed-data/nano-refs.ts";
-import { EMAIL_HERO_KEY, EMAIL_HERO_V1 } from "../src/services/layoutSpec.ts";
+import {
+  EMAIL_HERO_KEY,
+  EMAIL_HERO_V1,
+  EMAIL_HERO_V2,
+  PUSH_HERO_KEY,
+  PUSH_HERO_V1,
+  POPUP_HERO_KEY,
+  POPUP_HERO_V1,
+} from "../src/services/layoutSpec.ts";
 
 /**
  * Idempotent seed (upserts) — safe to re-run.
@@ -121,8 +129,24 @@ async function main() {
           // активную версию LayoutSpec с этим ключом.
           layoutSpecKey: EMAIL_HERO_KEY,
         },
-        { key: "popup", label: "Pop-up", width: 800, height: 600 },
-        { key: "push", label: "Push", width: 1024, height: 512 },
+        // push/pop-up идут тем же слоёным движком: прозрачная доставка и
+        // детерминированная раскладка вместо одной ai-генерации сцены.
+        {
+          key: "popup",
+          label: "Pop-up",
+          width: 800,
+          height: 600,
+          composeMode: "layered",
+          layoutSpecKey: POPUP_HERO_KEY,
+        },
+        {
+          key: "push",
+          label: "Push",
+          width: 1024,
+          height: 512,
+          composeMode: "layered",
+          layoutSpecKey: PUSH_HERO_KEY,
+        },
       ],
     },
     update: {},
@@ -140,14 +164,23 @@ async function main() {
     update: {},
   });
 
-  // Layout spec email.hero v1 (TASK email-composition, Phase 1): geometry
-  // calibrated against the reference banner. Create-only — the admin panel
-  // owns later versions; v1 stays immutable as the эталонная спека.
-  await prisma.layoutSpec.upsert({
-    where: { key_version: { key: EMAIL_HERO_KEY, version: 1 } },
-    create: { key: EMAIL_HERO_KEY, version: 1, spec: EMAIL_HERO_V1 },
-    update: {},
-  });
+  // Layout specs (TASK email-composition). Create-only и версии неизменяемы:
+  // сид добавляет отсутствующие версии, правки живут в админке. Рендер берёт
+  // ПОСЛЕДНЮЮ активную версию ключа, поэтому email.hero v2 (прозрачный фон)
+  // вытесняет v1 автоматически, а v1 остаётся историей для старых бандлов.
+  const seededSpecs: Array<[string, number, object]> = [
+    [EMAIL_HERO_KEY, 1, EMAIL_HERO_V1],
+    [EMAIL_HERO_KEY, 2, EMAIL_HERO_V2],
+    [PUSH_HERO_KEY, 1, PUSH_HERO_V1],
+    [POPUP_HERO_KEY, 1, POPUP_HERO_V1],
+  ];
+  for (const [key, version, spec] of seededSpecs) {
+    await prisma.layoutSpec.upsert({
+      where: { key_version: { key, version } },
+      create: { key, version, spec },
+      update: {},
+    });
+  }
 
   const presetCount = await prisma.neuralPromptPreset.count();
   if (presetCount === 0) {

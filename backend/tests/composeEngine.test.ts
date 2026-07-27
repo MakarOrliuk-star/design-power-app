@@ -8,7 +8,12 @@ import {
   seedToInt,
 } from "../src/lib/composeEngine.js";
 import type { EngineLayer } from "../src/lib/composeEngine.js";
-import { EMAIL_HERO_V1 } from "../src/services/layoutSpec.js";
+import {
+  EMAIL_HERO_V1,
+  EMAIL_HERO_V2,
+  PUSH_HERO_V1,
+  POPUP_HERO_V1,
+} from "../src/services/layoutSpec.js";
 
 // Composition engine tests (TASK email-composition, Phase 3): placement math
 // against the calibrated spec, pixel-level composite checks on synthetics,
@@ -178,6 +183,131 @@ describe("composeAsset", () => {
     if (!r.ok) throw new Error(r.reason);
     expect(r.metadata.recommendedTextColor).toBe("#FFFFFF");
     expect(r.metadata.textContrast!.white).toBeGreaterThanOrEqual(4.5);
+  });
+
+  it("transparent delivery: alpha canvas, subjects opaque, safe zone empty", async () => {
+    const person = await solidLayer(60, 160, [255, 0, 0, 255]);
+    const item = await solidLayer(70, 90, [0, 0, 255, 255]);
+    const r = await composeAsset(EMAIL_HERO_V2, "email.hero", 2, { person, item }, "s1");
+    if (!r.ok) throw new Error(r.reason);
+
+    expect(r.scales.map((s) => [s.width, s.height])).toEqual([
+      [1200, 600],
+      [2400, 1200],
+    ]);
+    const base = r.scales[0]!;
+    expect((await sharp(base.png).metadata()).hasAlpha).toBe(true);
+    const raw = await sharp(base.png).ensureAlpha().raw().toBuffer({ resolveWithObject: true });
+    const alphaAt = (x: number, y: number) => raw.data[(y * 1200 + x) * 4 + 3];
+    const p = r.metadata.layers.person;
+    expect(alphaAt(p.x + Math.floor(p.w / 2), p.y + Math.floor(p.h / 2))).toBe(255);
+    // Everything the layers do not cover is genuinely empty — including the
+    // text zone, where the письмо paints its own background.
+    expect(alphaAt(600, 300)).toBe(0);
+    expect(alphaAt(5, 5)).toBe(0);
+
+    // Geometry still travels; luminance/contrast do not — there is no
+    // background of ours to measure them against.
+    expect(r.metadata.safeZonePct).toEqual({ x: 25, y: 4, w: 50, h: 92 });
+    expect(r.metadata.luminance).toBeNull();
+    expect(r.metadata.textContrast).toBeNull();
+    expect(r.metadata.recommendedTextColor).toBeNull();
+  });
+
+  it("a static-background spec still refuses to render without one", async () => {
+    const person = await solidLayer(60, 160, [255, 0, 0, 255]);
+    const r = await composeAsset(spec, "email.hero", 1, { person }, "s1");
+    expect(r.ok).toBe(false);
+    if (!r.ok) expect(r.reason).toContain("requires a static background");
+  });
+
+  it("a transparent spec ignores a background that was passed anyway", async () => {
+    const person = await solidLayer(60, 160, [255, 0, 0, 255]);
+    const bg = await grayBackground(230);
+    const withBg = await composeAsset(EMAIL_HERO_V2, "email.hero", 2, { background: bg, person }, "s1");
+    const without = await composeAsset(EMAIL_HERO_V2, "email.hero", 2, { person }, "s1");
+    if (!withBg.ok || !without.ok) throw new Error("compose failed");
+    expect(withBg.scales[0]!.png.equals(without.scales[0]!.png)).toBe(true);
+  });
+
+  it("push/pop-up specs compose at their canonical sizes with alpha", async () => {
+    const person = await solidLayer(60, 160, [255, 0, 0, 255]);
+    const item = await solidLayer(70, 90, [0, 0, 255, 255]);
+    for (const [key, s, size] of [
+      ["push.hero", PUSH_HERO_V1, [1024, 512]],
+      ["popup.hero", POPUP_HERO_V1, [800, 600]],
+    ] as const) {
+      const r = await composeAsset(s, key, 1, { person, item }, "s1");
+      if (!r.ok) throw new Error(`${key}: ${r.reason}`);
+      expect([r.scales[0]!.width, r.scales[0]!.height]).toEqual(size);
+      expect((await sharp(r.scales[0]!.png).metadata()).hasAlpha).toBe(true);
+      // No protected text area on push/pop-up → no safe-zone metadata.
+      expect(r.metadata.safeZonePct).toBeNull();
+      // Character stands on the ground line, centered horizontally.
+      const p = r.metadata.layers.person;
+      expect(p.y + p.h).toBe(Math.round(s.baseline * size[1]));
+      expect(Math.abs(p.x + p.w / 2 - size[0] / 2)).toBeLessThan(2);
+    }
+  });
+
+  it("item pieces: hero stands in the item zone, the rest scatter as props", async () => {
+    const person = await solidLayer(60, 160, [255, 0, 0, 255]);
+    const pieces = [
+      await solidLayer(80, 120, [0, 0, 255, 255]), // hero (largest)
+      await solidLayer(40, 40, [0, 200, 0, 255]),
+      await solidLayer(30, 30, [200, 0, 200, 255]),
+    ];
+    const r = await composeAsset(EMAIL_HERO_V2, "email.hero", 2, { person, itemPieces: pieces }, "s1");
+    if (!r.ok) throw new Error(r.reason);
+
+    // The hero piece became the left subject, sized by the spec, on the baseline.
+    const i = r.metadata.layers.item!;
+    expect(i.y + i.h).toBe(Math.round(EMAIL_HERO_V2.baseline * 600));
+    expect(i.x + i.w).toBeLessThanOrEqual(0.25 * 1200 + 1);
+    // The two leftovers are the scattered props.
+    expect(r.metadata.layers.decorPlaced + r.metadata.layers.decorSkipped).toBe(2);
+  });
+
+  it("push/pop-up scatter every item piece — no piece is promoted to a subject", async () => {
+    const person = await solidLayer(60, 160, [255, 0, 0, 255]);
+    const pieces = [
+      await solidLayer(80, 120, [0, 0, 255, 255]),
+      await solidLayer(40, 40, [0, 200, 0, 255]),
+    ];
+    const r = await composeAsset(PUSH_HERO_V1, "push.hero", 1, { person, itemPieces: pieces }, "s1");
+    if (!r.ok) throw new Error(r.reason);
+    expect(r.metadata.layers.item).toBeNull();
+    expect(r.metadata.layers.decorPlaced + r.metadata.layers.decorSkipped).toBe(2);
+    expect(r.metadata.layers.decorPlaced).toBeGreaterThan(0);
+  });
+
+  it("props are tilted by a seeded angle — same seed same tilt, other seed different", async () => {
+    const person = await solidLayer(60, 160, [255, 0, 0, 255]);
+    const pieces = [await solidLayer(60, 40, [0, 200, 0, 255])];
+    const a = await composeAsset(PUSH_HERO_V1, "push.hero", 1, { person, itemPieces: pieces }, "sA");
+    const b = await composeAsset(PUSH_HERO_V1, "push.hero", 1, { person, itemPieces: pieces }, "sA");
+    const c = await composeAsset(PUSH_HERO_V1, "push.hero", 1, { person, itemPieces: pieces }, "sB");
+    if (!a.ok || !b.ok || !c.ok) throw new Error("compose failed");
+    expect(a.scales[0]!.png.equals(b.scales[0]!.png)).toBe(true);
+    expect(a.scales[0]!.png.equals(c.scales[0]!.png)).toBe(false);
+
+    // A tilt makes the prop's footprint wider than the unrotated 3:2 layer.
+    const withTilt = await composeAsset(
+      { ...PUSH_HERO_V1, decor: { ...PUSH_HERO_V1.decor!, rotationMaxDeg: 45 } },
+      "push.hero",
+      1,
+      { person, itemPieces: pieces },
+      "sA",
+    );
+    const noTilt = await composeAsset(
+      { ...PUSH_HERO_V1, decor: { ...PUSH_HERO_V1.decor!, rotationMaxDeg: 0 } },
+      "push.hero",
+      1,
+      { person, itemPieces: pieces },
+      "sA",
+    );
+    if (!withTilt.ok || !noTilt.ok) throw new Error("compose failed");
+    expect(withTilt.scales[0]!.png.equals(noTilt.scales[0]!.png)).toBe(false);
   });
 
   it("decor is composited inside bands and counted in metadata", async () => {

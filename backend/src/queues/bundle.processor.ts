@@ -1,9 +1,10 @@
 import { prisma } from "../lib/prisma.js";
 import { runPersonFal, runBriaExpand } from "../lib/fal.js";
 import { getOrCreateNormalizedLayer, fetchBuffer } from "../services/layerCache.js";
-import { getActiveLayoutSpec, EMAIL_HERO_KEY } from "../services/layoutSpec.js";
+import { getActiveLayoutSpec, SPEC_KEY_BY_ASSET } from "../services/layoutSpec.js";
 import type { LayoutSpecRow } from "../services/layoutSpec.js";
 import { composeAsset } from "../lib/composeEngine.js";
+import { splitLayerPieces } from "../lib/layerSplit.js";
 import type { EngineLayer } from "../lib/composeEngine.js";
 import { validateComposedAsset, personLayerSanity } from "../lib/assetValidator.js";
 import {
@@ -62,10 +63,18 @@ export const PERSON_LAYER_CONTRACT =
 /** Bounded auto-retry for a broken person layer (Phase 4, лимит DI-Q13). */
 export const PERSON_LAYER_RETRIES = 1;
 
+/** The compositor CUTS this layer into its separate objects (layerSplit) and
+ *  places them individually — the hero object stands in the item zone (email),
+ *  the rest scatter around the character (эталоны push/pop-up). So the objects
+ *  must not touch each other, and the hero one must be portrait-shaped: the
+ *  item zone is the left quarter of a 2:1 canvas, taller than it is wide. */
 export const ITEM_LAYER_CONTRACT =
-  "Render the objects as ONE compact cluster, fully inside the frame with clear margins on " +
-  "every side, nothing cropped by the edges, on a plain even light-gray studio background " +
-  "with strong contrast to the objects. No text, no logos, no characters.";
+  "Render 4 to 6 SEPARATE objects, each fully detached from the others with wide empty gaps " +
+  "between them — they must never touch, overlap or be connected by shadows. One main object " +
+  "is noticeably larger than the rest and clearly taller than it is wide (portrait, about 2:3); " +
+  "the others are small props of varied shapes. Spread them apart across the frame, all fully " +
+  "inside it with clear margins, nothing cropped by the edges, on a plain even light-gray " +
+  "studio background with strong contrast to the objects. No text, no logos, no characters.";
 
 /** Brand ITEM template (key = brand name) → bundle_default preset → built-in. */
 export async function buildBundleItemPrompt(brandName: string, userPrompt: string): Promise<string> {
@@ -534,15 +543,20 @@ async function renderLayeredWithEngine(opts: {
       reason: `canvas mismatch: asset config ${config.width}×${config.height} vs spec ${spec.canvas.w}×${spec.canvas.h}`,
     };
   }
-  // DI-Q6: the background is a static admin asset — never generated.
-  if (!config.templateUrl) {
-    return {
-      ok: false,
-      reason: `background: static template for "${opts.assetKey}" is not uploaded (Админка → Image Bundles — шаблоны типов)`,
-    };
+  // Background comes from the spec, never from a generation: "transparent"
+  // ships an alpha PNG (фон кладёт письмо), "static" bakes in the admin asset.
+  let bg: Buffer | undefined;
+  if (spec.background.source === "static") {
+    if (!config.templateUrl) {
+      return {
+        ok: false,
+        reason: `background: static template for "${opts.assetKey}" is not uploaded (Админка → Image Bundles — шаблоны типов)`,
+      };
+    }
+    const loaded = await fetchBuffer(config.templateUrl);
+    if (!loaded) return { ok: false, reason: "background: download failed" };
+    bg = loaded;
   }
-  const bg = await fetchBuffer(config.templateUrl);
-  if (!bg) return { ok: false, reason: "background: download failed" };
 
   const loadLayer = async (hash: string, label: string): Promise<EngineLayer | { error: string }> => {
     const row = await prisma.normalizedLayer.findUnique({ where: { sourceHash: hash } });
@@ -554,11 +568,29 @@ async function renderLayeredWithEngine(opts: {
 
   const person = await loadLayer(opts.personLayerHash, "person");
   if ("error" in person) return { ok: false, reason: person.error };
-  let item: EngineLayer | undefined;
+
+  // The ITEM generation returns several separate objects on one layer; the
+  // эталоны place them as individual props. Cutting the layer into its
+  // connected blobs gives the engine those props (largest first): with an item
+  // subject in the spec it stands in its zone, the rest scatter.
+  let itemPieces: EngineLayer[] = [];
   if (opts.itemLayerHash) {
     const loaded = await loadLayer(opts.itemLayerHash, "item");
     if ("error" in loaded) return { ok: false, reason: loaded.error };
-    item = loaded;
+    // +1: the hero piece may be spent on the item subject, the cap counts props.
+    const maxPieces = spec.decor?.maxPieces;
+    const cut = await splitLayerPieces(
+      loaded.data,
+      maxPieces === undefined ? {} : { maxPieces: maxPieces + 1 },
+    );
+    itemPieces = cut.map((p) => ({ data: p.png, width: p.width, height: p.height }));
+    // A layer the splitter cannot read (single ragged blob, no alpha) still
+    // renders — as the one item it always was.
+    if (itemPieces.length === 0) itemPieces = [loaded];
+    console.log(
+      `✂️ item layer ${opts.assetKey}#${opts.assetId}: ${itemPieces.length} piece(s) ` +
+        itemPieces.map((p) => `${p.width}×${p.height}`).join(", "),
+    );
   }
 
   // Static decor cutouts — normalized + cached exactly like subject layers.
@@ -593,7 +625,7 @@ async function renderLayeredWithEngine(opts: {
       spec,
       specRow.key,
       specRow.version,
-      { background: bg, person, ...(item ? { item } : {}), decor },
+      { ...(bg ? { background: bg } : {}), person, itemPieces, decor },
       seed,
     );
     if (!c.ok) return c;
@@ -720,8 +752,7 @@ export async function processRenderAssetJob(
     // Engine path (Phase 3): versioned spec + Phase 2 layer hashes → sharp
     // composite with metadata. Bundles rendered before Phase 2 have no layer
     // hashes and fall through to the legacy Cloudinary compose below.
-    const specKey =
-      config.layoutSpecKey ?? (asset.assetKey === "email" ? EMAIL_HERO_KEY : null);
+    const specKey = config.layoutSpecKey ?? SPEC_KEY_BY_ASSET[asset.assetKey] ?? null;
     if (specKey && variant.personLayerHash) {
       let specRow: LayoutSpecRow | null = null;
       try {
