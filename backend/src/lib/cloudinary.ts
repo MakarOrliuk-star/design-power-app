@@ -127,23 +127,6 @@ export function composeLayersUrl(basePublicId: string, layers: ComposeLayer[]): 
 }
 
 /**
- * Insert a transformation into an existing delivery URL. Used to serve the
- * canonical @1x size from the stored @2x master instead of storing a second
- * file: Cloudinary derives (and caches) it on first request, so one upload
- * covers both sizes and the downscale is higher quality than a separate 1x
- * render would be. Returns the URL unchanged when it is not a Cloudinary
- * delivery URL (nothing to rewrite → caller still gets a usable link).
- */
-export function withTransform(secureUrl: string, transform: string): string {
-  const marker = "/image/upload/";
-  const at = secureUrl.indexOf(marker);
-  if (at < 0) return secureUrl;
-  const head = secureUrl.slice(0, at + marker.length);
-  const tail = secureUrl.slice(at + marker.length);
-  return `${head}${transform}/${tail}`;
-}
-
-/**
  * Upload raw image bytes via multipart/form-data (no base64 inflation — keeps
  * memory ≈ the buffer size). Used by the Smartico service, which needs a
  * deterministic public_id so a re-uploaded archive overwrites the same asset.

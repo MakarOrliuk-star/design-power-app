@@ -820,27 +820,25 @@ describe("processRenderAssetJob — engine path (Phase 3)", () => {
     });
     cloud.uploadBuffer.mockResolvedValue({
       success: true,
-      secure_url: "https://res.cloudinary.com/demo/image/upload/v1/bundles/bun1/v1_email_v1_2x.png",
+      secure_url: "https://res.cloudinary.com/demo/image/upload/v1/bundles/bun1/v1_email_v1.png",
     });
 
     await processRenderAssetJob("bun1", "v1", "a1");
 
     // Seed is derived from asset + spec version + layer hashes (determinism).
     expect(engine.composeAsset.mock.calls[0]![4]).toBe("a1:v1:hp:hi");
-    // ONE stored file — the @2x master under a deterministic id (re-render
-    // overwrites); @1x is served as a transformation of it, not a second upload.
+    // Only the canonical scale is rendered — no `_2x` twin anywhere (D-E7).
+    expect(engine.composeAsset.mock.calls[0]![0].canvas.scales).toEqual([1]);
     expect(cloud.uploadBuffer).toHaveBeenCalledTimes(1);
-    expect(cloud.uploadBuffer.mock.calls[0]![1]).toBe("v1_email_v1_2x");
+    expect(cloud.uploadBuffer.mock.calls[0]![1]).toBe("v1_email_v1");
     expect(cloud.uploadBuffer.mock.calls[0]![2]).toBe("bundles/bun1");
     expect(db.bundleAsset.update).toHaveBeenLastCalledWith({
       where: { id: "a1" },
       data: {
         status: "DONE",
-        imageUrl:
-          "https://res.cloudinary.com/demo/image/upload/c_scale,w_1200,h_600/v1/bundles/bun1/v1_email_v1_2x.png",
+        imageUrl: "https://res.cloudinary.com/demo/image/upload/v1/bundles/bun1/v1_email_v1.png",
         metadata: expect.objectContaining({
-          retinaUrl:
-            "https://res.cloudinary.com/demo/image/upload/v1/bundles/bun1/v1_email_v1_2x.png",
+          retinaUrl: null,
           specVersion: 1,
           recommendedTextColor: "#111111",
         }),
@@ -899,7 +897,7 @@ describe("processRenderAssetJob — engine path (Phase 3)", () => {
     });
     cloud.uploadBuffer.mockResolvedValue({
       success: true,
-      secure_url: "https://res.cloudinary.com/demo/image/upload/v1/b/v1_email_v2_2x.png",
+      secure_url: "https://res.cloudinary.com/demo/image/upload/v1/b/v1_email_v2.png",
     });
 
     await processRenderAssetJob("bun1", "v1", "a1");
@@ -911,8 +909,7 @@ describe("processRenderAssetJob — engine path (Phase 3)", () => {
       where: { id: "a1" },
       data: expect.objectContaining({
         status: "DONE",
-        imageUrl:
-          "https://res.cloudinary.com/demo/image/upload/c_scale,w_1200,h_600/v1/b/v1_email_v2_2x.png",
+        imageUrl: "https://res.cloudinary.com/demo/image/upload/v1/b/v1_email_v2.png",
       }),
     });
   });
