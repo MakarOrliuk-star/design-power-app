@@ -707,6 +707,77 @@ async function setComposeMode(t: AdminBundleType, a: AdminBundleTypeAsset, e: Ev
   }
 }
 
+// ---- Layout-спеки композиции (TASK email-composition, Phase 1) ----
+// Геометрия email-баннера как данные: версии неизменяемы, «сохранить» всегда
+// создаёт следующую версию ключа; откат = деактивация новой версии.
+interface AdminLayoutSpec {
+  id: string;
+  key: string;
+  version: number;
+  spec: Record<string, unknown>;
+  isActive: boolean;
+  createdAt: string;
+  createdBy: string | null;
+}
+
+const layoutSpecs = ref<AdminLayoutSpec[]>([]);
+const lsDraft = ref<Record<string, string>>({});
+const lsMsg = ref<Record<string, string>>({});
+const lsKeys = computed(() => [...new Set(layoutSpecs.value.map((s) => s.key))]);
+
+function lsVersions(key: string): AdminLayoutSpec[] {
+  return layoutSpecs.value.filter((s) => s.key === key);
+}
+
+async function loadLayoutSpecs() {
+  try {
+    const res = await api<{ layoutSpecs: AdminLayoutSpec[] }>("/api/admin/layout-specs");
+    layoutSpecs.value = res.layoutSpecs;
+    for (const key of lsKeys.value) {
+      const newest = lsVersions(key)[0];
+      if (newest && !lsDraft.value[key]) {
+        lsDraft.value[key] = JSON.stringify(newest.spec, null, 2);
+      }
+    }
+  } catch {
+    error.value = "Не удалось загрузить layout-спеки.";
+  }
+}
+
+async function saveLayoutSpecVersion(key: string) {
+  lsMsg.value[key] = "";
+  let spec: unknown;
+  try {
+    spec = JSON.parse(lsDraft.value[key] ?? "");
+  } catch {
+    lsMsg.value[key] = "Невалидный JSON — исправьте черновик.";
+    return;
+  }
+  try {
+    const res = await api<{ layoutSpec: AdminLayoutSpec }>("/api/admin/layout-specs", {
+      method: "POST",
+      body: { key, spec },
+    });
+    lsMsg.value[key] = `Сохранено как v${res.layoutSpec.version} ✓ — применится к новым рендерам`;
+    await loadLayoutSpecs();
+  } catch {
+    lsMsg.value[key] = "Спека отклонена валидацией (границы 0..1, min≤target≤max, зоны внутри холста).";
+  }
+}
+
+async function toggleLayoutSpec(s: AdminLayoutSpec) {
+  try {
+    await api(`/api/admin/layout-specs/${s.id}`, {
+      method: "PATCH",
+      body: { isActive: !s.isActive },
+    });
+    s.isActive = !s.isActive;
+    lsMsg.value[s.key] = `v${s.version} ${s.isActive ? "активирована" : "деактивирована"} ✓`;
+  } catch {
+    lsMsg.value[s.key] = "Ошибка переключения версии";
+  }
+}
+
 // ---- Brand change log (TASK download-and-edit-style §2) ----
 // Every «Edit current style» save/rollback lands here: who, when, before → after.
 interface BrandLogEntry {
@@ -797,6 +868,7 @@ onMounted(() => {
     void loadCatalog();
     void loadSmarticoBrands();
     void loadBundleTypes();
+    void loadLayoutSpecs();
     void loadBrandLogs();
   }
   void loadTournaments();
@@ -1391,6 +1463,43 @@ onMounted(() => {
       </div>
       <p v-if="!bundleTypes.length" class="muted">Типы бандлов не найдены (нужен сид).</p>
     </section>
+
+    <section v-if="auth.isAdmin" class="panel">
+      <h2>Композиция — layout-спеки</h2>
+      <p class="muted">
+        Геометрия детерминированной сборки (зоны item/person, базовая линия, safe-зона под текст,
+        декор-банды) — версии неизменяемы: «Сохранить» создаёт новую версию, рендер берёт последнюю
+        активную. Доли холста 0..1. Изменение спеки не требует деплоя.
+      </p>
+      <div v-for="key in lsKeys" :key="key" class="ls">
+        <h3 class="bt__title">
+          {{ key }}
+          <span class="muted">
+            активная: v{{ lsVersions(key).find((s) => s.isActive)?.version ?? "—" }}
+          </span>
+        </h3>
+        <div class="ls__versions">
+          <span v-for="s in lsVersions(key)" :key="s.id" class="ls__ver">
+            v{{ s.version }}
+            <button
+              class="btn-toggle"
+              :title="s.isActive ? 'Деактивировать (откат на предыдущую активную)' : 'Активировать'"
+              @click="toggleLayoutSpec(s)"
+            >
+              {{ s.isActive ? "вкл" : "выкл" }}
+            </button>
+          </span>
+        </div>
+        <textarea v-model="lsDraft[key]" class="ls__json" rows="14" spellcheck="false"></textarea>
+        <div class="bt__actions">
+          <button class="btn-primary" @click="saveLayoutSpecVersion(key)">
+            Сохранить как новую версию
+          </button>
+        </div>
+        <p v-if="lsMsg[key]" class="muted">{{ lsMsg[key] }}</p>
+      </div>
+      <p v-if="!lsKeys.length" class="muted">Спеки не найдены (нужен сид email.hero v1).</p>
+    </section>
   </div>
 </template>
 
@@ -1859,5 +1968,37 @@ select {
   border-radius: var(--radius-sm);
   background: var(--color-white);
   color: var(--color-text);
+}
+
+/* Layout-спеки композиции */
+.ls {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin-bottom: 18px;
+}
+.ls__versions {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+.ls__ver {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 13px;
+}
+.ls__json {
+  width: 100%;
+  font-family: ui-monospace, SFMono-Regular, Consolas, monospace;
+  font-size: 12px;
+  line-height: 1.45;
+  padding: 10px;
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-sm);
+  background: var(--color-white);
+  color: var(--color-text);
+  resize: vertical;
 }
 </style>

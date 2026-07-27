@@ -17,6 +17,15 @@ export interface BundleTypeAsset {
   // "layered" (D10 v2, email): background layer + transparent person/item
   // cutouts composited into their zone boxes by pixels — hard guarantee.
   composeMode?: "ai" | "layered";
+  // Versioned geometry (TASK email-composition, Phase 1): key into LayoutSpec;
+  // the composition engine resolves the latest active version at render time.
+  layoutSpecKey?: string;
+  // Static decor cutouts (coins, percent signs…) the engine scatters into the
+  // spec's decor bands (Phase 3). Admin-provided transparent PNG URLs.
+  decorUrls?: string[];
+  // Golden composite @1x for the validator's structural SSIM check (Phase 4;
+  // the golden assets themselves are produced in Phase 6).
+  goldenUrl?: string;
 }
 
 // ------------------------------------------------------------------

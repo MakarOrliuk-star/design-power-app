@@ -133,7 +133,7 @@ export function composeLayersUrl(basePublicId: string, layers: ComposeLayer[]): 
  * `overwrite` also invalidates the CDN cache so the new bytes are served.
  */
 export async function uploadBuffer(
-  buffer: Buffer,
+  buffer: Buffer<ArrayBufferLike>,
   publicId: string,
   folder: string,
   overwrite = true,

@@ -1,7 +1,14 @@
 import { prisma } from "../lib/prisma.js";
-import { runPersonFal, runBriaExpand, runBriaRemoveBg } from "../lib/fal.js";
+import { runPersonFal, runBriaExpand } from "../lib/fal.js";
+import { getOrCreateNormalizedLayer, fetchBuffer } from "../services/layerCache.js";
+import { getActiveLayoutSpec, EMAIL_HERO_KEY } from "../services/layoutSpec.js";
+import type { LayoutSpecRow } from "../services/layoutSpec.js";
+import { composeAsset } from "../lib/composeEngine.js";
+import type { EngineLayer } from "../lib/composeEngine.js";
+import { validateComposedAsset, personLayerSanity } from "../lib/assetValidator.js";
 import {
   composeLayersUrl,
+  uploadBuffer,
   uploadFromUrl,
   uploadFromUrlTransformed,
   withRetry,
@@ -11,6 +18,7 @@ import { nearestFalAspect, probeImageSize } from "../lib/imageSize.js";
 import { getPrompt } from "../services/prompts.js";
 import { buildPersonPromptMemoized } from "./person.processor.js";
 import { getBundleQueue } from "./index.js";
+import type { Prisma } from "../../generated/prisma/client.js";
 import { recomputeBundleStatus } from "../services/bundle.service.js";
 import type { BundleTypeAsset } from "../services/bundle.service.js";
 
@@ -39,6 +47,25 @@ export const DEFAULT_BUNDLE_ITEM_PROMPT =
   "Casino slot item collection for an advertising creative: golden lucky seven symbols, casino chips, cherries, gold coins. Detailed glossy 3D render, isolated objects on a clean dark background, vivid advertising quality, no text. Theme: {{prompt}}";
 
 export const BUNDLE_DEFAULT_ITEM_KEY = "bundle_default";
+
+/**
+ * Layer generation contract (Phase 2, TASK §3.3 / Фаза 2): appended to the
+ * admin-editable prompt templates in code, so every brand's layer arrives in
+ * the shape the normalizer + compositor expect — one subject, fully in frame,
+ * on an even background the background-removal step can cut cleanly.
+ */
+export const PERSON_LAYER_CONTRACT =
+  "Single character only, full body from head to feet, feet fully visible and not cropped, " +
+  "standing in a confident advertising pose facing slightly toward the center (3/4 view), " +
+  "with clear margins between the character and every frame edge, on a plain even light-gray " +
+  "studio background with strong contrast to the character. No text, no logos, no other objects.";
+/** Bounded auto-retry for a broken person layer (Phase 4, лимит DI-Q13). */
+export const PERSON_LAYER_RETRIES = 1;
+
+export const ITEM_LAYER_CONTRACT =
+  "Render the objects as ONE compact cluster, fully inside the frame with clear margins on " +
+  "every side, nothing cropped by the edges, on a plain even light-gray studio background " +
+  "with strong contrast to the objects. No text, no logos, no characters.";
 
 /** Brand ITEM template (key = brand name) → bundle_default preset → built-in. */
 export async function buildBundleItemPrompt(brandName: string, userPrompt: string): Promise<string> {
@@ -344,9 +371,9 @@ export async function processPrepareVariantJob(bundleId: string, variantId: stri
   const refs = brand?.nanoRef?.referenceImages ?? [];
   const neuralPrompt = variant.bundle.neuralPrompt;
 
-  // 1) Shared PERSON (D11) — the existing person pipeline, full-body pose.
-  const personUserText =
-    `${neuralPrompt}\nFull-body character in a confident advertising pose, suitable for placement on a promo banner.`.trim();
+  // 1) Shared PERSON (D11) — the existing person pipeline + the layer contract
+  //    (Phase 2): full body, feet visible, even contrasty background.
+  const personUserText = `${neuralPrompt}\n${PERSON_LAYER_CONTRACT}`.trim();
   const personPrompt = await buildPersonPromptMemoized(bundleId, variant.brandName, personUserText);
   const personRun = await runPersonFal(personPrompt, refs, "3:4", brand?.imageModel ?? null);
   if (!personRun.success || !personRun.imageUrl) {
@@ -362,8 +389,8 @@ export async function processPrepareVariantJob(bundleId: string, variantId: stri
     return;
   }
 
-  // 2) Shared ITEM anchor (D12).
-  const itemPrompt = await buildBundleItemPrompt(variant.brandName, neuralPrompt);
+  // 2) Shared ITEM anchor (D12) + the layer contract (Phase 2).
+  const itemPrompt = `${await buildBundleItemPrompt(variant.brandName, neuralPrompt)} ${ITEM_LAYER_CONTRACT}`;
   const itemRun = await runPersonFal(itemPrompt, [], "1:1", null);
   if (!itemRun.success || !itemRun.imageUrl) {
     await failVariant(`item: ${itemRun.error ?? "unknown"}`);
@@ -378,66 +405,77 @@ export async function processPrepareVariantJob(bundleId: string, variantId: stri
     return;
   }
 
-  // 3) Transparent cutouts for the layer compositor (only when the type has
-  //    layered assets, D10 v2): background removed → re-uploaded; the public
-  //    ids are what the Cloudinary overlay references.
+  // 3) Normalized transparent layers (Phase 2, replaces the e_trim cutouts):
+  //    download → BR fallback when the source has no alpha → sharp alpha
+  //    cleanup + bbox-trim → deterministic Cloudinary asset cached by source
+  //    hash. personCutoutId/itemCutoutId keep pointing at the (now normalized)
+  //    cutouts so the current renderer works unchanged; the hashes let the
+  //    Phase 3 engine resolve exact bbox dimensions from NormalizedLayer.
   const typeAssets = variant.bundle.bundleType.assets as unknown as BundleTypeAsset[];
   let personCutoutId: string | null = null;
   let itemCutoutId: string | null = null;
+  let personLayerHash: string | null = null;
+  let itemLayerHash: string | null = null;
+  let personUrl = personUp.secure_url;
   if (typeAssets.some((a) => a.composeMode === "layered")) {
-    // `e_trim` cuts the transparent margins off the stored cutout, so the
-    // subject itself — not its original 3:4 canvas — is what c_fit scales
-    // into the zone box (otherwise the character renders far too small).
-    const personCut = await runBriaRemoveBg(personUp.secure_url);
-    if (!personCut.success || !personCut.imageUrl) {
-      await failVariant(`person cutout: ${personCut.error ?? "unknown"}`);
+    // Person layer with a sanity gate + bounded auto-retry (Phase 4, TASK
+    // «перегенерация проблемного слоя»): a broken cutout is regenerated HERE,
+    // before any asset render — all of the variant's assets stay consistent.
+    let personLayer = await getOrCreateNormalizedLayer(personUrl, `person#${variantId}`);
+    let sanity = personLayer.ok
+      ? personLayerSanity(personLayer.width, personLayer.height)
+      : { ok: false, reason: personLayer.reason };
+    for (let retry = 1; retry <= PERSON_LAYER_RETRIES && !sanity.ok; retry++) {
+      console.warn(`♻️ person layer retry ${retry}/${PERSON_LAYER_RETRIES} for ${variantId}: ${sanity.reason}`);
+      const rerun = await runPersonFal(personPrompt, refs, "3:4", brand?.imageModel ?? null);
+      if (!rerun.success || !rerun.imageUrl) {
+        await failVariant(`person retry: ${rerun.error ?? "unknown"}`);
+        return;
+      }
+      const reup = await withRetry(
+        () =>
+          uploadFromUrl(rerun.imageUrl!, `${variant.brandName}_person_${Date.now()}`, `bundles/${bundleId}`),
+        `bundle-person-retry#${variantId}`,
+      );
+      if (!reup.success || !reup.secure_url) {
+        await failVariant(`person retry upload: ${reup.error ?? "unknown"}`);
+        return;
+      }
+      personUrl = reup.secure_url;
+      personLayer = await getOrCreateNormalizedLayer(personUrl, `person#${variantId}`);
+      sanity = personLayer.ok
+        ? personLayerSanity(personLayer.width, personLayer.height)
+        : { ok: false, reason: personLayer.reason };
+    }
+    if (!personLayer.ok || !sanity.ok) {
+      await failVariant(
+        `person layer: ${sanity.reason} (после ${1 + PERSON_LAYER_RETRIES} попыток)`,
+      );
       return;
     }
-    const personCutUp = await withRetry(
-      () =>
-        uploadFromUrlTransformed(
-          personCut.imageUrl!,
-          `cut_person_${variantId}_${Date.now()}`,
-          `bundles/${bundleId}`,
-          "e_trim",
-        ),
-      `bundle-person-cut#${variantId}`,
-    );
-    if (!personCutUp.success || !personCutUp.public_id) {
-      await failVariant(`person cutout upload: ${personCutUp.error ?? "unknown"}`);
-      return;
-    }
-    personCutoutId = personCutUp.public_id;
+    personCutoutId = personLayer.publicId;
+    personLayerHash = personLayer.hash;
 
-    const itemCut = await runBriaRemoveBg(itemUp.secure_url);
-    if (!itemCut.success || !itemCut.imageUrl) {
-      await failVariant(`item cutout: ${itemCut.error ?? "unknown"}`);
+    const itemLayer = await getOrCreateNormalizedLayer(itemUp.secure_url, `item#${variantId}`);
+    if (!itemLayer.ok) {
+      await failVariant(`item cutout: ${itemLayer.reason}`);
       return;
     }
-    const itemCutUp = await withRetry(
-      () =>
-        uploadFromUrlTransformed(
-          itemCut.imageUrl!,
-          `cut_item_${variantId}_${Date.now()}`,
-          `bundles/${bundleId}`,
-          "e_trim",
-        ),
-      `bundle-item-cut#${variantId}`,
-    );
-    if (!itemCutUp.success || !itemCutUp.public_id) {
-      await failVariant(`item cutout upload: ${itemCutUp.error ?? "unknown"}`);
-      return;
-    }
-    itemCutoutId = itemCutUp.public_id;
+    itemCutoutId = itemLayer.publicId;
+    itemLayerHash = itemLayer.hash;
   }
 
   await prisma.bundleBrandVariant.update({
     where: { id: variantId },
     data: {
-      personImageUrl: personUp.secure_url,
+      // personUrl may point at a sanity-retry regeneration — every asset of
+      // the variant (email layers AND ai-mode push/popup) uses the same one.
+      personImageUrl: personUrl,
       itemImageUrl: itemUp.secure_url,
       personCutoutId,
       itemCutoutId,
+      personLayerHash,
+      itemLayerHash,
     },
   });
 
@@ -460,6 +498,169 @@ export async function processPrepareVariantJob(bundleId: string, variantId: stri
       data: { bundleId, variantId, assetId: a.id },
     })),
   );
+}
+
+// ------------------------------------------------------------------
+// Engine render (Phase 3): spec + normalized layers → deterministic composite.
+// ------------------------------------------------------------------
+
+type EngineRenderResult =
+  | { ok: true; imageUrl: string; metadata: Prisma.InputJsonValue }
+  // metadata on failure = the validator report for the CRM «почему не прошло».
+  | { ok: false; reason: string; metadata?: Prisma.InputJsonValue };
+
+/**
+ * Render a layered asset with the composition engine: static background
+ * (DI-Q6, обязателен), normalized layers resolved by hash, admin decor
+ * cutouts, seeded decor layout, @1x/@2x uploads with DETERMINISTIC public ids
+ * (re-render overwrites — no duplicates), metadata for the email template.
+ */
+async function renderLayeredWithEngine(opts: {
+  bundleId: string;
+  assetId: string;
+  assetKey: string;
+  variantId: string;
+  personLayerHash: string;
+  itemLayerHash: string | null;
+  config: BundleTypeAsset;
+  specRow: LayoutSpecRow;
+}): Promise<EngineRenderResult> {
+  const { specRow, config } = opts;
+  const spec = specRow.spec;
+
+  if (config.width !== spec.canvas.w || config.height !== spec.canvas.h) {
+    return {
+      ok: false,
+      reason: `canvas mismatch: asset config ${config.width}×${config.height} vs spec ${spec.canvas.w}×${spec.canvas.h}`,
+    };
+  }
+  // DI-Q6: the background is a static admin asset — never generated.
+  if (!config.templateUrl) {
+    return {
+      ok: false,
+      reason: `background: static template for "${opts.assetKey}" is not uploaded (Админка → Image Bundles — шаблоны типов)`,
+    };
+  }
+  const bg = await fetchBuffer(config.templateUrl);
+  if (!bg) return { ok: false, reason: "background: download failed" };
+
+  const loadLayer = async (hash: string, label: string): Promise<EngineLayer | { error: string }> => {
+    const row = await prisma.normalizedLayer.findUnique({ where: { sourceHash: hash } });
+    if (!row) return { error: `${label}: normalized layer missing — regenerate the bundle` };
+    const buf = await fetchBuffer(row.url);
+    if (!buf) return { error: `${label}: layer download failed` };
+    return { data: buf, width: row.width, height: row.height };
+  };
+
+  const person = await loadLayer(opts.personLayerHash, "person");
+  if ("error" in person) return { ok: false, reason: person.error };
+  let item: EngineLayer | undefined;
+  if (opts.itemLayerHash) {
+    const loaded = await loadLayer(opts.itemLayerHash, "item");
+    if ("error" in loaded) return { ok: false, reason: loaded.error };
+    item = loaded;
+  }
+
+  // Static decor cutouts — normalized + cached exactly like subject layers.
+  const decor: EngineLayer[] = [];
+  for (const [i, url] of (config.decorUrls ?? []).entries()) {
+    const norm = await getOrCreateNormalizedLayer(url, `decor${i}#${opts.assetKey}`);
+    if (!norm.ok) return { ok: false, reason: `decor[${i}]: ${norm.reason}` };
+    const buf = await fetchBuffer(norm.url);
+    if (!buf) return { ok: false, reason: `decor[${i}]: download failed` };
+    decor.push({ data: buf, width: norm.width, height: norm.height });
+  }
+
+  // Optional golden reference for the structural check (assets come in Phase 6).
+  let golden: Buffer | null = null;
+  if (config.goldenUrl) {
+    golden = await fetchBuffer(config.goldenUrl);
+    if (!golden) console.warn(`⚠️ golden download failed for ${opts.assetKey} — SSIM check skipped`);
+  }
+
+  // Same inputs → same seed → byte-identical composite. On a safe-zone
+  // violation caused by DECOR layout, re-seed and re-compose (переподбор
+  // раскладки, TASK Фаза 4); subject/background failures are deterministic —
+  // retrying the compose cannot change them, so we fail fast with the report.
+  const baseSeed = `${opts.assetId}:v${specRow.version}:${opts.personLayerHash}:${opts.itemLayerHash ?? ""}`;
+  const MAX_COMPOSE_ATTEMPTS = 3; // 1 + 2 пересева декора (лимит DI-Q13)
+  let composed: Awaited<ReturnType<typeof composeAsset>> | null = null;
+  let report: Awaited<ReturnType<typeof validateComposedAsset>> | null = null;
+  let attempts = 0;
+  for (let attempt = 0; attempt < MAX_COMPOSE_ATTEMPTS; attempt++) {
+    const seed = attempt === 0 ? baseSeed : `${baseSeed}:r${attempt}`;
+    const c = await composeAsset(
+      spec,
+      specRow.key,
+      specRow.version,
+      { background: bg, person, ...(item ? { item } : {}), decor },
+      seed,
+    );
+    if (!c.ok) return c;
+    const r = await validateComposedAsset(spec, {
+      scales: c.scales,
+      metadata: c.metadata,
+      overlayMask: c.overlayMask,
+      ...(golden ? { golden } : {}),
+    });
+    composed = c;
+    report = r;
+    attempts = attempt + 1;
+    if (r.passed) break;
+    const decorLayoutOnly =
+      decor.length > 0 &&
+      r.failedKeys.every((k) => k === "safe-core-clean" || k === "safe-coverage");
+    if (!decorLayoutOnly) break;
+    console.warn(`♻️ compose re-seed ${attempt + 1} for ${opts.assetKey}#${opts.assetId}: ${r.failedKeys.join(", ")}`);
+  }
+  if (!composed?.ok || !report) return { ok: false, reason: "compose: no attempt completed" };
+
+  const validatorMeta = { passed: report.passed, attempts, checks: report.checks };
+  if (!report.passed) {
+    const details = report.checks
+      .filter((c) => !c.passed)
+      .map((c) => `${c.key}: ${c.detail}`)
+      .join("; ");
+    return {
+      ok: false,
+      reason: `validation failed — ${details}`,
+      metadata: {
+        ...composed.metadata,
+        validator: validatorMeta,
+      } as unknown as Prisma.InputJsonValue,
+    };
+  }
+
+  const baseId = `${opts.variantId}_${opts.assetKey}_v${specRow.version}`;
+  const folder = `bundles/${opts.bundleId}`;
+  let imageUrl = "";
+  let retinaUrl: string | null = null;
+  for (const s of composed.scales) {
+    const publicId = s.scale === 1 ? baseId : `${baseId}_${s.scale}x`;
+    const up = await withRetry(
+      () => uploadBuffer(s.png, publicId, folder),
+      `engine#${opts.assetId}@${s.scale}x`,
+    );
+    if (!up.success || !up.secure_url) {
+      return { ok: false, reason: `upload@${s.scale}x: ${up.error ?? "unknown"}` };
+    }
+    if (s.scale === 1) imageUrl = up.secure_url;
+    else retinaUrl = up.secure_url;
+  }
+  if (!imageUrl) return { ok: false, reason: "upload: no base-scale output" };
+
+  const m = composed.metadata;
+  console.log(
+    `🎬 engine ${opts.assetKey}#${opts.assetId}: spec=${specRow.key}@v${specRow.version} ` +
+      `person=${JSON.stringify(m.layers.person)} item=${JSON.stringify(m.layers.item)} ` +
+      `decor=${m.layers.decorPlaced}/${decor.length} lum=${m.luminance} text=${m.recommendedTextColor} ` +
+      `validator=passed@${attempts}`,
+  );
+  return {
+    ok: true,
+    imageUrl,
+    metadata: { ...m, retinaUrl, validator: validatorMeta } as unknown as Prisma.InputJsonValue,
+  };
 }
 
 // ------------------------------------------------------------------
@@ -514,6 +715,59 @@ export async function processRenderAssetJob(
     if (!variant.personCutoutId) {
       await fail("missing person cutout — regenerate the bundle");
       return;
+    }
+
+    // Engine path (Phase 3): versioned spec + Phase 2 layer hashes → sharp
+    // composite with metadata. Bundles rendered before Phase 2 have no layer
+    // hashes and fall through to the legacy Cloudinary compose below.
+    const specKey =
+      config.layoutSpecKey ?? (asset.assetKey === "email" ? EMAIL_HERO_KEY : null);
+    if (specKey && variant.personLayerHash) {
+      let specRow: LayoutSpecRow | null = null;
+      try {
+        specRow = await getActiveLayoutSpec(specKey);
+      } catch (err) {
+        await fail(
+          `layout spec "${specKey}" is corrupted: ${err instanceof Error ? err.message : String(err)}`,
+        );
+        return;
+      }
+      if (specRow) {
+        const done = await renderLayeredWithEngine({
+          bundleId,
+          assetId,
+          assetKey: asset.assetKey,
+          variantId,
+          personLayerHash: variant.personLayerHash,
+          itemLayerHash: variant.itemLayerHash,
+          config,
+          specRow,
+        });
+        if (!done.ok) {
+          // Keep the validator report on the FAILED asset — the CRM shows WHY.
+          await prisma.bundleAsset.update({
+            where: { id: assetId },
+            data: {
+              status: "FAILED",
+              errorMessage: done.reason,
+              ...(done.metadata !== undefined ? { metadata: done.metadata } : {}),
+            },
+          });
+          await recomputeBundleStatus(bundleId);
+          return;
+        }
+        await prisma.bundleAsset.update({
+          where: { id: assetId },
+          data: {
+            status: "DONE",
+            imageUrl: done.imageUrl,
+            metadata: done.metadata,
+            errorMessage: null,
+          },
+        });
+        await recomputeBundleStatus(bundleId);
+        return;
+      }
     }
 
     // Background layer: the admin template when set, else a generated
