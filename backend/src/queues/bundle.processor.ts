@@ -10,7 +10,6 @@ import { validateComposedAsset, personLayerSanity } from "../lib/assetValidator.
 import {
   composeLayersUrl,
   uploadBuffer,
-  withTransform,
   uploadFromUrl,
   uploadFromUrlTransformed,
   withRetry,
@@ -624,20 +623,31 @@ async function renderLayeredWithEngine(opts: {
   // retrying the compose cannot change them, so we fail fast with the report.
   const baseSeed = `${opts.assetId}:v${specRow.version}:${opts.personLayerHash}:${opts.itemLayerHash ?? ""}`;
   const MAX_COMPOSE_ATTEMPTS = 3; // 1 + 2 пересева декора (лимит DI-Q13)
+
+  // Canonical size only (D-E7): a spec that still lists retina scales renders
+  // and stores just the smallest one, so no `_2x` twin appears in Cloudinary.
+  const canonicalScale = Math.min(...spec.canvas.scales);
+  if (spec.canvas.scales.length > 1) {
+    console.log(
+      `ℹ️ ${opts.assetKey}#${opts.assetId}: spec lists scales ${spec.canvas.scales.join(",")} — ` +
+        `rendering @${canonicalScale}x only (retina copies disabled)`,
+    );
+  }
+  const renderSpec = { ...spec, canvas: { ...spec.canvas, scales: [canonicalScale] as [number] } };
   let composed: Awaited<ReturnType<typeof composeAsset>> | null = null;
   let report: Awaited<ReturnType<typeof validateComposedAsset>> | null = null;
   let attempts = 0;
   for (let attempt = 0; attempt < MAX_COMPOSE_ATTEMPTS; attempt++) {
     const seed = attempt === 0 ? baseSeed : `${baseSeed}:r${attempt}`;
     const c = await composeAsset(
-      spec,
+      renderSpec,
       specRow.key,
       specRow.version,
       { ...(bg ? { background: bg } : {}), person, itemPieces, decor },
       seed,
     );
     if (!c.ok) return c;
-    const r = await validateComposedAsset(spec, {
+    const r = await validateComposedAsset(renderSpec, {
       scales: c.scales,
       metadata: c.metadata,
       overlayMask: c.overlayMask,
@@ -647,8 +657,10 @@ async function renderLayeredWithEngine(opts: {
     report = r;
     attempts = attempt + 1;
     if (r.passed) break;
+    // Re-seeding only helps when there IS something scattered — static decor
+    // or the item pieces cut out of the generation.
     const decorLayoutOnly =
-      decor.length > 0 &&
+      decor.length + itemPieces.length > 0 &&
       r.failedKeys.every((k) => k === "safe-core-clean" || k === "safe-coverage");
     if (!decorLayoutOnly) break;
     console.warn(`♻️ compose re-seed ${attempt + 1} for ${opts.assetKey}#${opts.assetId}: ${r.failedKeys.join(", ")}`);
@@ -671,14 +683,12 @@ async function renderLayeredWithEngine(opts: {
     };
   }
 
-  // ONE stored file per asset: the largest scale is the master, every smaller
-  // size is a Cloudinary transformation of it (derived on demand, cached, and
-  // a downscale of the 2x master beats a separately rendered 1x). Halves the
-  // storage the bundle occupies; the deterministic public id keeps re-renders
-  // overwriting instead of piling up.
+  // ONE stored file per asset — the canonical size (D-E7): retina copies are
+  // not rendered and not uploaded. The deterministic public id keeps
+  // re-renders overwriting instead of piling up.
   const baseId = `${opts.variantId}_${opts.assetKey}_v${specRow.version}`;
   const folder = `bundles/${opts.bundleId}`;
-  const master = composed.scales.reduce((a, b) => (b.scale > a.scale ? b : a));
+  const master = composed.scales.reduce((a, b) => (b.scale < a.scale ? b : a));
   const masterId = master.scale === 1 ? baseId : `${baseId}_${master.scale}x`;
   const up = await withRetry(
     () => uploadBuffer(master.png, masterId, folder),
@@ -687,11 +697,8 @@ async function renderLayeredWithEngine(opts: {
   if (!up.success || !up.secure_url) {
     return { ok: false, reason: `upload@${master.scale}x: ${up.error ?? "unknown"}` };
   }
-  const imageUrl =
-    master.scale === 1
-      ? up.secure_url
-      : withTransform(up.secure_url, `c_scale,w_${spec.canvas.w},h_${spec.canvas.h}`);
-  const retinaUrl = master.scale === 1 ? null : up.secure_url;
+  const imageUrl = up.secure_url;
+  const retinaUrl = null;
 
   const m = composed.metadata;
   console.log(
