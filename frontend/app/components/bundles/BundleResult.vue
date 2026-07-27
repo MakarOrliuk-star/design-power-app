@@ -524,6 +524,16 @@ function formatDateTime(iso: string | null): string {
   height: 100%;
   object-fit: cover;
   display: block;
+  /* Assets ship with an alpha channel — the checkerboard behind the image is
+     what makes the empty areas readable as transparent rather than white. */
+  background-color: #fff;
+  background-image:
+    linear-gradient(45deg, #d4d4d4 25%, transparent 25%),
+    linear-gradient(-45deg, #d4d4d4 25%, transparent 25%),
+    linear-gradient(45deg, transparent 75%, #d4d4d4 75%),
+    linear-gradient(-45deg, transparent 75%, #d4d4d4 75%);
+  background-size: 16px 16px;
+  background-position: 0 0, 0 8px, 8px -8px, -8px 0;
 }
 .asset__placeholder {
   display: flex;

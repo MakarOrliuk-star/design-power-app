@@ -58,13 +58,17 @@ export const layoutSpecSchema = z.object({
     // Output scale factors: [1, 2] → 1200×600 + 2400×1200 retina (D-E2).
     scales: z.array(z.number().int().min(1).max(4)).nonempty(),
   }),
-  // DI-Q6: the background is a static admin-uploaded asset shared by all
-  // brands; the engine never generates it.
-  background: z.object({ source: z.enum(["static"]) }),
+  // "transparent" (DI-Q6 v2, требование заказчика): the asset is delivered as
+  // an alpha PNG — subjects and decor on an empty canvas, the письмо/пуш puts
+  // its own background underneath. "static" keeps the admin-uploaded neutral
+  // background baked in. The engine never GENERATES a background either way.
+  background: z.object({ source: z.enum(["transparent", "static"]) }),
   // Common ground line both subjects stand on, fraction of canvas height.
   baseline: frac,
   subjects: z.object({
-    item: subjectSpecSchema,
+    // Optional: push/pop-up (эталоны 2026-07-27) have no standing item cluster
+    // — every object is scattered decor around the centered character.
+    item: subjectSpecSchema.optional(),
     person: subjectSpecSchema,
   }),
   // Optional: push/popup have no protected text area (their specs omit it).
@@ -84,8 +88,20 @@ export const layoutSpecSchema = z.object({
       bands: z.array(rectSchema),
       // Max decor element height, fraction of canvas height.
       maxItemSize: frac,
+      // Min decor element height — keeps scattered props from shrinking into
+      // specks on large bands (fraction of canvas height).
+      minItemSize: frac.optional(),
       // Layout randomness must be seeded per asset → reproducible.
       seeded: z.literal(true),
+      // Where the scattered props come from: admin-uploaded PNGs ("static"),
+      // the connected blobs of the generated ITEM layer ("item"), or both.
+      // "item" is what the push/pop-up эталоны show: A/J/Q letters and
+      // banknotes cut out of one generation and thrown around the character.
+      source: z.enum(["static", "item", "static+item"]).optional(),
+      // Cap on scattered props per asset (the splitter can return more).
+      maxPieces: z.number().int().min(0).max(24).optional(),
+      // Seeded tilt of each prop, ±degrees (эталоны: notes/letters ~±25°).
+      rotationMaxDeg: z.number().min(0).max(180).optional(),
     })
     .optional(),
   // Validator thresholds (Phase 4). Optional — the validator falls back to
@@ -165,6 +181,124 @@ export const EMAIL_HERO_V1: LayoutSpecData = {
     maxLuminanceStd: 0.16,
     minSsim: 0.55,
   },
+};
+
+/**
+ * email.hero v2 — доставка с ПРОЗРАЧНЫМ фоном (требование заказчика, отменяет
+ * DI-Q6 «общий статичный фон»): ассет отдаётся PNG с альфой, фон под текстом
+ * кладёт письмо. Геометрия та же, кроме допуска item влево: 6% вместо 4% —
+ * это значение и было зафиксировано в Фазе 0 (DI-Q5), а широкая гроздь
+ * объектов при 4% упиралась в ширину зоны и не добирала минимальную высоту.
+ */
+export const EMAIL_HERO_V2: LayoutSpecData = {
+  ...EMAIL_HERO_V1,
+  background: { source: "transparent" },
+  subjects: {
+    ...EMAIL_HERO_V1.subjects,
+    item: {
+      ...EMAIL_HERO_V1.subjects.item!,
+      overflow: { ...EMAIL_HERO_V1.subjects.item!.overflow, left: 0.06 },
+    },
+  },
+  // Эталон email: крупный предмет стоит слева, а мелочь (монеты, купюры,
+  // проценты) разбросана по периферии — это те же куски ITEM-слоя, что и в
+  // push/pop-up, только самый крупный из них становится левым субъектом.
+  decor: {
+    ...EMAIL_HERO_V1.decor!,
+    minItemSize: 0.1,
+    source: "static+item",
+    maxPieces: 4,
+    rotationMaxDeg: 15,
+  },
+};
+
+// ------------------------------------------------------------------
+// push / pop-up — те же структуры, что и email (TASK Фаза 1: «модель обязана
+// их принимать»). Раскладка повторяет ai-режим этих типов: персонаж по центру
+// во весь рост, объекты слева, декор по краям, защищённой зоны под текст НЕТ.
+// Фон прозрачный. Значения — первая калибровка «от описания», а не от эталона:
+// правятся в админке новой версией, без деплоя.
+// ------------------------------------------------------------------
+
+/**
+ * push.hero v1 — откалибровано по `figma/crm-bundle/push-эталон.png`
+ * (1024×512, пиксельный скан 2026-07-27, фон-подложка отфильтрована по цвету):
+ *   - персонаж по центру, x 0.29–0.69, y 0.025–0.949 → высота ≈0.92 H,
+ *     базовая линия ≈0.95 H (низ не подрезан краем);
+ *   - реквизит (буквы A/J/Q, купюры) разбросан по левой и правой третям,
+ *     высоты 0.12–0.38 H, часть подрезана краями холста, наклон ~±25°;
+ *   - защищённой зоны под текст нет.
+ */
+export const PUSH_HERO_KEY = "push.hero";
+
+export const PUSH_HERO_V1: LayoutSpecData = {
+  canvas: { w: 1024, h: 512, scales: [1, 2] },
+  background: { source: "transparent" },
+  baseline: 0.95,
+  subjects: {
+    person: {
+      zone: { x: 0.28, y: 0, w: 0.44, h: 1 },
+      anchor: "bottom-center",
+      fitHeight: { min: 0.85, target: 0.92, max: 0.98 },
+      overflow: { left: 0.04, right: 0.04, top: 0, bottom: 0.02 },
+    },
+  },
+  decor: {
+    // Левая и правая трети, вплотную к краям (в эталоне купюры подрезаны).
+    bands: [
+      { x: 0.02, y: 0.04, w: 0.26, h: 0.9 },
+      { x: 0.7, y: 0.04, w: 0.28, h: 0.9 },
+    ],
+    maxItemSize: 0.38,
+    minItemSize: 0.14,
+    seeded: true,
+    source: "static+item",
+    maxPieces: 6,
+    rotationMaxDeg: 25,
+  },
+  validation: { minSsim: 0.55 },
+};
+
+/**
+ * popup.hero v1 — откалибровано по `figma/crm-bundle/pop-up эталон.png`
+ * (800×600, тот же скан): персонаж по центру x 0.28–0.72, y 0.072–0.948 →
+ * высота ≈0.88 H на базовой линии ≈0.95 H; реквизит 0.10–0.35 H по левому и
+ * правому краям, часть уходит за край; защищённой зоны нет.
+ */
+export const POPUP_HERO_KEY = "popup.hero";
+
+export const POPUP_HERO_V1: LayoutSpecData = {
+  canvas: { w: 800, h: 600, scales: [1, 2] },
+  background: { source: "transparent" },
+  baseline: 0.95,
+  subjects: {
+    person: {
+      zone: { x: 0.28, y: 0, w: 0.44, h: 1 },
+      anchor: "bottom-center",
+      fitHeight: { min: 0.8, target: 0.88, max: 0.95 },
+      overflow: { left: 0.04, right: 0.04, top: 0, bottom: 0.02 },
+    },
+  },
+  decor: {
+    bands: [
+      { x: 0, y: 0.06, w: 0.28, h: 0.88 },
+      { x: 0.72, y: 0.06, w: 0.28, h: 0.88 },
+    ],
+    maxItemSize: 0.35,
+    minItemSize: 0.13,
+    seeded: true,
+    source: "static+item",
+    maxPieces: 6,
+    rotationMaxDeg: 25,
+  },
+  validation: { minSsim: 0.55 },
+};
+
+/** assetKey → spec key when the bundle type config does not pin one. */
+export const SPEC_KEY_BY_ASSET: Record<string, string> = {
+  email: EMAIL_HERO_KEY,
+  push: PUSH_HERO_KEY,
+  popup: POPUP_HERO_KEY,
 };
 
 // ------------------------------------------------------------------

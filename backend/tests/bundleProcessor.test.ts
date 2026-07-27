@@ -30,6 +30,7 @@ const queue = vi.hoisted(() => ({ addBulk: vi.fn() }));
 const recompute = vi.hoisted(() => vi.fn());
 const layerCache = vi.hoisted(() => ({ getOrCreateNormalizedLayer: vi.fn(), fetchBuffer: vi.fn() }));
 const engine = vi.hoisted(() => ({ composeAsset: vi.fn() }));
+const split = vi.hoisted(() => ({ splitLayerPieces: vi.fn() }));
 const validator = vi.hoisted(() => ({
   validateComposedAsset: vi.fn(),
   personLayerSanity: vi.fn(),
@@ -41,6 +42,7 @@ vi.mock("../src/lib/cloudinary.js", () => cloud);
 vi.mock("../src/lib/imageSize.js", () => imageSize);
 vi.mock("../src/services/layerCache.js", () => layerCache);
 vi.mock("../src/lib/composeEngine.js", () => engine);
+vi.mock("../src/lib/layerSplit.js", () => split);
 vi.mock("../src/lib/assetValidator.js", () => validator);
 vi.mock("../src/queues/index.js", () => ({ getBundleQueue: () => queue }));
 vi.mock("../src/queues/person.processor.js", () => ({
@@ -48,7 +50,7 @@ vi.mock("../src/queues/person.processor.js", () => ({
 }));
 vi.mock("../src/services/bundle.service.js", () => ({ recomputeBundleStatus: recompute }));
 
-import { EMAIL_HERO_V1 } from "../src/services/layoutSpec.js";
+import { EMAIL_HERO_V1, EMAIL_HERO_V2 } from "../src/services/layoutSpec.js";
 import {
   backgroundPrompt,
   buildBundleItemPrompt,
@@ -76,6 +78,12 @@ beforeEach(() => {
   layerCache.getOrCreateNormalizedLayer.mockReset();
   layerCache.fetchBuffer.mockReset();
   engine.composeAsset.mockReset();
+  split.splitLayerPieces.mockReset();
+  // Default: the item layer holds two separate props (hero + one prop).
+  split.splitLayerPieces.mockResolvedValue([
+    { png: Buffer.from("piece0"), width: 300, height: 400, area: 90000 },
+    { png: Buffer.from("piece1"), width: 120, height: 120, area: 12000 },
+  ]);
   cloud.uploadBuffer.mockReset();
   validator.validateComposedAsset.mockReset();
   validator.personLayerSanity.mockReset();
@@ -846,6 +854,44 @@ describe("processRenderAssetJob — engine path (Phase 3)", () => {
     });
     // Фон НЕ генерится нейросетью даже при отсутствии шаблона (DI-Q6).
     expect(fal.runPersonFal).not.toHaveBeenCalled();
+  });
+
+  it("transparent spec renders without any background template at all", async () => {
+    const noTemplate = structuredClone(engineAsset);
+    delete (noTemplate.variant.bundle.bundleType.assets[0] as Record<string, unknown>).templateUrl;
+    db.bundleAsset.findUnique.mockResolvedValue(noTemplate);
+    db.layoutSpec.findFirst.mockResolvedValue({ ...specRow, version: 2, spec: EMAIL_HERO_V2 });
+    db.normalizedLayer.findUnique
+      .mockResolvedValueOnce({ url: "https://cdn/layers/p.png", width: 900, height: 1400 })
+      .mockResolvedValueOnce({ url: "https://cdn/layers/i.png", width: 800, height: 800 });
+    layerCache.fetchBuffer.mockResolvedValue(Buffer.from("img"));
+    engine.composeAsset.mockResolvedValue({
+      ok: true,
+      scales: [
+        { scale: 1, width: 1200, height: 600, png: Buffer.from("1x") },
+        { scale: 2, width: 2400, height: 1200, png: Buffer.from("2x") },
+      ],
+      metadata: {
+        specKey: "email.hero",
+        specVersion: 2,
+        luminance: null,
+        recommendedTextColor: null,
+        layers: { person: { x: 840, y: 72, w: 309, h: 480 }, item: null, decorPlaced: 0, decorSkipped: 0 },
+      },
+    });
+    cloud.uploadBuffer
+      .mockResolvedValueOnce({ success: true, secure_url: "https://cdn/final.png" })
+      .mockResolvedValueOnce({ success: true, secure_url: "https://cdn/final_2x.png" });
+
+    await processRenderAssetJob("bun1", "v1", "a1");
+
+    // The engine is handed layers only — no background input, none downloaded.
+    expect(engine.composeAsset).toHaveBeenCalled();
+    expect(engine.composeAsset.mock.calls[0]![3].background).toBeUndefined();
+    expect(db.bundleAsset.update).toHaveBeenLastCalledWith({
+      where: { id: "a1" },
+      data: expect.objectContaining({ status: "DONE", imageUrl: "https://cdn/final.png" }),
+    });
   });
 
   it("falls back to the legacy Cloudinary compose for pre-Phase 2 bundles (no layer hashes)", async () => {

@@ -111,24 +111,32 @@ export function computeDecorPlacements(
   const decorSpec = spec.decor;
   if (!decorSpec || decorSpec.bands.length === 0) return decorDims.map(() => null);
   const cores = (spec.safe?.coreRects ?? []).map((r) => fracRect(r, canvasW, canvasH));
+  // Props scatter between minItemSize and maxItemSize of the canvas height;
+  // without a min they keep the historical 55–100% of max spread.
+  const minSize = decorSpec.minItemSize ?? decorSpec.maxItemSize * 0.55;
 
+  // Props must not pile up on each other either (эталоны: они разнесены), so
+  // every placement is also checked against the ones already placed.
+  const placed: Box[] = [];
   return decorDims.map((dim, i) => {
     const band = fracRect(decorSpec.bands[i % decorSpec.bands.length]!, canvasW, canvasH);
-    // Element size: 55–100% of maxItemSize (seeded), clamped into the band.
-    const sizeFactor = 0.55 + rand() * 0.45;
-    let h = Math.min(sizeFactor * decorSpec.maxItemSize * canvasH, band.h);
+    const sizeFactor = minSize + rand() * Math.max(0, decorSpec.maxItemSize - minSize);
+    let h = Math.min(sizeFactor * canvasH, band.h);
     let w = (dim.width / dim.height) * h;
     if (w > band.w) {
       w = band.w;
       h = (dim.height / dim.width) * w;
     }
-    for (let attempt = 0; attempt < 8; attempt++) {
+    for (let attempt = 0; attempt < 24; attempt++) {
       const x = band.x + rand() * (band.w - w);
       const y = band.y + rand() * (band.h - h);
       const box = { x, y, w, h };
-      if (!cores.some((c) => intersects(box, c))) return box;
+      if (cores.some((c) => intersects(box, c))) continue;
+      if (placed.some((p) => intersects(box, p))) continue;
+      placed.push(box);
+      return box;
     }
-    return null; // could not place without touching a text envelope → skip
+    return null; // no room left without collisions → skip this prop
   });
 }
 
@@ -154,10 +162,19 @@ export interface EngineLayer {
 }
 
 export interface ComposeInputs {
-  background: Bytes; // static admin asset (DI-Q6), any size — cover-resized
+  /** Static admin asset (any size — cover-resized). Required only when the
+   *  spec says `background.source === "static"`; with "transparent" the asset
+   *  ships as an alpha PNG and this must be absent. */
+  background?: Bytes;
   person: EngineLayer;
+  /** Explicit item subject. When absent, the largest item PIECE takes the
+   *  role (the spec decides whether there is an item subject at all). */
   item?: EngineLayer;
+  /** Admin-uploaded static decor cutouts. */
   decor?: EngineLayer[];
+  /** Connected blobs of the generated ITEM layer, largest first (layerSplit) —
+   *  the props the эталоны scatter around the character. */
+  itemPieces?: EngineLayer[];
 }
 
 export interface AssetMetadata {
@@ -295,6 +312,13 @@ export async function composeAsset(
   const W = spec.canvas.w;
   const H = spec.canvas.h;
 
+  const wantsBackground = spec.background.source === "static";
+  if (wantsBackground && !inputs.background) {
+    return { ok: false, reason: "background: spec requires a static background, none supplied" };
+  }
+  // The spec — not the caller — decides whether a background is baked in.
+  const background = wantsBackground ? inputs.background : undefined;
+
   const personBox = computeSubjectPlacement(
     spec.subjects.person,
     inputs.person.width,
@@ -303,22 +327,57 @@ export async function composeAsset(
     H,
     spec.baseline,
   );
-  const itemBox = inputs.item
-    ? computeSubjectPlacement(
-        spec.subjects.item,
-        inputs.item.width,
-        inputs.item.height,
-        W,
-        H,
-        spec.baseline,
-      )
-    : null;
+  // Item pieces (layerSplit): with an item subject in the spec the LARGEST
+  // piece stands in its zone — как рожок в эталоне email — and the rest become
+  // scattered props; without one (push/pop-up) every piece is a prop.
+  const pieces = inputs.itemPieces ?? [];
+  const itemSubject = spec.subjects.item ? (inputs.item ?? pieces[0]) : undefined;
+  const leftoverPieces = inputs.item || !spec.subjects.item ? pieces : pieces.slice(1);
+
+  const itemBox =
+    spec.subjects.item && itemSubject
+      ? computeSubjectPlacement(
+          spec.subjects.item,
+          itemSubject.width,
+          itemSubject.height,
+          W,
+          H,
+          spec.baseline,
+        )
+      : null;
 
   const rand = mulberry32(seedToInt(seedStr));
-  const decor = inputs.decor ?? [];
+  const decorSource = spec.decor?.source ?? "static";
+  const decorAll = [
+    ...(decorSource === "static" || decorSource === "static+item" ? (inputs.decor ?? []) : []),
+    ...(decorSource === "item" || decorSource === "static+item" ? leftoverPieces : []),
+  ];
+  const decor = decorAll.slice(0, spec.decor?.maxPieces ?? decorAll.length);
+
+  // Seeded tilt per prop (эталоны: буквы и купюры лежат под углом). Rotating
+  // BEFORE placement keeps the placement math working on the real bbox.
+  const maxTilt = spec.decor?.rotationMaxDeg ?? 0;
+  const decorLayers: EngineLayer[] = [];
+  for (const layer of decor) {
+    const angle = maxTilt > 0 ? Math.round((rand() * 2 - 1) * maxTilt) : 0;
+    if (angle === 0) {
+      decorLayers.push(layer);
+      continue;
+    }
+    const rotated = await sharp(layer.data)
+      .rotate(angle, { background: { r: 0, g: 0, b: 0, alpha: 0 } })
+      .png(PNG_OPTS)
+      .toBuffer({ resolveWithObject: true });
+    decorLayers.push({
+      data: rotated.data,
+      width: rotated.info.width,
+      height: rotated.info.height,
+    });
+  }
+
   const decorBoxes = computeDecorPlacements(
     spec,
-    decor.map((d) => ({ width: d.width, height: d.height })),
+    decorLayers.map((d) => ({ width: d.width, height: d.height })),
     W,
     H,
     rand,
@@ -342,20 +401,24 @@ export async function composeAsset(
       const mul = (b: Box): Box => ({ x: b.x * scale, y: b.y * scale, w: b.w * scale, h: b.h * scale });
 
       // z-order (TASK §3.1): background → decor → item → person.
-      for (let i = 0; i < decor.length; i++) {
+      for (let i = 0; i < decorLayers.length; i++) {
         const box = decorBoxes[i];
-        if (box) overlays = await overlay(overlays, decor[i]!, mul(box), sw, sh);
+        if (box) overlays = await overlay(overlays, decorLayers[i]!, mul(box), sw, sh);
       }
-      if (inputs.item && itemBox) overlays = await overlay(overlays, inputs.item, mul(itemBox), sw, sh);
+      if (itemSubject && itemBox) overlays = await overlay(overlays, itemSubject, mul(itemBox), sw, sh);
       overlays = await overlay(overlays, inputs.person, mul(personBox), sw, sh);
       if (scale === 1) overlayMask = overlays;
 
-      const canvas: Bytes = await sharp(inputs.background)
-        .resize(sw, sh, { fit: "cover", position: "centre", kernel: "lanczos3" })
-        .ensureAlpha()
-        .composite([{ input: overlays, left: 0, top: 0 }])
-        .png(PNG_OPTS)
-        .toBuffer();
+      // Transparent delivery: the overlay stack IS the asset — an alpha PNG of
+      // the canonical size, empty everywhere the layers do not cover.
+      const canvas: Bytes = background
+        ? await sharp(background)
+            .resize(sw, sh, { fit: "cover", position: "centre", kernel: "lanczos3" })
+            .ensureAlpha()
+            .composite([{ input: overlays, left: 0, top: 0 }])
+            .png(PNG_OPTS)
+            .toBuffer()
+        : overlays;
 
       scales.push({ scale, width: sw, height: sh, png: canvas });
     }
@@ -382,6 +445,13 @@ export async function composeAsset(
       w: Math.round(z.w * 1000) / 10,
       h: Math.round(z.h * 1000) / 10,
     };
+  }
+  // Luminance/contrast describe the BACKGROUND under the text. With a
+  // transparent asset that background belongs to the письмо, not to us — the
+  // numbers would be measured against empty pixels, so they stay null and the
+  // validator's readability check (gated on textContrast) is skipped.
+  if (spec.safe && wantsBackground) {
+    const z = spec.safe.zone;
     // Readability is measured where the TEXT actually sits — per core rect,
     // worst case governs (decor bands inside the safe zone must not skew it).
     const regions = spec.safe.coreRects.length > 0 ? spec.safe.coreRects : [z];

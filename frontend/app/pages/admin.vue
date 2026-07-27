@@ -1423,9 +1423,12 @@ onMounted(() => {
     <section v-if="auth.isAdmin" class="panel">
       <h2>Image Bundles — шаблоны типов</h2>
       <p class="muted">
-        Фон-шаблон подаётся генерации первым референсом: модель копирует его композицию
-        (email — персонаж справа, объекты слева, центр пустой под текст). Загружайте чистые
-        макеты <b>без текста и логотипов</b> — надписи с шаблона просочатся в креативы.
+        Загружайте чистые макеты <b>без текста и логотипов</b> — надписи просочатся в креативы.
+        Смысл картинки зависит от режима сборки: в <b>AI-сборке</b> она подаётся генерации первым
+        референсом (модель копирует композицию), а в режиме <b>Слои</b> это <b>реальный фон</b>
+        готового баннера — нейтральная студия в пропорциях холста, поверх неё движок кладёт
+        декор, item и персонажа. Для layered-ассета фон <b>обязателен</b>: без него рендер
+        падает с «static template … is not uploaded».
       </p>
       <div v-for="t in bundleTypes" :key="t.id" class="bt">
         <h3 class="bt__title">{{ t.title }} <span class="muted">({{ t.key }})</span></h3>
@@ -1437,6 +1440,9 @@ onMounted(() => {
             </div>
             <div class="bt__preview" :style="{ aspectRatio: `${a.width} / ${a.height}` }">
               <img v-if="a.templateUrl" :src="a.templateUrl" :alt="`Шаблон ${a.label}`" />
+              <span v-else-if="a.composeMode === 'layered'" class="muted">
+                нет фона — рендер этого ассета упадёт
+              </span>
               <span v-else class="muted">нет шаблона — генерация по промпту</span>
             </div>
             <div class="bt__actions">
