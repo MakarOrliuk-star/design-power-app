@@ -118,7 +118,8 @@ describe("transparent specs — email v2, push, pop-up", () => {
     expect([POPUP_HERO_V1.canvas.w, POPUP_HERO_V1.canvas.h]).toEqual([800, 600]);
     for (const s of [EMAIL_HERO_V2, PUSH_HERO_V1, POPUP_HERO_V1]) {
       expect(layoutSpecSchema.safeParse(s).success).toBe(true);
-      expect(s.canvas.scales).toEqual([1, 2]); // @2x retina (D-E2)
+      // Single scale → single stored file (D-E7 + отказ от retina-копий).
+      expect(s.canvas.scales).toEqual([1]);
     }
   });
 

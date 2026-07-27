@@ -10,6 +10,7 @@ import { validateComposedAsset, personLayerSanity } from "../lib/assetValidator.
 import {
   composeLayersUrl,
   uploadBuffer,
+  withTransform,
   uploadFromUrl,
   uploadFromUrlTransformed,
   withRetry,
@@ -550,7 +551,14 @@ async function renderLayeredWithEngine(opts: {
     if (!config.templateUrl) {
       return {
         ok: false,
-        reason: `background: static template for "${opts.assetKey}" is not uploaded (Админка → Image Bundles — шаблоны типов)`,
+        // Name the spec: "no template" is a CONSEQUENCE of the active version
+        // asking for a baked-in background. Switching that version to
+        // `background.source: "transparent"` is the other way out.
+        reason:
+          `background: spec ${specRow.key}@v${specRow.version} requires a static background, ` +
+          `but no template is uploaded for "${opts.assetKey}" — either upload one ` +
+          `(Админка → Image Bundles — шаблоны типов) or activate a spec version with ` +
+          `"background": {"source": "transparent"} (Админка → Композиция — layout-спеки)`,
       };
     }
     const loaded = await fetchBuffer(config.templateUrl);
@@ -663,23 +671,27 @@ async function renderLayeredWithEngine(opts: {
     };
   }
 
+  // ONE stored file per asset: the largest scale is the master, every smaller
+  // size is a Cloudinary transformation of it (derived on demand, cached, and
+  // a downscale of the 2x master beats a separately rendered 1x). Halves the
+  // storage the bundle occupies; the deterministic public id keeps re-renders
+  // overwriting instead of piling up.
   const baseId = `${opts.variantId}_${opts.assetKey}_v${specRow.version}`;
   const folder = `bundles/${opts.bundleId}`;
-  let imageUrl = "";
-  let retinaUrl: string | null = null;
-  for (const s of composed.scales) {
-    const publicId = s.scale === 1 ? baseId : `${baseId}_${s.scale}x`;
-    const up = await withRetry(
-      () => uploadBuffer(s.png, publicId, folder),
-      `engine#${opts.assetId}@${s.scale}x`,
-    );
-    if (!up.success || !up.secure_url) {
-      return { ok: false, reason: `upload@${s.scale}x: ${up.error ?? "unknown"}` };
-    }
-    if (s.scale === 1) imageUrl = up.secure_url;
-    else retinaUrl = up.secure_url;
+  const master = composed.scales.reduce((a, b) => (b.scale > a.scale ? b : a));
+  const masterId = master.scale === 1 ? baseId : `${baseId}_${master.scale}x`;
+  const up = await withRetry(
+    () => uploadBuffer(master.png, masterId, folder),
+    `engine#${opts.assetId}@${master.scale}x`,
+  );
+  if (!up.success || !up.secure_url) {
+    return { ok: false, reason: `upload@${master.scale}x: ${up.error ?? "unknown"}` };
   }
-  if (!imageUrl) return { ok: false, reason: "upload: no base-scale output" };
+  const imageUrl =
+    master.scale === 1
+      ? up.secure_url
+      : withTransform(up.secure_url, `c_scale,w_${spec.canvas.w},h_${spec.canvas.h}`);
+  const retinaUrl = master.scale === 1 ? null : up.secure_url;
 
   const m = composed.metadata;
   console.log(

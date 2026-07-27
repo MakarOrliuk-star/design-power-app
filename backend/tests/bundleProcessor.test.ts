@@ -20,6 +20,14 @@ const cloud = vi.hoisted(() => ({
   uploadFromUrlTransformed: vi.fn(),
   uploadBuffer: vi.fn(),
   composeLayersUrl: vi.fn(() => "https://res.cloudinary/composed.png"),
+  // Pure URL math — kept real so the emitted @1x delivery URL is asserted for
+  // what it actually is, not for a stub.
+  withTransform: vi.fn((url: string, transform: string) => {
+    const marker = "/image/upload/";
+    const at = url.indexOf(marker);
+    if (at < 0) return url;
+    return `${url.slice(0, at + marker.length)}${transform}/${url.slice(at + marker.length)}`;
+  }),
   withRetry: vi.fn((fn: () => unknown) => fn()),
 }));
 const imageSize = vi.hoisted(() => ({
@@ -810,24 +818,29 @@ describe("processRenderAssetJob — engine path (Phase 3)", () => {
         layers: { person: { x: 840, y: 72, w: 309, h: 480 }, item: null, decorPlaced: 0, decorSkipped: 0 },
       },
     });
-    cloud.uploadBuffer
-      .mockResolvedValueOnce({ success: true, secure_url: "https://cdn/final.png" })
-      .mockResolvedValueOnce({ success: true, secure_url: "https://cdn/final_2x.png" });
+    cloud.uploadBuffer.mockResolvedValue({
+      success: true,
+      secure_url: "https://res.cloudinary.com/demo/image/upload/v1/bundles/bun1/v1_email_v1_2x.png",
+    });
 
     await processRenderAssetJob("bun1", "v1", "a1");
 
     // Seed is derived from asset + spec version + layer hashes (determinism).
     expect(engine.composeAsset.mock.calls[0]![4]).toBe("a1:v1:hp:hi");
-    // Deterministic public ids: re-render overwrites, retina gets the _2x suffix.
-    expect(cloud.uploadBuffer.mock.calls.map((c) => c[1])).toEqual(["v1_email_v1", "v1_email_v1_2x"]);
-    expect(cloud.uploadBuffer.mock.calls.every((c) => c[2] === "bundles/bun1")).toBe(true);
+    // ONE stored file — the @2x master under a deterministic id (re-render
+    // overwrites); @1x is served as a transformation of it, not a second upload.
+    expect(cloud.uploadBuffer).toHaveBeenCalledTimes(1);
+    expect(cloud.uploadBuffer.mock.calls[0]![1]).toBe("v1_email_v1_2x");
+    expect(cloud.uploadBuffer.mock.calls[0]![2]).toBe("bundles/bun1");
     expect(db.bundleAsset.update).toHaveBeenLastCalledWith({
       where: { id: "a1" },
       data: {
         status: "DONE",
-        imageUrl: "https://cdn/final.png",
+        imageUrl:
+          "https://res.cloudinary.com/demo/image/upload/c_scale,w_1200,h_600/v1/bundles/bun1/v1_email_v1_2x.png",
         metadata: expect.objectContaining({
-          retinaUrl: "https://cdn/final_2x.png",
+          retinaUrl:
+            "https://res.cloudinary.com/demo/image/upload/v1/bundles/bun1/v1_email_v1_2x.png",
           specVersion: 1,
           recommendedTextColor: "#111111",
         }),
@@ -850,7 +863,12 @@ describe("processRenderAssetJob — engine path (Phase 3)", () => {
     expect(engine.composeAsset).not.toHaveBeenCalled();
     expect(db.bundleAsset.update).toHaveBeenLastCalledWith({
       where: { id: "a1" },
-      data: { status: "FAILED", errorMessage: expect.stringContaining("static template") },
+      // The reason names the spec version that demands the background, so the
+      // admin can see WHY a template is suddenly required.
+      data: {
+        status: "FAILED",
+        errorMessage: expect.stringContaining("email.hero@v1 requires a static background"),
+      },
     });
     // Фон НЕ генерится нейросетью даже при отсутствии шаблона (DI-Q6).
     expect(fal.runPersonFal).not.toHaveBeenCalled();
@@ -879,9 +897,10 @@ describe("processRenderAssetJob — engine path (Phase 3)", () => {
         layers: { person: { x: 840, y: 72, w: 309, h: 480 }, item: null, decorPlaced: 0, decorSkipped: 0 },
       },
     });
-    cloud.uploadBuffer
-      .mockResolvedValueOnce({ success: true, secure_url: "https://cdn/final.png" })
-      .mockResolvedValueOnce({ success: true, secure_url: "https://cdn/final_2x.png" });
+    cloud.uploadBuffer.mockResolvedValue({
+      success: true,
+      secure_url: "https://res.cloudinary.com/demo/image/upload/v1/b/v1_email_v2_2x.png",
+    });
 
     await processRenderAssetJob("bun1", "v1", "a1");
 
@@ -890,7 +909,11 @@ describe("processRenderAssetJob — engine path (Phase 3)", () => {
     expect(engine.composeAsset.mock.calls[0]![3].background).toBeUndefined();
     expect(db.bundleAsset.update).toHaveBeenLastCalledWith({
       where: { id: "a1" },
-      data: expect.objectContaining({ status: "DONE", imageUrl: "https://cdn/final.png" }),
+      data: expect.objectContaining({
+        status: "DONE",
+        imageUrl:
+          "https://res.cloudinary.com/demo/image/upload/c_scale,w_1200,h_600/v1/b/v1_email_v2_2x.png",
+      }),
     });
   });
 
