@@ -5,10 +5,22 @@
 // Renders dynamically while assets finish (store polling). Sizes come from
 // the bundle type config — canonical mask sizes, D2.
 import { ref, computed, watch } from "vue";
+import { safeZoneStyle, safeContrast } from "~/composables/useSafeZonePreview";
 
 const store = useBundlesStore();
 
 const bundle = computed(() => store.selected);
+
+// ---- Safe-zone preview (TASK email-composition, Фаза 5) ----
+// Engine-rendered assets ship the safe zone in percentages, so the designer can
+// see the email's text block on the картинке before the письмо собрано in
+// Smartico. Purely a review overlay — nothing is baked into the image (D-E1).
+const safePreview = ref(false);
+
+const hasSafeMeta = computed(() =>
+  (bundle.value?.variants ?? []).some((v) => v.assets.some((a) => a.meta)),
+);
+
 
 // Accordion: the first variant starts open (mock). Reset on bundle switch.
 const openVariants = ref<Set<string>>(new Set());
@@ -104,7 +116,13 @@ function formatDateTime(iso: string | null): string {
       {{ store.actionError === "queue_unavailable" ? "Очередь генерации недоступна — попробуйте позже." : "Действие не выполнено, попробуйте ещё раз." }}
     </p>
 
-    <h3 class="result__section">Generated bundles by brand</h3>
+    <div class="result__sectionrow">
+      <h3 class="result__section">Generated bundles by brand</h3>
+      <label v-if="hasSafeMeta" class="safetoggle" title="Показать зону под текст письма и макет CTA">
+        <input v-model="safePreview" type="checkbox" />
+        <span>Safe zone preview</span>
+      </label>
+    </div>
 
     <div class="variants">
       <article v-for="v in bundle.variants" :key="v.id" class="variant" :class="{ 'variant--open': openVariants.has(v.id) }">
@@ -158,7 +176,30 @@ function formatDateTime(iso: string | null): string {
                 <div v-else class="asset__placeholder asset__placeholder--failed">
                   <small>⚠ {{ a.errorMessage || "Generation failed" }}</small>
                 </div>
+
+                <!-- Safe-zone overlay: mock text block as it will be laid out
+                     in the письме, positioned from the asset metadata. -->
+                <div
+                  v-if="safePreview && a.meta && a.status === 'done' && a.imageUrl"
+                  class="safe"
+                  :style="safeZoneStyle(a.meta)"
+                >
+                  <span class="safe__up">UP TO</span>
+                  <span class="safe__sum">500 000$</span>
+                  <span class="safe__spins">+50 FREE SPINS</span>
+                  <span class="safe__cta">Start Playing</span>
+                </div>
               </div>
+
+              <p v-if="safePreview && a.meta" class="asset__meta">
+                spec {{ a.meta.specKey }}@v{{ a.meta.specVersion }} ·
+                safe {{ Math.round(a.meta.safeZonePct.w) }}% ·
+                contrast {{ safeContrast(a.meta) }} ·
+                text {{ a.meta.recommendedTextColor || "—" }}
+                <span v-if="a.meta.validator && a.meta.validator.attempts > 1">
+                  · {{ a.meta.validator.attempts }} попытки
+                </span>
+              </p>
 
               <footer class="asset__actions">
                 <button
@@ -468,11 +509,15 @@ function formatDateTime(iso: string | null): string {
   cursor: pointer;
 }
 .asset__frame {
+  position: relative;
   border-radius: var(--radius-sm);
   overflow: hidden;
   background: var(--color-segment);
   display: grid;
   place-items: center;
+  /* cqw below sizes the mock text relative to the картинке, not the viewport,
+     so the preview reads the same on any card width. */
+  container-type: size;
 }
 .asset__frame img {
   width: 100%;
@@ -507,6 +552,71 @@ function formatDateTime(iso: string | null): string {
 .asset__actions {
   display: flex;
   gap: 6px;
+}
+
+.result__sectionrow {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+.safetoggle {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 11.5px;
+  font-weight: 600;
+  color: var(--color-grey);
+  cursor: pointer;
+}
+.safetoggle input {
+  width: 14px;
+  height: 14px;
+  accent-color: var(--color-accent);
+  cursor: pointer;
+}
+
+/* Mock email text inside the safe zone — review only, never baked in (D-E1). */
+.safe {
+  position: absolute;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 1.5cqw;
+  text-align: center;
+  border: 1px dashed color-mix(in srgb, currentColor 55%, transparent);
+  background: color-mix(in srgb, var(--color-accent) 8%, transparent);
+  font-weight: 800;
+  line-height: 1.05;
+  text-transform: uppercase;
+  pointer-events: none;
+}
+.safe__up {
+  font-size: 4cqw;
+  letter-spacing: 0.12em;
+}
+.safe__sum {
+  font-size: 10cqw;
+}
+.safe__spins {
+  font-size: 4.4cqw;
+}
+.safe__cta {
+  margin-top: 1cqw;
+  padding: 1.6cqw 4cqw;
+  border-radius: 999px;
+  /* Outlined pill: `color` stays the recommended text colour, so the button
+     mock never introduces a colour the валидатор did not check. */
+  border: 0.4cqw solid currentColor;
+  background: color-mix(in srgb, currentColor 14%, transparent);
+  font-size: 3.4cqw;
+  letter-spacing: 0.04em;
+}
+.asset__meta {
+  margin: 0;
+  font-size: 10.5px;
+  color: var(--color-grey);
 }
 
 .modal {

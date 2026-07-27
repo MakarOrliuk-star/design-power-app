@@ -95,6 +95,48 @@ describe("sendBundleToSmartico", () => {
     expect(upload.mock.calls.map((c) => (c[1] as { type: string }).type)).toEqual(["email", "pop-up"]);
   });
 
+  it("emits the email safe-zone function next to the image functions (DI-Q9)", async () => {
+    const emailMeta = {
+      specKey: "email.hero",
+      specVersion: 3,
+      safeZonePct: { x: 27, y: 12, w: 46, h: 76 },
+      recommendedTextColor: "#111111",
+      textContrast: { white: 1.21, dark: 14.42 },
+      seed: "s",
+    };
+    db.bundle.findUnique.mockResolvedValue({
+      id: "bun1",
+      variants: [
+        { brandName: "Betnella", assets: [{ ...approvedAsset("email"), metadata: emailMeta }] },
+      ],
+    });
+
+    const result = await sendBundleToSmartico("bun1");
+    if (!result || !result.ok) throw new Error("expected ok");
+    expect(result.outputs.map((o) => o.title)).toEqual([
+      "Email — Function",
+      "Email — Safe zone (текст и CTA)",
+    ]);
+    const code = result.outputs[1]!.code;
+    // Brand-keyed like every other Smartico function, percentages + colour hint.
+    expect(code).toContain("state.core_sm_brand_id");
+    expect(code).toContain('"Betnella": { x: 27, y: 12, w: 46, h: 76, color: "#111111", contrast: 14.42 }');
+    // Unknown brand still gets the spec geometry, not a broken layout.
+    expect(code).toContain("safeZone[brand_id] || { x: 27");
+    expect(code).toContain("JSON.stringify(zone)");
+    expect(code).toContain("email.hero@v3");
+  });
+
+  it("skips the safe-zone block for ai-mode assets without composition metadata", async () => {
+    db.bundle.findUnique.mockResolvedValue({
+      id: "bun1",
+      variants: [{ brandName: "Betnella", assets: [approvedAsset("push")] }],
+    });
+    const result = await sendBundleToSmartico("bun1");
+    if (!result || !result.ok) throw new Error("expected ok");
+    expect(result.outputs.map((o) => o.title)).toEqual(["Push — Function"]);
+  });
+
   it("400s when nothing is approved", async () => {
     db.bundle.findUnique.mockResolvedValue({
       id: "bun1",

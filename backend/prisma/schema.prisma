@@ -564,6 +564,11 @@ model BundleBrandVariant {
   // layer compositor references overlays by public id, not URL.
   personCutoutId String?
   itemCutoutId   String?
+  /// sha256 of the SOURCE image bytes each cutout was normalized from
+  /// (Phase 2): links the variant to the NormalizedLayer cache rows and lets
+  /// the composition engine (Phase 3) look up bbox dimensions.
+  personLayerHash String?
+  itemLayerHash   String?
 
   assets BundleAsset[]
 
@@ -585,11 +590,49 @@ model BundleAsset {
   status       BundleAssetStatus @default(PENDING)
   approved     Boolean           @default(false)
   errorMessage String?
+  /// Composition metadata for the email template + debugging (Phase 3):
+  /// spec key/version, seed, safe-zone %, luminance/contrast, recommended
+  /// text color, layer bboxes, retina URL. Written by the engine render path.
+  metadata     Json?
   createdAt    DateTime          @default(now())
   updatedAt    DateTime          @updatedAt
 
   @@unique([variantId, assetKey])
   @@index([bundleId])
+}
+
+/// Cache of normalized transparent layers keyed by the sha256 of the SOURCE
+/// image bytes (TASK email-composition, Phase 2). Re-running stage A on the
+/// same source skips background removal + normalization + upload entirely;
+/// `publicId` is deterministic (layer_<hash>), so Cloudinary never grows
+/// duplicates. width/height are the alpha-bbox pixel dimensions the
+/// composition engine scales from (fit by subject bbox, not by file — RC1).
+model NormalizedLayer {
+  id         String   @id @default(cuid())
+  sourceHash String   @unique
+  publicId   String
+  url        String
+  width      Int
+  height     Int
+  createdAt  DateTime @default(now())
+}
+
+/// Versioned layout spec for deterministic asset composition (TASK
+/// email-composition, Phase 1). Geometry is data, not code: zones, anchors,
+/// fit heights, baseline, safe-zone and decor rules live in `spec` (validated
+/// by layoutSpecSchema at runtime). Rows are immutable — editing from the
+/// admin creates the NEXT version; old bundles keep the version they used.
+model LayoutSpec {
+  id        String   @id @default(cuid())
+  key       String // e.g. "email.hero" (also planned: "push.hero", "popup.hero")
+  version   Int
+  spec      Json
+  isActive  Boolean  @default(true)
+  createdAt DateTime @default(now())
+  createdBy String? // admin email snapshot, informational
+
+  @@unique([key, version])
+  @@index([key, isActive])
 }
 
 /// Global admin-editable Neural prompt suggestions shown on textarea focus (D8).

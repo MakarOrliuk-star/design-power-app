@@ -6,6 +6,7 @@ import { cloudinaryConfigured } from "../env.js";
 import { uploadBase64, withRetry } from "../lib/cloudinary.js";
 import { MODEL_KEYS, MODEL_OPTIONS } from "../lib/falModels.js";
 import { createBrand } from "../services/brand.service.js";
+import { layoutSpecSchema, createLayoutSpecVersion } from "../services/layoutSpec.js";
 
 // All routes here are mounted behind loadUser + requireAdmin (see index.ts).
 export const adminRouter: Router = Router();
@@ -456,6 +457,13 @@ const bundleTypeAssetSchema = z.object({
     )
     .optional(),
   composeMode: z.enum(["ai", "layered"]).optional(),
+  // Versioned geometry reference (Phase 1): render resolves the latest active
+  // LayoutSpec with this key. Absent → legacy zones/composeMode path.
+  layoutSpecKey: z.string().min(1).max(60).optional(),
+  // Static decor cutout URLs the engine scatters into decor bands (Phase 3).
+  decorUrls: z.array(z.string().url()).max(20).optional(),
+  // Golden composite for the validator's SSIM check (Phase 4/6).
+  goldenUrl: z.string().url().optional(),
 });
 
 const bundleTypeSchema = z.object({
@@ -517,6 +525,66 @@ adminRouter.patch("/bundle-types/:id", async (req: Request, res: Response) => {
   try {
     const updated = await prisma.bundleType.update({ where: { id }, data });
     res.json({ bundleType: updated });
+  } catch {
+    res.status(404).json({ error: "not_found" });
+  }
+});
+
+// ============================================================
+// Layout specs (TASK email-composition, Phase 1) — versioned geometry.
+// Rows are immutable: POST creates the NEXT version for the key; PATCH only
+// toggles isActive (rollback = deactivate the newer version). Editing needs
+// no code deploy — the render path resolves the latest active version.
+// ============================================================
+
+adminRouter.get("/layout-specs", async (_req: Request, res: Response) => {
+  const layoutSpecs = await prisma.layoutSpec.findMany({
+    orderBy: [{ key: "asc" }, { version: "desc" }],
+  });
+  res.json({ layoutSpecs });
+});
+
+const createLayoutSpecSchema = z.object({
+  key: z.string().min(1).max(60),
+  spec: z.unknown(),
+});
+
+adminRouter.post("/layout-specs", async (req: Request, res: Response) => {
+  const parsed = createLayoutSpecSchema.safeParse(req.body);
+  if (!parsed.success) {
+    res.status(400).json({ error: "invalid_body", details: parsed.error.flatten().fieldErrors });
+    return;
+  }
+  const specParsed = layoutSpecSchema.safeParse(parsed.data.spec);
+  if (!specParsed.success) {
+    res.status(400).json({ error: "invalid_spec", details: specParsed.error.flatten() });
+    return;
+  }
+  const created = await createLayoutSpecVersion(
+    parsed.data.key,
+    specParsed.data,
+    req.user?.email,
+  );
+  res.status(201).json({ layoutSpec: created });
+});
+
+adminRouter.patch("/layout-specs/:id", async (req: Request, res: Response) => {
+  const id = req.params.id;
+  if (typeof id !== "string" || !id) {
+    res.status(400).json({ error: "id_required" });
+    return;
+  }
+  const parsed = z.object({ isActive: z.boolean() }).safeParse(req.body);
+  if (!parsed.success) {
+    res.status(400).json({ error: "invalid_body", details: parsed.error.flatten().fieldErrors });
+    return;
+  }
+  try {
+    const updated = await prisma.layoutSpec.update({
+      where: { id },
+      data: { isActive: parsed.data.isActive },
+    });
+    res.json({ layoutSpec: updated });
   } catch {
     res.status(404).json({ error: "not_found" });
   }

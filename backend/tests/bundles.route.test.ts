@@ -147,6 +147,92 @@ describe("PATCH /api/bundles/:id", () => {
   });
 });
 
+describe("GET /api/bundles/:id (Result screen)", () => {
+  function bundleWithAsset(metadata: unknown) {
+    return {
+      id: "bun1",
+      name: "Weekend Reload",
+      status: "COMPLETED",
+      plannedSendAt: null,
+      neuralPrompt: "p",
+      brandNames: ["Betnella"],
+      createdAt: new Date("2026-07-01T10:00:00Z"),
+      updatedAt: new Date("2026-07-01T12:00:00Z"),
+      bundleType: {
+        key: "email",
+        title: "Email",
+        assets: [{ key: "email", label: "Email hero", width: 1200, height: 600 }],
+      },
+      variants: [
+        {
+          id: "v1",
+          brandName: "Betnella",
+          displayName: "Betnella",
+          assets: [
+            {
+              id: "a1",
+              assetKey: "email",
+              width: 1200,
+              height: 600,
+              imageUrl: "https://cdn/a1.png",
+              status: "DONE",
+              approved: false,
+              errorMessage: null,
+              metadata,
+            },
+          ],
+        },
+      ],
+    };
+  }
+
+  it("projects engine composition metadata for the safe-zone preview", async () => {
+    db.bundle.findUnique.mockResolvedValue(
+      bundleWithAsset({
+        specKey: "email.hero",
+        specVersion: 1,
+        seed: "seed",
+        safeZonePct: { x: 27, y: 12, w: 46, h: 76 },
+        luminance: 0.82,
+        luminanceStd: 0.03,
+        textContrast: { white: 1.2, dark: 14.4 },
+        recommendedTextColor: "#111111",
+        retinaUrl: "https://cdn/a1_2x.png",
+        validator: { passed: true, attempts: 1, checks: [] },
+        layers: { person: { x: 0, y: 0, w: 1, h: 1 }, item: null, decorPlaced: 0, decorSkipped: 0 },
+      }),
+    );
+    const res = await request(makeApp()).get("/api/bundles/bun1");
+    expect(res.status).toBe(200);
+    const asset = res.body.bundle.variants[0].assets[0];
+    expect(asset.meta).toEqual({
+      specKey: "email.hero",
+      specVersion: 1,
+      safeZonePct: { x: 27, y: 12, w: 46, h: 76 },
+      recommendedTextColor: "#111111",
+      luminance: 0.82,
+      textContrast: { white: 1.2, dark: 14.4 },
+      retinaUrl: "https://cdn/a1_2x.png",
+      validator: { passed: true, attempts: 1 },
+    });
+    // The raw engine payload (seed, layer bboxes, check list) stays server-side.
+    expect(asset.meta.seed).toBeUndefined();
+  });
+
+  it("returns meta:null for ai-mode and pre-engine assets", async () => {
+    db.bundle.findUnique.mockResolvedValue(bundleWithAsset(null));
+    const res = await request(makeApp()).get("/api/bundles/bun1");
+    expect(res.status).toBe(200);
+    expect(res.body.bundle.variants[0].assets[0].meta).toBeNull();
+  });
+
+  it("returns meta:null when metadata exists but carries no safe zone", async () => {
+    db.bundle.findUnique.mockResolvedValue(bundleWithAsset({ specKey: "email.hero", safeZonePct: null }));
+    const res = await request(makeApp()).get("/api/bundles/bun1");
+    expect(res.body.bundle.variants[0].assets[0].meta).toBeNull();
+  });
+});
+
 describe("POST /api/bundles/:id/assets/approve", () => {
   it("approves only DONE assets and reports skipped ones", async () => {
     db.bundleAsset.findMany.mockResolvedValue([

@@ -2,6 +2,7 @@ import { readFile } from "node:fs/promises";
 import { prisma } from "../src/lib/prisma.js";
 import { BRANDS, CATEGORIES, THEMES, BRAND_CATEGORIES } from "./seed-data/catalog.ts";
 import { BRAND_NANO_REFS } from "./seed-data/nano-refs.ts";
+import { EMAIL_HERO_KEY, EMAIL_HERO_V1 } from "../src/services/layoutSpec.ts";
 
 /**
  * Idempotent seed (upserts) — safe to re-run.
@@ -116,6 +117,9 @@ async function main() {
           // Слоёная сборка (D10 v2): фон-слой + прозрачные вырезки person/item
           // компонуются в секции по пикселям — структура гарантирована.
           composeMode: "layered",
+          // Версионируемая геометрия (Phase 1): рендер берёт последнюю
+          // активную версию LayoutSpec с этим ключом.
+          layoutSpecKey: EMAIL_HERO_KEY,
         },
         { key: "popup", label: "Pop-up", width: 800, height: 600 },
         { key: "push", label: "Push", width: 1024, height: 512 },
@@ -133,6 +137,15 @@ async function main() {
       content:
         "Casino slot item collection for an advertising creative: golden lucky seven symbols, casino chips, cherries, gold coins. Detailed glossy 3D render, isolated objects on a clean dark background, vivid advertising quality, no text. Theme: {{prompt}}",
     },
+    update: {},
+  });
+
+  // Layout spec email.hero v1 (TASK email-composition, Phase 1): geometry
+  // calibrated against the reference banner. Create-only — the admin panel
+  // owns later versions; v1 stays immutable as the эталонная спека.
+  await prisma.layoutSpec.upsert({
+    where: { key_version: { key: EMAIL_HERO_KEY, version: 1 } },
+    create: { key: EMAIL_HERO_KEY, version: 1, spec: EMAIL_HERO_V1 },
     update: {},
   });
 
@@ -163,7 +176,7 @@ async function main() {
     `✅ Seeded: ${THEMES.length} themes, ${CATEGORIES.length} categories, ` +
       `${uniqueBrands.length} brands, ${linkCount} brand-category links, ` +
       `${nanoCount} brand nano-refs, ${styles.length} item-style prompts, ` +
-      `1 bundle type, ${presetCount === 0 ? 3 : 0} prompt presets`,
+      `1 bundle type, 1 layout spec, ${presetCount === 0 ? 3 : 0} prompt presets`,
   );
 }
 

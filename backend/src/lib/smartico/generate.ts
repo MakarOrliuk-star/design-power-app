@@ -169,6 +169,68 @@ export function generateSmarticoCardOutputs(
   return blocks;
 }
 
+/** Safe-zone metadata of one composed email hero (TASK email-composition,
+ *  D-E1: текст кладётся в письме, не в картинку). Percentages of the image. */
+export interface SafeZoneMeta {
+  x: number;
+  y: number;
+  w: number;
+  h: number;
+  color: string; // recommended text colour for THIS background
+  contrast: number; // WCAG ratio of the zone against `color`
+}
+
+function fmt(n: number): string {
+  return Number(n.toFixed(2)).toString();
+}
+
+function zoneLiteral(z: SafeZoneMeta): string {
+  return (
+    `{ x: ${fmt(z.x)}, y: ${fmt(z.y)}, w: ${fmt(z.w)}, h: ${fmt(z.h)}, ` +
+    `color: "${z.color}", contrast: ${fmt(z.contrast)} }`
+  );
+}
+
+/**
+ * Where the email template must put `UP TO / сумма / +N FREE SPINS / CTA`
+ * (DI-Q9: письма собираются в Smartico, значит геометрию отдаём им). Same
+ * paste-and-forget shape as the image functions — a brand-keyed function on
+ * `state.core_sm_brand_id` — but it returns the zone as a JSON string:
+ * `{"x":27,"y":12,"w":46,"h":76,"color":"#111111","contrast":14.4}`, all four
+ * geometry fields in PERCENT of the image, so the block stays correct however
+ * the client scales the картинку (including @2x retina, TASK §2.3).
+ * `fallbackZone` is the spec constant — a brand missing from the map still
+ * positions its text correctly, it just loses the per-background colour hint.
+ */
+export function generateSafeZoneOutputs(
+  zoneByRaw: Record<string, SafeZoneMeta>,
+  brands: NormalizedBrand[],
+  fallbackZone: SafeZoneMeta,
+  specLabel: string,
+): OutputBlock[] {
+  const entries: string[] = [];
+  for (const b of brands) {
+    const zone = zoneByRaw[b.raw];
+    if (!zone) continue;
+    entries.push(`        "${b.canonical}": ${zoneLiteral(zone)}`);
+  }
+  if (entries.length === 0) return [];
+
+  let code = "(function() {\n";
+  code += `    // Safe zone of the email hero — ${specLabel}. Percent of the image;\n`;
+  code += "    // place the text block and CTA inside it, colour the text with `color`.\n";
+  code += "    var safeZone = {\n";
+  code += entries.join(",\n") + "\n";
+  code += "    };\n";
+  code += "\n";
+  code += "    var brand_id = state.core_sm_brand_id;\n";
+  code += `    var zone = safeZone[brand_id] || ${zoneLiteral(fallbackZone)};\n`;
+  code += "    return JSON.stringify(zone);\n";
+  code += "})();";
+
+  return [{ title: "Email — Safe zone (текст и CTA)", code, kind: "function" }];
+}
+
 export function generateOutputs(
   urls: UrlMap,
   selectedTypes: TypeKey[],

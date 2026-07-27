@@ -42,6 +42,19 @@ export interface BrandGroup {
   variants: Array<{ name: string; displayName: string }>;
 }
 
+/** Composition metadata of an engine-rendered asset (TASK email-composition):
+ *  the safe zone the email text lands in, plus how it should be coloured. */
+export interface BundleAssetMeta {
+  specKey: string;
+  specVersion: number;
+  safeZonePct: { x: number; y: number; w: number; h: number };
+  recommendedTextColor: string | null;
+  luminance: number | null;
+  textContrast: { white: number; dark: number } | null;
+  retinaUrl: string | null;
+  validator: { passed: boolean; attempts: number } | null;
+}
+
 export interface BundleDetails {
   id: string;
   name: string;
@@ -66,6 +79,7 @@ export interface BundleDetails {
       status: "pending" | "generating" | "done" | "failed";
       approved: boolean;
       errorMessage: string | null;
+      meta: BundleAssetMeta | null;
     }>;
   }>;
   summary: { variantCount: number; assetTotal: number; assetDone: number; approvedCount: number };
