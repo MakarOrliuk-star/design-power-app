@@ -744,13 +744,32 @@ async function loadLayoutSpecs() {
   }
 }
 
+/** Специи чаще всего копируют из документации/чата, поэтому черновик может
+ *  приехать в ```json-обёртке или с лишним текстом вокруг — вырезаем сам
+ *  объект, чтобы человек не искал руками, что не так. */
+function cleanSpecDraft(raw: string): string {
+  let s = raw.trim();
+  s = s.replace(/^```[a-z]*\s*/i, "").replace(/```$/, "").trim();
+  const first = s.indexOf("{");
+  const last = s.lastIndexOf("}");
+  if (first > 0 || (last >= 0 && last < s.length - 1)) s = s.slice(first, last + 1);
+  return s;
+}
+
 async function saveLayoutSpecVersion(key: string) {
   lsMsg.value[key] = "";
   let spec: unknown;
+  const cleaned = cleanSpecDraft(lsDraft.value[key] ?? "");
+  if (!cleaned) {
+    lsMsg.value[key] = "Черновик пуст — вставьте JSON спеки.";
+    return;
+  }
   try {
-    spec = JSON.parse(lsDraft.value[key] ?? "");
-  } catch {
-    lsMsg.value[key] = "Невалидный JSON — исправьте черновик.";
+    spec = JSON.parse(cleaned);
+    lsDraft.value[key] = cleaned; // показать ровно то, что уходит на сервер
+  } catch (err) {
+    // Точное место поломки вместо «исправьте черновик».
+    lsMsg.value[key] = `Невалидный JSON: ${err instanceof Error ? err.message : String(err)}`;
     return;
   }
   try {

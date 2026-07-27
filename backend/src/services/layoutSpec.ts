@@ -192,6 +192,10 @@ export const EMAIL_HERO_V1: LayoutSpecData = {
  */
 export const EMAIL_HERO_V2: LayoutSpecData = {
   ...EMAIL_HERO_V1,
+  // Один масштаб = один файл в Cloudinary (требование заказчика 2026-07-27,
+  // уточняет D-E2): retina-копии не хранятся. Вернуть @2x = добавить 2 в
+  // `scales` новой версией спеки, деплой не нужен.
+  canvas: { ...EMAIL_HERO_V1.canvas, scales: [1] },
   background: { source: "transparent" },
   subjects: {
     ...EMAIL_HERO_V1.subjects,
@@ -232,7 +236,7 @@ export const EMAIL_HERO_V2: LayoutSpecData = {
 export const PUSH_HERO_KEY = "push.hero";
 
 export const PUSH_HERO_V1: LayoutSpecData = {
-  canvas: { w: 1024, h: 512, scales: [1, 2] },
+  canvas: { w: 1024, h: 512, scales: [1] },
   background: { source: "transparent" },
   baseline: 0.95,
   subjects: {
@@ -268,7 +272,7 @@ export const PUSH_HERO_V1: LayoutSpecData = {
 export const POPUP_HERO_KEY = "popup.hero";
 
 export const POPUP_HERO_V1: LayoutSpecData = {
-  canvas: { w: 800, h: 600, scales: [1, 2] },
+  canvas: { w: 800, h: 600, scales: [1] },
   background: { source: "transparent" },
   baseline: 0.95,
   subjects: {

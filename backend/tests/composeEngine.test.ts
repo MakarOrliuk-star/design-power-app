@@ -191,10 +191,8 @@ describe("composeAsset", () => {
     const r = await composeAsset(EMAIL_HERO_V2, "email.hero", 2, { person, item }, "s1");
     if (!r.ok) throw new Error(r.reason);
 
-    expect(r.scales.map((s) => [s.width, s.height])).toEqual([
-      [1200, 600],
-      [2400, 1200],
-    ]);
+    // One scale, one file: retina copies are not produced (D-E7).
+    expect(r.scales.map((s) => [s.width, s.height])).toEqual([[1200, 600]]);
     const base = r.scales[0]!;
     expect((await sharp(base.png).metadata()).hasAlpha).toBe(true);
     const raw = await sharp(base.png).ensureAlpha().raw().toBuffer({ resolveWithObject: true });
