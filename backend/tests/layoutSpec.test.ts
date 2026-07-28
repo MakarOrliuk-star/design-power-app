@@ -284,8 +284,23 @@ describe("email.hero.v3 pattern calibration vs reference measurements", () => {
 
   it("keeps the delivery contract of v2 untouched (D-E5, D-E7, DI-Q7)", () => {
     expect(EMAIL_HERO_V3.canvas).toEqual(EMAIL_HERO_V2.canvas); // один файл 1200×600
-    expect(EMAIL_HERO_V3.safe!.zone).toEqual(EMAIL_HERO_V2.safe!.zone); // safe 46%
-    expect(EMAIL_HERO_V3.safe!.coreRects).toEqual(EMAIL_HERO_V2.safe!.coreRects);
+    expect(EMAIL_HERO_V3.safe!.zone).toEqual(EMAIL_HERO_V2.safe!.zone); // контракт E-P5.1
+  });
+
+  it("text envelopes fit DI-Q7 (27–73%) and never overlap the subject zones (F5-2)", () => {
+    // Живой прогон: конверт v1 тянулся до 0.74, зона персонажа начинается на
+    // 0.73 — широкий поясной кроп законно упирался в конверт (2128 px в
+    // safe-core-clean). Текст письма живёт в 27–73% ширины (DI-Q7) — конверты
+    // обязаны сидеть внутри и не пересекать зоны субъектов v3.
+    const personZoneL = EMAIL_HERO_V3.subjects.person.zone.x;
+    const itemZoneR =
+      EMAIL_HERO_V3.subjects.item!.zone.x + EMAIL_HERO_V3.subjects.item!.zone.w;
+    for (const core of EMAIL_HERO_V3.safe!.coreRects) {
+      expect(core.x).toBeGreaterThanOrEqual(0.27 - 1e-9);
+      expect(core.x + core.w).toBeLessThanOrEqual(0.73 + 1e-9);
+      expect(core.x + core.w).toBeLessThanOrEqual(personZoneL + 1e-9);
+      expect(core.x).toBeGreaterThanOrEqual(itemZoneR + 1e-9);
+    }
   });
 
   it("crops the person to a waist-up plane from the shared full-body layer", () => {

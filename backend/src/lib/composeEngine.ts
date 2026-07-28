@@ -1092,29 +1092,35 @@ export async function composeAsset(
       const sw = W * scale;
       const sh = H * scale;
 
-      // The overlay stack is built on a TRANSPARENT canvas first — it doubles
-      // as the validator's alpha mask — then flattened onto the background.
-      let overlays: Bytes = await sharp({
+      // The overlay stack is built on a TRANSPARENT canvas first, then
+      // flattened onto the background.
+      const emptyCanvas: Bytes = await sharp({
         create: { width: sw, height: sh, channels: 4, background: { r: 0, g: 0, b: 0, alpha: 0 } },
       })
         .png(PNG_OPTS)
         .toBuffer();
+      let overlays: Bytes = emptyCanvas;
+      // Маска валидатора собирается ПАРАЛЛЕЛЬНО и содержит только ГРАФИКУ
+      // (декор, субъекты, типографика). Эффекты — плашка, rim light,
+      // контактные тени — по замыслу лежат ПОД текстом письма (в эталонах
+      // свечение как раз за оффером) и текстовую зону не портят; попав в
+      // маску, они проваливали бы `safe-core-clean` на корректном кадре
+      // (живой прогон F5-2: размытый край rim в конверте строки).
+      let maskAcc: Bytes | null = scale === 1 ? emptyCanvas : null;
 
       const mul = (b: Box): Box => ({ x: b.x * scale, y: b.y * scale, w: b.w * scale, h: b.h * scale });
-
-      // ВАЖНО: плашка НЕ входит в `overlays`. Этот стек — пиксельная правда
-      // валидатора о том, «чиста ли текстовая зона», и он обязан содержать
-      // только размещённую графику. Плашка же по замыслу лежит ПОД текстом
-      // (в эталонах свечение как раз за оффером), и, попав в маску, она
-      // проваливала бы `safe-core-clean` на любом корректном кадре.
-      // Подкладывается она ниже, после сборки стека.
+      /** Композит в кадр; `effect: true` — слой не попадает в маску валидатора. */
+      const place = async (layer: EngineLayer, box: Box, effect = false): Promise<void> => {
+        overlays = await overlay(overlays, layer, box, sw, sh);
+        if (maskAcc && !effect) maskAcc = await overlay(maskAcc, layer, box, sw, sh);
+      };
 
       // z-order (TASK §5): плашка → scatter.back → контактные тени → item →
       // brandMark → person → heldSign → scatter.mid/front.
       const backEnd = scene ? scene.backCount : sceneLayers.length;
       for (let i = 0; i < backEnd; i++) {
         const box = decorBoxes[i];
-        if (box) overlays = await overlay(overlays, sceneLayers[i]!, mul(box), sw, sh);
+        if (box) await place(sceneLayers[i]!, mul(box));
       }
 
       // П11 — контактные тени ложатся ПОД субъектами: иначе даже правильный
@@ -1124,20 +1130,18 @@ export async function composeAsset(
           if (!b) continue;
           const shadow = await renderContactShadow(mul(b), sw, sh, 0.45);
           if (shadow) {
-            overlays = await overlay(
-              overlays,
+            await place(
               { data: shadow.png, width: Math.round(shadow.box.w), height: Math.round(shadow.box.h) },
               shadow.box,
-              sw,
-              sh,
+              true, // эффект — под текстом допустим
             );
           }
         }
       }
 
-      if (itemSubject && itemBox) overlays = await overlay(overlays, itemSubject, mul(itemBox), sw, sh);
+      if (itemSubject && itemBox) await place(itemSubject, mul(itemBox));
       for (const t of typoPlacements.filter((p) => p.under)) {
-        overlays = await overlay(overlays, t.layer, mul(t.box), sw, sh);
+        await place(t.layer, mul(t.box));
       }
       // П10 — контровой свет: ободок ключевого цвета ПОД персонажем, чтобы
       // фигура отделялась от подложки, а не лежала на ней вырезкой.
@@ -1145,24 +1149,21 @@ export async function composeAsset(
         const rim = await renderRimLight(person, plateColor, 0.55);
         const grow = Math.max(2, Math.round(Math.min(personBox.w, personBox.h) * 0.02)) * scale;
         const rimBox = mul(personBox);
-        overlays = await overlay(
-          overlays,
+        await place(
           { data: rim, width: person.width, height: person.height },
           { x: rimBox.x - grow, y: rimBox.y - grow, w: rimBox.w + grow * 2, h: rimBox.h + grow * 2 },
-          sw,
-          sh,
+          true, // эффект — под текстом допустим
         );
       }
-      overlays = await overlay(overlays, person, mul(personBox), sw, sh);
+      await place(person, mul(personBox));
       for (const t of typoPlacements.filter((p) => !p.under)) {
-        overlays = await overlay(overlays, t.layer, mul(t.box), sw, sh);
+        await place(t.layer, mul(t.box));
       }
       for (let i = backEnd; i < sceneLayers.length; i++) {
         const box = decorBoxes[i];
-        if (box) overlays = await overlay(overlays, sceneLayers[i]!, mul(box), sw, sh);
+        if (box) await place(sceneLayers[i]!, mul(box));
       }
-      // Маска — до подкладывания плашки (см. комментарий выше).
-      if (scale === 1) overlayMask = overlays;
+      if (maskAcc) overlayMask = maskAcc;
 
       // П1 — плашка подкладывается ПОД собранный стек. Углы у неё alpha 0,
       // поэтому письмо по-прежнему видно под ассетом (D-E5).
