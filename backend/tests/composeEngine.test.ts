@@ -6,11 +6,15 @@ import {
   composeAsset,
   mulberry32,
   seedToInt,
+  renderGlowPlate,
+  computeRingPlacements,
+  countCroppedByEdge,
 } from "../src/lib/composeEngine.js";
 import type { EngineLayer } from "../src/lib/composeEngine.js";
 import {
   EMAIL_HERO_V1,
   EMAIL_HERO_V2,
+  EMAIL_HERO_V3,
   PUSH_HERO_V1,
   POPUP_HERO_V1,
 } from "../src/services/layoutSpec.js";
@@ -319,5 +323,279 @@ describe("composeAsset", () => {
     if (!r.ok) throw new Error(r.reason);
     expect(r.metadata.layers.decorPlaced + r.metadata.layers.decorSkipped).toBe(2);
     expect(r.metadata.layers.decorPlaced).toBeGreaterThan(0);
+  });
+});
+
+// ------------------------------------------------------------------
+// Сцена — Задание 2, Фаза 3. Проверяем ровно те механизмы, которых не хватало
+// автогенерату: плашка, кольцо, планы глубины, кроп, типографика.
+// ------------------------------------------------------------------
+describe("renderGlowPlate (П1, DV-A1)", () => {
+  it("светится в центре и оставляет углы ПРОЗРАЧНЫМИ", async () => {
+    // Ключевое свойство: это подложка, а не фон. Углы alpha 0 — иначе письмо
+    // не сможет подложить свой фон и D-E5 нарушится.
+    const png = await renderGlowPlate(
+      { alphaCenter: 0.18, radius: 1.05, falloff: "smooth" },
+      [255, 200, 160],
+      120,
+      60,
+    );
+    const { data, info } = await sharp(png).ensureAlpha().raw().toBuffer({ resolveWithObject: true });
+    const at = (x: number, y: number) => data[(y * info.width + x) * 4 + 3]!;
+    expect(at(60, 30)).toBeGreaterThanOrEqual(Math.round(0.18 * 255) - 1);
+    expect(at(0, 0)).toBe(0);
+    expect(at(119, 0)).toBe(0);
+    expect(at(0, 59)).toBe(0);
+    expect(at(119, 59)).toBe(0);
+  });
+
+  it("спадает монотонно от центра к краю", async () => {
+    const png = await renderGlowPlate(
+      { alphaCenter: 0.5, radius: 1.0, falloff: "smooth" },
+      [255, 255, 255],
+      100,
+      100,
+    );
+    const { data, info } = await sharp(png).ensureAlpha().raw().toBuffer({ resolveWithObject: true });
+    const at = (x: number) => data[(50 * info.width + x) * 4 + 3]!;
+    for (let x = 50; x < 99; x++) expect(at(x)).toBeGreaterThanOrEqual(at(x + 1));
+  });
+});
+
+describe("computeRingPlacements (П3/П4)", () => {
+  const dims = Array.from({ length: 30 }, () => ({
+    width: 60,
+    height: 60,
+    targetH: 60,
+    fill: 1,
+  }));
+
+  it("оставляет ядро пустым геометрией кольца, а не запретом", () => {
+    const boxes = computeRingPlacements(
+      { rMin: 0.57, rMax: 1.15 },
+      [1, 1, 1, 1, 1, 1, 1, 1],
+      dims,
+      [],
+      W,
+      H,
+      mulberry32(7),
+    );
+    for (const b of boxes) {
+      if (!b) continue;
+      const u = ((b.x + b.w / 2) / W - 0.5) * 2;
+      const v = ((b.y + b.h / 2) / H - 0.5) * 2;
+      expect(Math.hypot(u, v)).toBeGreaterThanOrEqual(0.56);
+    }
+  });
+
+  it("при rMax > 1 часть объектов свисает за кромку — это и есть bleed", () => {
+    const boxes = computeRingPlacements(
+      { rMin: 0.9, rMax: 1.3 },
+      [1, 1, 1, 1, 1, 1, 1, 1],
+      dims,
+      [],
+      W,
+      H,
+      mulberry32(11),
+    );
+    expect(countCroppedByEdge(boxes, W, H)).toBeGreaterThanOrEqual(2);
+  });
+
+  it("не кладёт объекты на текстовые конверты", () => {
+    const core = { x: 0.3 * W, y: 0.2 * H, w: 0.4 * W, h: 0.6 * H };
+    const boxes = computeRingPlacements(
+      { rMin: 0.2, rMax: 1.2 },
+      [1, 1, 1, 1, 1, 1, 1, 1],
+      dims,
+      [core],
+      W,
+      H,
+      mulberry32(3),
+    );
+    for (const b of boxes) {
+      if (!b) continue;
+      const hit = b.x < core.x + core.w && b.x + b.w > core.x && b.y < core.y + core.h && b.y + b.h > core.y;
+      expect(hit).toBe(false);
+    }
+  });
+
+  it("уважает бюджет ядра, но пропускает расфокусированную ambience", () => {
+    const band = { x: 0.4, w: 0.2, maxCoverage: 0.02 };
+    const sharpDims = dims.map((d) => ({ ...d, ambience: false }));
+    const softDims = dims.map((d) => ({ ...d, ambience: true }));
+    const inBand = (boxes: Array<{ x: number; w: number } | null>) =>
+      boxes.filter((b) => b && b.x + b.w > band.x * W && b.x < (band.x + band.w) * W).length;
+
+    const strict = computeRingPlacements(
+      { rMin: 0.2, rMax: 1.1 }, [1,1,1,1,1,1,1,1], sharpDims, [], W, H, mulberry32(5), band,
+    );
+    const soft = computeRingPlacements(
+      { rMin: 0.2, rMax: 1.1 }, [1,1,1,1,1,1,1,1], softDims, [], W, H, mulberry32(5), band,
+    );
+    expect(inBand(soft)).toBeGreaterThan(inBand(strict));
+  });
+});
+
+describe("composeAsset — сцена email.hero v3", () => {
+  async function renderV3(seed = "brandX", campaignTokens: string[] = ["BIG WIN"]) {
+    const person = await solidLayer(400, 900, [200, 170, 120, 255]);
+    const pieces = [
+      await solidLayer(420, 700, [220, 180, 60, 255]),
+      await solidLayer(150, 120, [230, 190, 70, 255]),
+      await solidLayer(180, 140, [230, 190, 70, 255]),
+    ];
+    return composeAsset(
+      EMAIL_HERO_V3,
+      "email.hero",
+      3,
+      { person, itemPieces: pieces, campaignTokens },
+      seed,
+    );
+  }
+
+  it("собирает кадр и отдаёт показатели сцены", async () => {
+    const res = await renderV3();
+    expect(res.ok).toBe(true);
+    if (!res.ok) return;
+    expect(res.metadata.scene).not.toBeNull();
+    expect(res.metadata.scene!.glowColor).toMatch(/^#[0-9A-F]{6}$/);
+    // П4 и П2: объекты подрезаны краем, задний план — верхним.
+    expect(res.metadata.scene!.croppedByEdge).toBeGreaterThanOrEqual(2);
+    expect(res.metadata.scene!.backCropsTop).toBe(true);
+    // П7: обе надписи отрисованы — бриф кампании дал токен для heldSign
+    // (DV-C4′ + поправка «не обязательно BIG WIN — всё зависит от промпта»).
+    expect(res.metadata.scene!.typographyTokens).toBe(2);
+  });
+
+  it("без токенов из брифа heldSign пропускается, а не навязывает BIG WIN", async () => {
+    // Контракт `tokensSource: "campaign"`: кампания надпись не просила —
+    // кадр обходится без неё. brandMark (campaign-or-spec) остаётся.
+    const res = await renderV3("brandX", []);
+    expect(res.ok).toBe(true);
+    if (!res.ok) return;
+    expect(res.metadata.scene!.typographyTokens).toBe(1);
+  });
+
+  it("ставит субъекты НА нижнюю кромку, а не над ней", async () => {
+    const res = await renderV3();
+    if (!res.ok) return;
+    // baseline 1.0 — дефект «висящих наклеек» из result.png закрыт.
+    expect(res.metadata.layers.person.y + res.metadata.layers.person.h).toBe(H);
+    expect(res.metadata.layers.item!.y + res.metadata.layers.item!.h).toBe(H);
+  });
+
+  it("режет персонажа до поясного плана из общего слоя (DV-C3)", async () => {
+    const res = await renderV3();
+    if (!res.ok) return;
+    const box = res.metadata.layers.person;
+    // Исходный слой 400×900 (пропорция 0.44). После реза верхних 55% и фита
+    // по высоте субъект становится заметно шире относительно своей высоты.
+    expect(box.w / box.h).toBeGreaterThan(0.44);
+  });
+
+  it("остаётся побайтово детерминированным", async () => {
+    const a = await renderV3("sameSeed");
+    const b = await renderV3("sameSeed");
+    if (!a.ok || !b.ok) return;
+    expect(a.scales[0]!.png.equals(b.scales[0]!.png)).toBe(true);
+  });
+
+  it("другой seed — другая раскладка", async () => {
+    const a = await renderV3("seedOne");
+    const b = await renderV3("seedTwo");
+    if (!a.ok || !b.ok) return;
+    expect(a.scales[0]!.png.equals(b.scales[0]!.png)).toBe(false);
+  });
+
+  it("плашка не заливает углы — письмо кладёт свой фон под ассет", async () => {
+    // Без декора в кадре только плашка и субъект. Декор в углу — это приём
+    // П4 и он законен (в эталонах объекты касаются кромок), поэтому инвариант
+    // проверяется на сцене без декора: залить углы может только плашка.
+    const person = await solidLayer(400, 900, [200, 170, 120, 255]);
+    const res = await composeAsset(EMAIL_HERO_V3, "email.hero", 3, { person }, "noDecor");
+    expect(res.ok).toBe(true);
+    if (!res.ok) return;
+    const { data, info } = await sharp(res.scales[0]!.png)
+      .ensureAlpha()
+      .raw()
+      .toBuffer({ resolveWithObject: true });
+    const alphaAt = (x: number, y: number) => data[(y * info.width + x) * 4 + 3]!;
+    expect(alphaAt(0, 0)).toBeLessThanOrEqual(5);
+    expect(alphaAt(info.width - 1, 0)).toBeLessThanOrEqual(5);
+    expect(alphaAt(0, info.height - 1)).toBeLessThanOrEqual(5);
+    // Центр при этом светится — плашка на месте, а не выключена.
+    expect(alphaAt(Math.round(info.width / 2), Math.round(info.height / 2))).toBeGreaterThan(20);
+  });
+
+  it("не трогает push/pop-up: без блока scatter сцена не собирается", async () => {
+    const person = await solidLayer(400, 900, [200, 170, 120, 255]);
+    const res = await composeAsset(PUSH_HERO_V1, "push.hero", 1, { person }, "s");
+    expect(res.ok).toBe(true);
+    if (!res.ok) return;
+    expect(res.metadata.scene).toBeNull();
+  });
+});
+
+describe("composeAsset — style-profile (DV-E1: стиль, не геометрия)", () => {
+  async function renderWithProfile(
+    profile: { glowHex?: string; typoMaterial?: string; density?: number } | undefined,
+    seed = "styleSeed",
+  ) {
+    const person = await solidLayer(400, 900, [200, 170, 120, 255]);
+    const pieces = [
+      await solidLayer(420, 700, [220, 180, 60, 255]),
+      await solidLayer(150, 120, [230, 190, 70, 255]),
+      await solidLayer(180, 140, [230, 190, 70, 255]),
+    ];
+    return composeAsset(
+      EMAIL_HERO_V3,
+      "email.hero",
+      3,
+      {
+        person,
+        itemPieces: pieces,
+        campaignTokens: ["BIG WIN"],
+        ...(profile ? { styleProfile: profile } : {}),
+      },
+      seed,
+    );
+  }
+
+  it("glowHex профиля перекрывает auto-from-layers", async () => {
+    const res = await renderWithProfile({ glowHex: "#123456" });
+    expect(res.ok).toBe(true);
+    if (!res.ok) return;
+    expect(res.metadata.scene!.glowColor).toBe("#123456");
+  });
+
+  it("density смещает число объектов ВНУТРИ коридора спеки", async () => {
+    const sparse = await renderWithProfile({ density: 0 });
+    const dense = await renderWithProfile({ density: 1 });
+    if (!sparse.ok || !dense.ok) return;
+    // Коридоры v3: back 1–2, mid 3–5, front 5–9 → 9 против 16 запрошенных.
+    expect(dense.metadata.layers.decorPlaced).toBeGreaterThan(
+      sparse.metadata.layers.decorPlaced,
+    );
+    const spec = EMAIL_HERO_V3.scatter!;
+    const maxTotal = spec.layers.reduce((s, l) => s + l.count[1], 0);
+    const minTotal = spec.layers.reduce((s, l) => s + l.count[0], 0);
+    expect(dense.metadata.layers.decorPlaced).toBeLessThanOrEqual(maxTotal);
+    expect(sparse.metadata.layers.decorPlaced + sparse.metadata.layers.decorSkipped).toBe(
+      minTotal,
+    );
+  });
+
+  it("материал типографики меняет пиксели надписи при том же seed", async () => {
+    const gold = await renderWithProfile({ typoMaterial: "gold" });
+    const neon = await renderWithProfile({ typoMaterial: "neon" });
+    if (!gold.ok || !neon.ok) return;
+    expect(gold.scales[0]!.png.equals(neon.scales[0]!.png)).toBe(false);
+  });
+
+  it("с профилем рендер остаётся побайтово детерминированным", async () => {
+    const a = await renderWithProfile({ glowHex: "#AA3355", density: 0.5 }, "same");
+    const b = await renderWithProfile({ glowHex: "#AA3355", density: 0.5 }, "same");
+    if (!a.ok || !b.ok) return;
+    expect(a.scales[0]!.png.equals(b.scales[0]!.png)).toBe(true);
   });
 });

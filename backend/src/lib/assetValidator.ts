@@ -1,6 +1,16 @@
 import sharp from "sharp";
 import type { LayoutSpecData, SpecRect } from "../services/layoutSpec.js";
 import type { AssetMetadata, ComposedScale, Box } from "./composeEngine.js";
+import {
+  bandCoveragePct,
+  bandObjectCount,
+  centerAlpha,
+  connectedComponents,
+  transparentSharePct,
+  croppedByEdgeCount,
+  dominantHueCount,
+  loadRaster,
+} from "./patternMetrics.js";
 
 /**
  * Asset validator (TASK email-composition, Phase 4): автоприёмка каждого
@@ -187,7 +197,13 @@ export async function validateComposedAsset(
     });
   }
 
-  // 6) Structural similarity vs the golden composite (optional).
+  // 6) Визуальный паттерн (Задание 2, Фаза 4). Проверки включаются наличием
+  // блока `scatter` в спеке — v2, push и pop-up их не видят (DV-B2).
+  if (spec.scatter) {
+    checks.push(...(await patternChecks(spec, inputs)));
+  }
+
+  // 7) Structural similarity vs the golden composite (optional).
   if (inputs.golden) {
     const minSsim = spec.validation?.minSsim ?? DEFAULT_MIN_SSIM;
     const base = inputs.scales.find((s) => s.scale === 1) ?? inputs.scales[0]!;
@@ -201,6 +217,130 @@ export async function validateComposedAsset(
 
   const failed = checks.filter((c) => !c.passed);
   return { passed: failed.length === 0, checks, failedKeys: failed.map((c) => c.key) };
+}
+
+/**
+ * Проверки визуального паттерна (Задание 2, TASK §6 Фаза 4 в редакции
+ * R-PLAN-email-visual-pattern §10). Считаются ТЕМ ЖЕ кодом, что и замеры
+ * эталонов (`lib/patternMetrics.ts`) — иначе коридоры разъедутся молча.
+ *
+ * Отличия от буквального TASK, обоснованные Фазой 0:
+ *  - V2/V3 «фон непрозрачный, яркость 30–42» → V2′/V3′ «плашка присутствует,
+ *    углы прозрачны»: при прозрачной доставке (D-E5) под ассетом нет фона, и
+ *    яркость мерить не по чему;
+ *  - V10 «макушка в 0–11%» снята: в 4 из 5 эталонов верх правой полосы — это
+ *    размытая монета, подрезанная верхним краем, а не голова. Вместо неё V10b;
+ *  - V13 «читаемость» пропускается при прозрачной доставке.
+ */
+async function patternChecks(
+  spec: LayoutSpecData,
+  inputs: ValidateInputs,
+): Promise<ValidationCheck[]> {
+  const out: ValidationCheck[] = [];
+  const scatter = spec.scatter!;
+  const v = spec.validation;
+  const base = inputs.scales.find((s) => s.scale === 1) ?? inputs.scales[0]!;
+  const raster = await loadRaster(base.png);
+  const comps = connectedComponents(raster);
+
+  // V2′ — плашка на месте, углы прозрачны (D-E5: письмо кладёт свой фон).
+  const plate = spec.background.glowPlate;
+  if (plate) {
+    const center = centerAlpha(raster, 0.15) / 255;
+    // Не «альфа в углах»: угол законно закрывает подрезанный кромкой объект
+    // декора (П4). Проверяем то, что реально требует D-E5 — под ассетом
+    // остаётся видимый фон письма.
+    const clear = transparentSharePct(raster);
+    const minCenter = v?.glowAlphaCenterMin ?? 0;
+    const minClear = v?.minTransparentSharePct ?? 0;
+    const ok = center >= minCenter && clear >= minClear;
+    out.push({
+      key: "glow-plate",
+      passed: ok,
+      detail:
+        `alpha центра ${(center * 255).toFixed(0)}/255 (min ${Math.round(minCenter * 255)}), ` +
+        `прозрачных пикселей ${clear.toFixed(1)}% (min ${minClear}%)`,
+    });
+  }
+
+  // V4 — покрытие декором полосы 25–72%.
+  const coverage = bandCoveragePct(raster, scatter.band.x, scatter.band.w);
+  const [covLo, covHi] = scatter.targetCoveragePct;
+  out.push({
+    key: "decor-coverage",
+    passed: coverage >= covLo && coverage <= covHi,
+    detail: `${coverage.toFixed(1)}% полосы ${Math.round(scatter.band.x * 100)}–${Math.round(
+      (scatter.band.x + scatter.band.w) * 100,
+    )}% (коридор ${covLo}–${covHi}%)`,
+  });
+
+  // V5 — число объектов декора в той же полосе.
+  const objects = bandObjectCount(comps, raster, scatter.band.x, scatter.band.w);
+  const [cntLo, cntHi] = scatter.targetObjectCount;
+  out.push({
+    key: "decor-count",
+    passed: objects >= cntLo && objects <= cntHi,
+    detail: `${objects} объектов (коридор ${cntLo}–${cntHi})`,
+  });
+
+  // V6 — ядро 40–60%: почти пусто. Строгий запрет живёт в `safe-core-clean`
+  // (0 пикселей в конвертах строк), здесь — мягкий порог на всю полосу.
+  const core = spec.safe?.levels?.core;
+  if (core) {
+    const coreCoverage = bandCoveragePct(raster, core.x, core.w);
+    const limit = core.maxCoverage * 100;
+    out.push({
+      key: "core-coverage",
+      passed: coreCoverage <= limit,
+      detail: `${coreCoverage.toFixed(1)}% ядра занято (max ${limit.toFixed(1)}%)`,
+    });
+  }
+
+  // V7 — bleed: хотя бы два объекта подрезаны кромкой холста.
+  const minCropped = v?.minCroppedByEdge ?? 0;
+  if (minCropped > 0) {
+    const cropped = croppedByEdgeCount(comps);
+    out.push({
+      key: "bleed",
+      passed: cropped >= minCropped,
+      detail: `${cropped} объектов подрезано краем (min ${minCropped})`,
+    });
+  }
+
+  // V10b — задний план подрезан ВЕРХНИМ краем (приём П2: «окно в сцену»).
+  if (v?.requireBackCropTop) {
+    const ok = inputs.metadata.scene?.backCropsTop === true;
+    out.push({
+      key: "back-crop-top",
+      passed: ok,
+      detail: ok
+        ? "объект заднего плана уходит за верхнюю кромку"
+        : "ни один объект заднего плана не подрезан верхним краем",
+    });
+  }
+
+  // V11 — типографика присутствует. OCR не нужен: токен рисуем мы сами, и
+  // достаточно убедиться, что слот отработал (см. R-PLAN §10).
+  if (spec.typography3d?.slots.some((s) => s.enabled)) {
+    const tokens = inputs.metadata.scene?.typographyTokens ?? 0;
+    out.push({
+      key: "typography",
+      passed: tokens >= 1,
+      detail: `${tokens} надпис(ь/и) в кадре`,
+    });
+  }
+
+  // V12 — цветовой ключ: не больше N доминирующих оттенков (приём П8).
+  if (v?.maxHues !== undefined) {
+    const hues = dominantHueCount(raster);
+    out.push({
+      key: "color-key",
+      passed: hues <= v.maxHues,
+      detail: `${hues} доминирующих оттенков (max ${v.maxHues})`,
+    });
+  }
+
+  return out;
 }
 
 /**

@@ -2,8 +2,26 @@ import { describe, it, expect } from "vitest";
 import sharp from "sharp";
 import { validateComposedAsset, personLayerSanity, ssim } from "../src/lib/assetValidator.js";
 import type { ValidateInputs } from "../src/lib/assetValidator.js";
-import type { AssetMetadata } from "../src/lib/composeEngine.js";
-import { EMAIL_HERO_V1 } from "../src/services/layoutSpec.js";
+import type { AssetMetadata, EngineLayer } from "../src/lib/composeEngine.js";
+import { composeAsset } from "../src/lib/composeEngine.js";
+import { EMAIL_HERO_V1, EMAIL_HERO_V3, PUSH_HERO_V1 } from "../src/services/layoutSpec.js";
+
+/** Непрозрачный слой заданного размера — заменитель вырезки. */
+async function solidLayer(
+  w: number,
+  h: number,
+  rgba: [number, number, number, number],
+): Promise<EngineLayer> {
+  const data = Buffer.alloc(w * h * 4);
+  for (let i = 0; i < w * h; i++) {
+    data[i * 4] = rgba[0];
+    data[i * 4 + 1] = rgba[1];
+    data[i * 4 + 2] = rgba[2];
+    data[i * 4 + 3] = rgba[3];
+  }
+  const png = await sharp(data, { raw: { width: w, height: h, channels: 4 } }).png().toBuffer();
+  return { data: png, width: w, height: h };
+}
 
 /**
  * Phase 4 DoD: every defect class from the Phase 0 «как есть» artifacts must
@@ -204,5 +222,79 @@ describe("personLayerSanity (stage A auto-retry gate)", () => {
     const sliver = personLayerSanity(100, 1400);
     expect(sliver.ok).toBe(false);
     expect(sliver.reason).toContain("sliver");
+  });
+});
+
+// ------------------------------------------------------------------
+// Проверки визуального паттерна (Задание 2, Фаза 4). Валидатор считает их тем
+// же кодом, что и замеры эталонов (`lib/patternMetrics.ts`).
+// ------------------------------------------------------------------
+describe("pattern checks (Задание 2)", () => {
+  async function renderScene(seed = "brandX") {
+    const person = await solidLayer(400, 900, [200, 170, 120, 255]);
+    const pieces = [
+      await solidLayer(420, 700, [220, 180, 60, 255]),
+      await solidLayer(150, 120, [230, 190, 70, 255]),
+      await solidLayer(180, 140, [230, 190, 70, 255]),
+    ];
+    const res = await composeAsset(
+      EMAIL_HERO_V3,
+      "email.hero",
+      3,
+      { person, itemPieces: pieces },
+      seed,
+    );
+    if (!res.ok) throw new Error(res.reason);
+    return res;
+  }
+
+  it("прогоняет проверки паттерна и объясняет каждый провал числами", async () => {
+    const c = await renderScene();
+    const report = await validateComposedAsset(EMAIL_HERO_V3, {
+      scales: c.scales,
+      metadata: c.metadata,
+      overlayMask: c.overlayMask,
+    });
+    const keys = report.checks.map((x) => x.key);
+    for (const k of ["glow-plate", "decor-coverage", "decor-count", "core-coverage", "bleed", "back-crop-top", "typography", "color-key"]) {
+      expect(keys).toContain(k);
+    }
+    // Детали обязаны быть числовыми: по ним дизайнер понимает, что не так.
+    for (const check of report.checks) expect(check.detail.length).toBeGreaterThan(0);
+  });
+
+  it("плашка на месте и углы прозрачны (V2′)", async () => {
+    const c = await renderScene();
+    const report = await validateComposedAsset(EMAIL_HERO_V3, {
+      scales: c.scales,
+      metadata: c.metadata,
+      overlayMask: c.overlayMask,
+    });
+    expect(report.checks.find((x) => x.key === "glow-plate")!.passed).toBe(true);
+  });
+
+  it("bleed и кроп заднего плана выполняются (V7, V10b)", async () => {
+    const c = await renderScene();
+    const report = await validateComposedAsset(EMAIL_HERO_V3, {
+      scales: c.scales,
+      metadata: c.metadata,
+      overlayMask: c.overlayMask,
+    });
+    expect(report.checks.find((x) => x.key === "bleed")!.passed).toBe(true);
+    expect(report.checks.find((x) => x.key === "back-crop-top")!.passed).toBe(true);
+  });
+
+  it("не трогает push/pop-up — у них нет блока scatter (DV-B2)", async () => {
+    const person = await solidLayer(400, 900, [200, 170, 120, 255]);
+    const res = await composeAsset(PUSH_HERO_V1, "push.hero", 1, { person }, "s");
+    if (!res.ok) throw new Error(res.reason);
+    const report = await validateComposedAsset(PUSH_HERO_V1, {
+      scales: res.scales,
+      metadata: res.metadata,
+      overlayMask: res.overlayMask,
+    });
+    const keys = report.checks.map((x) => x.key);
+    expect(keys).not.toContain("decor-coverage");
+    expect(keys).not.toContain("glow-plate");
   });
 });

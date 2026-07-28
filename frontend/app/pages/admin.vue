@@ -779,8 +779,17 @@ async function saveLayoutSpecVersion(key: string) {
     });
     lsMsg.value[key] = `Сохранено как v${res.layoutSpec.version} ✓ — применится к новым рендерам`;
     await loadLayoutSpecs();
-  } catch {
-    lsMsg.value[key] = "Спека отклонена валидацией (границы 0..1, min≤target≤max, зоны внутри холста).";
+  } catch (err) {
+    // Сервер присылает issues с путём поля — показываем их, иначе в спеке на
+    // полсотни вложенных полей непонятно, что именно править.
+    const issues = (err as { data?: { issues?: Array<{ path: string; message: string }> } })?.data
+      ?.issues;
+    lsMsg.value[key] = issues?.length
+      ? `Спека отклонена: ${issues
+          .slice(0, 3)
+          .map((i) => `${i.path || "корень"} — ${i.message}`)
+          .join("; ")}${issues.length > 3 ? ` (и ещё ${issues.length - 3})` : ""}`
+      : "Спека отклонена валидацией (границы 0..1, min≤target≤max, зоны внутри холста).";
   }
 }
 
@@ -794,6 +803,89 @@ async function toggleLayoutSpec(s: AdminLayoutSpec) {
     lsMsg.value[s.key] = `v${s.version} ${s.isActive ? "активирована" : "деактивирована"} ✓`;
   } catch {
     lsMsg.value[s.key] = "Ошибка переключения версии";
+  }
+}
+
+// ---- Библиотека декора (Задание 2 «визуальный паттерн», Фаза 2) ----
+// Загрузка прозрачных PNG для раскладки по кольцу. Файлы принимает
+// /api/admin/decor: там же чистка ореолов, обрезка по bbox и дедупликация.
+interface DecorSlot {
+  bundleTypeKey: string;
+  assetKey: string;
+  label?: string;
+  decorUrls: string[];
+}
+interface DecorUploadResult {
+  name: string;
+  ok: boolean;
+  url?: string;
+  reason?: string;
+}
+
+const decorSlots = ref<DecorSlot[]>([]);
+const decorLimits = ref({ perSlot: 20, maxFiles: 24 });
+// По умолчанию только email: push и pop-up откалиброваны по своим эталонам,
+// декор поменял бы их вид (решение DV-B2).
+const decorTargets = ref<string[]>(["email"]);
+const decorInput = ref<HTMLInputElement | null>(null);
+const decorBusy = ref(false);
+const decorMsg = ref("");
+const decorErrors = ref<Array<{ name: string; reason: string }>>([]);
+
+async function loadDecor() {
+  try {
+    const res = await api<{ slots: DecorSlot[]; limits: typeof decorLimits.value }>(
+      "/api/admin/decor",
+    );
+    decorSlots.value = res.slots;
+    decorLimits.value = res.limits;
+  } catch {
+    decorMsg.value = "Не удалось загрузить библиотеку декора";
+  }
+}
+
+function pickDecor() {
+  decorInput.value?.click();
+}
+
+async function uploadDecor(event: Event) {
+  const input = event.target as HTMLInputElement;
+  const files = [...(input.files ?? [])];
+  if (files.length === 0) return;
+  decorBusy.value = true;
+  decorMsg.value = "";
+  decorErrors.value = [];
+  try {
+    const form = new FormData();
+    for (const f of files) form.append("files", f);
+    form.append("assetKeys", JSON.stringify(decorTargets.value));
+    const res = await api<{ results: DecorUploadResult[] }>("/api/admin/decor", {
+      method: "POST",
+      body: form,
+    });
+    const ok = res.results.filter((r) => r.ok).length;
+    // Отказы показываем поимённо: «нет альфа-канала» на конкретном файле —
+    // единственная подсказка, которая реально помогает его переделать.
+    decorErrors.value = res.results
+      .filter((r) => !r.ok)
+      .map((r) => ({ name: r.name, reason: r.reason ?? "не принят" }));
+    decorMsg.value = `Принято ${ok} из ${res.results.length} ✓`;
+    await loadDecor();
+  } catch (err) {
+    const details = (err as { data?: { details?: string } })?.data?.details;
+    decorMsg.value = details ? `Загрузка не удалась: ${details}` : "Загрузка не удалась";
+  } finally {
+    decorBusy.value = false;
+    input.value = ""; // иначе повторный выбор того же файла не даст change
+  }
+}
+
+async function detachDecor(assetKey: string, url: string) {
+  try {
+    await api("/api/admin/decor", { method: "DELETE", body: { assetKey, url } });
+    await loadDecor();
+  } catch {
+    decorMsg.value = "Не удалось убрать ассет из слота";
   }
 }
 
@@ -888,6 +980,7 @@ onMounted(() => {
     void loadSmarticoBrands();
     void loadBundleTypes();
     void loadLayoutSpecs();
+    void loadDecor();
     void loadBrandLogs();
   }
   void loadTournaments();
@@ -1525,6 +1618,68 @@ onMounted(() => {
       </div>
       <p v-if="!lsKeys.length" class="muted">Спеки не найдены (нужен сид email.hero v1).</p>
     </section>
+
+    <section v-if="auth.isAdmin" class="panel">
+      <h2>Композиция — библиотека декора</h2>
+      <p class="muted">
+        Мелкие объекты сцены: монеты, купюры, проценты, фишки, лепестки, символы. Движок
+        раскладывает их по кольцу вокруг центра — эталонам нужно 6–11 объектов в кадре.
+        Принимаются <b>PNG или WebP с прозрачным фоном</b>; файл без альфа-канала будет отклонён,
+        потому что встал бы на баннер прямоугольной плашкой. Обрезку по краям и чистку ореолов
+        делаем сами. Одинаковые файлы не дублируются.
+      </p>
+      <p class="muted">
+        Набор общий для всех брендов — цвет под палитру бренда приводит движок. Рекомендуемый
+        минимум: <b>12 объектов</b>, из них хотя бы один крупный (монета) — он уходит в размытый
+        задний план и подрезается верхним краем.
+      </p>
+
+      <div class="dec__slots">
+        <label v-for="s in decorSlots" :key="s.assetKey" class="dec__slot">
+          <input v-model="decorTargets" type="checkbox" :value="s.assetKey" />
+          {{ s.label || s.assetKey }}
+          <span class="muted">({{ s.decorUrls.length }}/{{ decorLimits.perSlot }})</span>
+        </label>
+      </div>
+      <p class="muted">
+        Куда прицепить загруженные файлы. По умолчанию только email: push и pop-up собираются по
+        своим эталонам, и декор изменил бы их вид.
+      </p>
+
+      <div class="bt__actions">
+        <input
+          ref="decorInput"
+          class="dec__file"
+          type="file"
+          accept="image/png,image/webp"
+          multiple
+          @change="uploadDecor"
+        />
+        <button class="btn-primary" :disabled="decorBusy || !decorTargets.length" @click="pickDecor">
+          {{ decorBusy ? "Загрузка…" : "Выбрать файлы" }}
+        </button>
+      </div>
+      <p v-if="decorMsg" class="muted">{{ decorMsg }}</p>
+      <ul v-if="decorErrors.length" class="dec__errors">
+        <li v-for="e in decorErrors" :key="e.name">{{ e.name }} — {{ e.reason }}</li>
+      </ul>
+
+      <div v-for="s in decorSlots" :key="`grid-${s.assetKey}`">
+        <h3 v-if="s.decorUrls.length" class="bt__title">{{ s.label || s.assetKey }}</h3>
+        <div v-if="s.decorUrls.length" class="dec__grid">
+          <figure v-for="url in s.decorUrls" :key="url" class="dec__item">
+            <img :src="url" :alt="s.assetKey" loading="lazy" />
+            <button class="btn-toggle" title="Убрать из слота" @click="detachDecor(s.assetKey, url)">
+              убрать
+            </button>
+          </figure>
+        </div>
+      </div>
+      <p v-if="decorSlots.every((s) => !s.decorUrls.length)" class="muted">
+        Библиотека пуста — сейчас декор берётся из кусков сгенерированного ITEM-слоя, и кадр
+        выходит разреженнее эталонов.
+      </p>
+    </section>
   </div>
 </template>
 
@@ -2025,5 +2180,58 @@ select {
   background: var(--color-white);
   color: var(--color-text);
   resize: vertical;
+}
+
+/* Библиотека декора */
+.dec__slots {
+  display: flex;
+  gap: 16px;
+  flex-wrap: wrap;
+  margin-bottom: 6px;
+}
+.dec__slot {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 13px;
+}
+.dec__errors {
+  margin: 4px 0 0;
+  padding-left: 18px;
+  font-size: 13px;
+  color: var(--color-danger, #c0392b);
+}
+.dec__grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(96px, 1fr));
+  gap: 10px;
+  margin: 8px 0 16px;
+}
+.dec__item {
+  margin: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 4px;
+  padding: 6px;
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-sm);
+  /* Шахматка: декор прозрачный, на белом фоне его края не видно. */
+  background-image:
+    linear-gradient(45deg, #e9e9e9 25%, transparent 25%),
+    linear-gradient(-45deg, #e9e9e9 25%, transparent 25%),
+    linear-gradient(45deg, transparent 75%, #e9e9e9 75%),
+    linear-gradient(-45deg, transparent 75%, #e9e9e9 75%);
+  background-size: 12px 12px;
+  background-position: 0 0, 0 6px, 6px -6px, -6px 0;
+}
+.dec__item img {
+  width: 100%;
+  height: 72px;
+  object-fit: contain;
+}
+/* Нативный input прячем — файлы выбираются кнопкой в общем стиле панели. */
+.dec__file {
+  display: none;
 }
 </style>

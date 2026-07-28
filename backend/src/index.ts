@@ -6,6 +6,7 @@ import { env, assertApiProductionConfig } from "./env.js";
 import { healthRouter } from "./routes/health.js";
 import { authRouter } from "./routes/auth.js";
 import { adminRouter } from "./routes/admin.js";
+import { decorRouter } from "./routes/decor.js";
 import { catalogRouter } from "./routes/catalog.js";
 import { generateRouter } from "./routes/generate.js";
 import { tournamentRouter } from "./routes/tournament.js";
@@ -49,6 +50,9 @@ app.get("/", (_req, res) => {
 
 app.use("/health", healthRouter);
 app.use("/auth", authRouter);
+// Библиотека декора (Задание 2, Фаза 2). Монтируется ДО `/api/admin`: префикс
+// у adminRouter более общий, и он перехватил бы запрос первым.
+app.use("/api/admin/decor", loadUser, requireAdmin, decorRouter);
 app.use("/api/admin", loadUser, requireAdmin, adminRouter);
 // Zone guards: Design (DESIGNER) vs CRM (CRM); ADMIN passes both (see requireZone).
 app.use("/api/catalog", loadUser, requireAuth, requireZone("DESIGNER"), catalogRouter);

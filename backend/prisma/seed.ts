@@ -6,6 +6,7 @@ import {
   EMAIL_HERO_KEY,
   EMAIL_HERO_V1,
   EMAIL_HERO_V2,
+  EMAIL_HERO_V3,
   PUSH_HERO_KEY,
   PUSH_HERO_V1,
   POPUP_HERO_KEY,
@@ -168,16 +169,24 @@ async function main() {
   // сид добавляет отсутствующие версии, правки живут в админке. Рендер берёт
   // ПОСЛЕДНЮЮ активную версию ключа, поэтому email.hero v2 (прозрачный фон)
   // вытесняет v1 автоматически, а v1 остаётся историей для старых бандлов.
-  const seededSpecs: Array<[string, number, object]> = [
-    [EMAIL_HERO_KEY, 1, EMAIL_HERO_V1],
-    [EMAIL_HERO_KEY, 2, EMAIL_HERO_V2],
-    [PUSH_HERO_KEY, 1, PUSH_HERO_V1],
-    [POPUP_HERO_KEY, 1, POPUP_HERO_V1],
+  const seededSpecs: Array<[string, number, object, boolean]> = [
+    [EMAIL_HERO_KEY, 1, EMAIL_HERO_V1, true],
+    [EMAIL_HERO_KEY, 2, EMAIL_HERO_V2, true],
+    // v3 — визуальный паттерн эталонов (Задание 2). Движок её блоки уже
+    // читает (Фазы 3–5), но сидируется она ВЫКЛЮЧЕННОЙ: коридоры декора
+    // (6–11 объектов, покрытие 5.6–10.2%) выполнимы только с библиотекой
+    // декора заказчика (DV-C1), которой ещё нет, — активная v3 без файлов
+    // роняла бы email-рендеры на валидаторе. Включение — релизный шаг после
+    // загрузки декора и шрифта: переключатель isActive в админке, без
+    // правки сида и деплоя. Это же и путь отката на v2.
+    [EMAIL_HERO_KEY, 3, EMAIL_HERO_V3, false],
+    [PUSH_HERO_KEY, 1, PUSH_HERO_V1, true],
+    [POPUP_HERO_KEY, 1, POPUP_HERO_V1, true],
   ];
-  for (const [key, version, spec] of seededSpecs) {
+  for (const [key, version, spec, isActive] of seededSpecs) {
     await prisma.layoutSpec.upsert({
       where: { key_version: { key, version } },
-      create: { key, version, spec },
+      create: { key, version, spec, isActive },
       update: {},
     });
   }

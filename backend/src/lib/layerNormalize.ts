@@ -118,3 +118,51 @@ export async function normalizeLayer(
     opaqueRatio: subjectPx / (bboxW * bboxH),
   };
 }
+
+/**
+ * П5 «поясной кроп» (Задание 2, DV-C3). Оставляет верхнюю долю уже
+ * нормализованного слоя и заново обрезает результат по его собственному
+ * альфа-bbox: у поясного плана силуэт уже, чем у фигуры в полный рост, и без
+ * повторного трима по бокам осталась бы пустота, которая врёт масштабу.
+ *
+ * Зачем кодом, а не отдельной генерацией: слой персонажа ОДИН на email, push и
+ * pop-up (stage A `prepare-variant`). Резать копию дешевле, чем генерировать
+ * второго персонажа на каждый brand-variant, и результат детерминирован.
+ *
+ * Проверять, что после реза субъект остался портретным, обязан вызывающий
+ * (`personLayerSanity`): рез по доле не знает, где у фигуры пояс, и на
+ * нетиповой позе может попасть по рукам.
+ */
+export async function cropLayerTop(
+  input: Buffer,
+  fraction: number,
+): Promise<NormalizedLayerImage | NormalizeFailure> {
+  if (!(fraction > 0) || fraction > 1) {
+    return { ok: false, reason: `cropTopFraction must be in (0, 1], got ${fraction}` };
+  }
+  if (fraction === 1) return normalizeLayer(input);
+
+  let meta: { width?: number; height?: number };
+  try {
+    meta = await sharp(input).metadata();
+  } catch (err) {
+    return { ok: false, reason: `decode failed: ${err instanceof Error ? err.message : err}` };
+  }
+  const w = meta.width ?? 0;
+  const h = meta.height ?? 0;
+  if (w < 1 || h < 1) return { ok: false, reason: "empty layer: zero-sized input" };
+
+  const keep = Math.max(1, Math.round(h * fraction));
+  let top: Buffer;
+  try {
+    top = await sharp(input)
+      .ensureAlpha()
+      .extract({ left: 0, top: 0, width: w, height: keep })
+      .png({ compressionLevel: 9, adaptiveFiltering: false, palette: false })
+      .toBuffer();
+  } catch (err) {
+    return { ok: false, reason: `crop failed: ${err instanceof Error ? err.message : err}` };
+  }
+  // Повторный проход снимает боковые поля и чистит альфу того же среза.
+  return normalizeLayer(top);
+}

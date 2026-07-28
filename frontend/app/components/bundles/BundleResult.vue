@@ -8,14 +8,85 @@ import { ref, computed, watch } from "vue";
 import { safeZoneStyle, safeContrast } from "~/composables/useSafeZonePreview";
 
 const store = useBundlesStore();
+const api = useApi();
+const auth = useAuthStore();
 
 const bundle = computed(() => store.selected);
+
+// ---- Style-profile «казино-дизайнера» (DV-E1) — админский override ----
+// Стиль сцены (hue плашки, материал, токены, плотность, выбор декора) — данные,
+// не координаты. Сервер зажимает всё в коридоры спеки; применяется при
+// СЛЕДУЮЩЕМ рендере ассета (перегенерация), в готовые картинки не лезет.
+const styleEditId = ref<string | null>(null);
+const styleText = ref("");
+const styleMsg = ref("");
+const styleBusy = ref(false);
+
+const STYLE_TEMPLATE = {
+  glowHex: "#7A1B8F",
+  typoMaterial: "gold",
+  tokens: ["BIG WIN"],
+  density: 0.6,
+};
+
+function toggleStyleEdit(v: { id: string; styleProfile: Record<string, unknown> | null }) {
+  if (styleEditId.value === v.id) {
+    styleEditId.value = null;
+    return;
+  }
+  styleEditId.value = v.id;
+  styleText.value = JSON.stringify(v.styleProfile ?? STYLE_TEMPLATE, null, 2);
+  styleMsg.value = "";
+}
+
+async function saveStyleProfile(reset: boolean) {
+  if (!styleEditId.value) return;
+  let profile: unknown = null;
+  if (!reset) {
+    try {
+      profile = JSON.parse(styleText.value);
+    } catch {
+      styleMsg.value = "Невалидный JSON";
+      return;
+    }
+  }
+  styleBusy.value = true;
+  try {
+    await api(`/api/admin/bundle-variants/${styleEditId.value}/style-profile`, {
+      method: "PATCH",
+      body: { profile },
+    });
+    styleMsg.value = reset
+      ? "Профиль сброшен — при следующей генерации бандла его снова предложит модель"
+      : "Сохранено ✓ — применится при перегенерации ассетов этого бренда";
+    await store.refreshSelected();
+  } catch (err) {
+    const details = (err as { data?: { details?: string } })?.data?.details;
+    styleMsg.value = details ? `Отклонено: ${details}` : "Не удалось сохранить профиль";
+  } finally {
+    styleBusy.value = false;
+  }
+}
 
 // ---- Safe-zone preview (TASK email-composition, Фаза 5) ----
 // Engine-rendered assets ship the safe zone in percentages, so the designer can
 // see the email's text block on the картинке before the письмо собрано in
 // Smartico. Purely a review overlay — nothing is baked into the image (D-E1).
 const safePreview = ref(false);
+
+/**
+ * Подложка превью (Задание 2, DV-A1). Ассет отдаётся прозрачным, свечение
+ * внутри него — полупрозрачной плашкой, поэтому на тёмном фоне письма кадр
+ * читается как эталоны 1–5 («чёрные углы»), а на светлом — как мягкая
+ * заливка. Шахматка остаётся дефолтом: она показывает, где реально пусто.
+ */
+const BACKDROPS = [
+  { key: "checker", label: "▦", title: "Шахматка — видно, где ассет прозрачный" },
+  { key: "light", label: "☀", title: "Светлое письмо" },
+  { key: "dark", label: "☾", title: "Тёмное письмо" },
+] as const;
+type BackdropKey = (typeof BACKDROPS)[number]["key"];
+const backdrop = ref<BackdropKey>("checker");
 
 const hasSafeMeta = computed(() =>
   (bundle.value?.variants ?? []).some((v) => v.assets.some((a) => a.meta)),
@@ -122,6 +193,22 @@ function formatDateTime(iso: string | null): string {
         <input v-model="safePreview" type="checkbox" />
         <span>Safe zone preview</span>
       </label>
+      <!-- Ассет прозрачный, и свечение внутри него читается по-разному на
+           светлом и тёмном фоне письма (DV-A1). Дизайнер обязан видеть оба
+           сценария, иначе «чёрные углы» проверить не на чем. -->
+      <div class="backdrop" role="group" aria-label="Подложка превью">
+        <button
+          v-for="b in BACKDROPS"
+          :key="b.key"
+          type="button"
+          class="backdrop__btn"
+          :class="{ 'backdrop__btn--on': backdrop === b.key }"
+          :title="b.title"
+          @click="backdrop = b.key"
+        >
+          {{ b.label }}
+        </button>
+      </div>
     </div>
 
     <div class="variants">
@@ -144,7 +231,37 @@ function formatDateTime(iso: string | null): string {
           <p class="variant__subtitle">
             <span class="variant__radio" aria-hidden="true" />
             <b>{{ bundle.bundleType.title }}</b>
+            <!-- DV-E1: override стиля сцены — только админ; данные, не координаты -->
+            <button
+              v-if="auth.isAdmin"
+              class="btn btn--sm style__toggle"
+              type="button"
+              :title="v.styleProfile ? 'Style-profile задан' : 'Style-profile не задан (фолбэк движка)'"
+              @click="toggleStyleEdit(v)"
+            >
+              🎨 Стиль{{ v.styleProfile ? " •" : "" }}
+            </button>
           </p>
+
+          <div v-if="auth.isAdmin && styleEditId === v.id" class="style">
+            <p class="style__hint">
+              Стиль сцены (DV-E1): <code>glowHex</code> #RRGGBB, <code>typoMaterial</code>
+              gold/neon/gloss/silver, <code>tokens</code> ≤ 3 надписей КАПСОМ,
+              <code>density</code> 0..1, <code>decorUrls</code> из библиотеки слота.
+              Координат здесь нет — геометрию держит спека. Сервер зажимает значения в
+              коридоры; применяется при перегенерации ассетов.
+            </p>
+            <textarea v-model="styleText" class="style__json" rows="8" spellcheck="false" />
+            <div class="style__actions">
+              <button class="btn btn--sm" type="button" :disabled="styleBusy" @click="saveStyleProfile(false)">
+                Сохранить override
+              </button>
+              <button class="btn btn--sm btn--ghost" type="button" :disabled="styleBusy" @click="saveStyleProfile(true)">
+                Сбросить к модели
+              </button>
+              <span v-if="styleMsg" class="style__msg">{{ styleMsg }}</span>
+            </div>
+          </div>
           <div class="cards">
             <div
               v-for="a in v.assets"
@@ -167,7 +284,11 @@ function formatDateTime(iso: string | null): string {
                 </label>
               </header>
 
-              <div class="asset__frame" :style="{ aspectRatio: `${a.width} / ${a.height}` }">
+              <div
+                class="asset__frame"
+                :class="`asset__frame--${backdrop}`"
+                :style="{ aspectRatio: `${a.width} / ${a.height}` }"
+              >
                 <img v-if="a.imageUrl && a.status === 'done'" :src="a.imageUrl" :alt="`${v.displayName} ${a.label}`" loading="lazy" />
                 <div v-else-if="a.status === 'generating' || a.status === 'pending'" class="asset__placeholder">
                   <span class="spinner" />
@@ -534,6 +655,71 @@ function formatDateTime(iso: string | null): string {
     linear-gradient(-45deg, transparent 75%, #d4d4d4 75%);
   background-size: 16px 16px;
   background-position: 0 0, 0 8px, 8px -8px, -8px 0;
+}
+/* Подложки письма (DV-A1): свечение внутри прозрачного ассета читается
+   по-разному, и дизайнер должен видеть оба сценария. */
+.asset__frame--light img,
+.asset__frame--dark img {
+  background-image: none;
+}
+.asset__frame--light img {
+  background-color: #f2f2f2;
+}
+.asset__frame--dark img {
+  background-color: #0d0d0d;
+}
+.backdrop {
+  display: inline-flex;
+  gap: 2px;
+  margin-left: 12px;
+}
+.backdrop__btn {
+  border: 1px solid var(--color-border);
+  background: var(--color-white);
+  color: var(--color-text);
+  border-radius: var(--radius-sm);
+  padding: 2px 8px;
+  font-size: 13px;
+  line-height: 1.4;
+  cursor: pointer;
+}
+.backdrop__btn--on {
+  background: var(--color-text);
+  color: var(--color-white);
+}
+/* Style-profile (DV-E1) — админский редактор стиля сцены */
+.style__toggle {
+  margin-left: auto;
+}
+.style {
+  margin: 0 0 12px;
+  padding: 10px 12px;
+  border: 1px dashed var(--color-border);
+  border-radius: var(--radius-sm);
+}
+.style__hint {
+  margin: 0 0 8px;
+  font-size: 12px;
+  color: var(--color-text-muted, #777);
+}
+.style__json {
+  width: 100%;
+  font-family: ui-monospace, SFMono-Regular, Consolas, monospace;
+  font-size: 12px;
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-sm);
+  padding: 8px;
+  resize: vertical;
+}
+.style__actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-top: 8px;
+}
+.style__msg {
+  font-size: 12px;
+  color: var(--color-text-muted, #777);
 }
 .asset__placeholder {
   display: flex;

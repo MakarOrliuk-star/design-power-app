@@ -69,6 +69,9 @@ export interface BundleDetails {
     brandName: string;
     displayName: string;
     approvedCount: number;
+    /** Style-profile «казино-дизайнера» (DV-E1): стиль сцены — данные, не
+     *  координаты. Редактируется админом; null = профиля нет (фолбэк движка). */
+    styleProfile: Record<string, unknown> | null;
     assets: Array<{
       id: string;
       assetKey: string;
