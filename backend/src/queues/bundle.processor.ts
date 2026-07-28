@@ -3,7 +3,10 @@ import { runPersonFal, runBriaExpand } from "../lib/fal.js";
 import { getOrCreateNormalizedLayer, fetchBuffer } from "../services/layerCache.js";
 import { getActiveLayoutSpec, SPEC_KEY_BY_ASSET } from "../services/layoutSpec.js";
 import type { LayoutSpecRow } from "../services/layoutSpec.js";
-import { composeAsset } from "../lib/composeEngine.js";
+import { composeAsset, dominantColor, rgbToHex } from "../lib/composeEngine.js";
+import { deriveTokens } from "../lib/typography3d.js";
+import { clampStyleProfile, requestStyleProfile } from "../lib/styleProfile.js";
+import type { StyleProfile } from "../lib/styleProfile.js";
 import { splitLayerPieces } from "../lib/layerSplit.js";
 import type { EngineLayer } from "../lib/composeEngine.js";
 import { validateComposedAsset, personLayerSanity } from "../lib/assetValidator.js";
@@ -354,6 +357,83 @@ export function backgroundPrompt(neuralPrompt: string): string {
 // Stage A — prepare-variant
 // ------------------------------------------------------------------
 
+/**
+ * DV-E1 — получить style-profile варианта. Возвращает:
+ *   - `undefined` — колонку не трогать (ручной override, прослойке нечего
+ *     крутить при неактивной сцене, или модель недоступна — сохранённое
+ *     значение остаётся);
+ *   - `StyleProfile` — свежий профиль от модели, записать.
+ *
+ * Гейт «прослойке есть что крутить»: хотя бы у одного layered-ассета активная
+ * спека содержит блок `scatter` (= ветка сцены). Пока v3 выключена, вызовы
+ * модели не тратятся — включение v3 в админке автоматически включает и
+ * прослойку для НОВЫХ бандлов.
+ */
+async function buildVariantStyleProfile(opts: {
+  typeAssets: BundleTypeAsset[];
+  existing: unknown;
+  campaignPrompt: string;
+  brandName: string;
+  personLayer: { url: string; width: number; height: number } | null;
+}): Promise<StyleProfile | undefined> {
+  // Ограничение 4: ручной override из админки живёт, пока его не сняли руками.
+  const existing = opts.existing as { source?: unknown } | null;
+  if (existing && existing.source === "manual") return undefined;
+
+  const libraryUrls: string[] = [];
+  let sceneActive = false;
+  for (const config of opts.typeAssets) {
+    if (config.composeMode !== "layered") continue;
+    const specKey = config.layoutSpecKey ?? SPEC_KEY_BY_ASSET[config.key] ?? null;
+    if (!specKey) continue;
+    try {
+      const specRow = await getActiveLayoutSpec(specKey);
+      if (specRow?.spec.scatter) {
+        sceneActive = true;
+        for (const url of config.decorUrls ?? []) {
+          if (!libraryUrls.includes(url)) libraryUrls.push(url);
+        }
+      }
+    } catch {
+      // Битая спека уронит рендер своим внятным сообщением (stage B);
+      // прослойка тут ни при чём и не должна валить stage A.
+    }
+  }
+  if (!sceneActive) return undefined;
+
+  // Цвет, который движок увидел бы в auto-режиме, — чтобы модель предлагала
+  // hue, гармонирующий с реально сгенерированными слоями, а не вслепую.
+  let layerColorHex: string | null = null;
+  if (opts.personLayer) {
+    const buf = await fetchBuffer(opts.personLayer.url);
+    if (buf) {
+      try {
+        layerColorHex = rgbToHex(
+          await dominantColor([
+            { data: buf, width: opts.personLayer.width, height: opts.personLayer.height },
+          ]),
+        );
+      } catch {
+        /* цвет — подсказка, не условие */
+      }
+    }
+  }
+
+  const profile = await requestStyleProfile({
+    campaignPrompt: opts.campaignPrompt,
+    brandName: opts.brandName,
+    libraryUrls,
+    layerColorHex,
+  });
+  if (!profile) return undefined; // фолбэк: сохранённое (или ничего) остаётся
+  console.log(
+    `🎨 style-profile ${opts.brandName}: glow=${profile.glowHex ?? "auto"} ` +
+      `material=${profile.typoMaterial ?? "spec"} tokens=${(profile.tokens ?? []).join("|") || "—"} ` +
+      `density=${profile.density ?? "seeded"} decor=${profile.decorUrls?.length ?? "all"}`,
+  );
+  return profile;
+}
+
 export async function processPrepareVariantJob(bundleId: string, variantId: string): Promise<void> {
   const variant = await prisma.bundleBrandVariant.findUnique({
     where: { id: variantId },
@@ -474,6 +554,23 @@ export async function processPrepareVariantJob(bundleId: string, variantId: stri
     itemLayerHash = itemLayer.hash;
   }
 
+  // DV-E1 — style-profile «казино-дизайнера»: ОДИН вызов модели на
+  // brand-variant, результат сохраняется здесь и переживает любые повторные
+  // рендеры ассетов (ограничение 2). Ручной override (`source: "manual"`)
+  // не перетирается. Любой сбой → null: рендер идёт как без прослойки.
+  const personLayerRow = personLayerHash
+    ? await prisma.normalizedLayer.findUnique({ where: { sourceHash: personLayerHash } })
+    : null;
+  const styleProfile = await buildVariantStyleProfile({
+    typeAssets,
+    existing: variant.styleProfile,
+    campaignPrompt: neuralPrompt,
+    brandName: variant.brandName,
+    personLayer: personLayerRow
+      ? { url: personLayerRow.url, width: personLayerRow.width, height: personLayerRow.height }
+      : null,
+  });
+
   await prisma.bundleBrandVariant.update({
     where: { id: variantId },
     data: {
@@ -485,6 +582,9 @@ export async function processPrepareVariantJob(bundleId: string, variantId: stri
       itemCutoutId,
       personLayerHash,
       itemLayerHash,
+      ...(styleProfile !== undefined
+        ? { styleProfile: styleProfile as unknown as Prisma.InputJsonValue }
+        : {}),
     },
   });
 
@@ -533,9 +633,21 @@ async function renderLayeredWithEngine(opts: {
   itemLayerHash: string | null;
   config: BundleTypeAsset;
   specRow: LayoutSpecRow;
+  /** Бриф кампании — из него берутся токены надписей (DV-C4′, поправка
+   *  заказчика: «не обязательно BIG WIN — всё зависит от промпта»). */
+  campaignPrompt: string;
+  /** Сырой style-profile с варианта (DV-E1) — клампится ЗДЕСЬ, при каждом
+   *  рендере: библиотека декора могла измениться после сохранения профиля. */
+  styleProfile: unknown;
 }): Promise<EngineRenderResult> {
   const { specRow, config } = opts;
   const spec = specRow.spec;
+
+  // Ограничение 3 DV-E1: сохранённый профиль зажимается в коридоры на входе
+  // рендера. Мусор/устаревшие ссылки деградируют к дефолтам, а не роняют джобу.
+  const profile = clampStyleProfile(opts.styleProfile, {
+    libraryUrls: config.decorUrls ?? [],
+  });
 
   if (config.width !== spec.canvas.w || config.height !== spec.canvas.h) {
     return {
@@ -601,8 +713,11 @@ async function renderLayeredWithEngine(opts: {
   }
 
   // Static decor cutouts — normalized + cached exactly like subject layers.
+  // DV-E1: профиль может СУЗИТЬ библиотеку до ассетов, уместных кампании
+  // (кламп уже отбросил чужие URL; пустой выбор = вся библиотека).
+  const decorSourceUrls = profile?.decorUrls ?? config.decorUrls ?? [];
   const decor: EngineLayer[] = [];
-  for (const [i, url] of (config.decorUrls ?? []).entries()) {
+  for (const [i, url] of decorSourceUrls.entries()) {
     const norm = await getOrCreateNormalizedLayer(url, `decor${i}#${opts.assetKey}`);
     if (!norm.ok) return { ok: false, reason: `decor[${i}]: ${norm.reason}` };
     const buf = await fetchBuffer(norm.url);
@@ -643,7 +758,18 @@ async function renderLayeredWithEngine(opts: {
       renderSpec,
       specRow.key,
       specRow.version,
-      { ...(bg ? { background: bg } : {}), person, itemPieces, decor },
+      {
+        ...(bg ? { background: bg } : {}),
+        person,
+        itemPieces,
+        decor,
+        // DV-E1: токены профиля приоритетнее эвристики по КАПСУ — модель
+        // подбирала их под оффер. Пусто → прежний deriveTokens.
+        campaignTokens: profile?.tokens?.length
+          ? profile.tokens
+          : deriveTokens(opts.campaignPrompt),
+        ...(profile ? { styleProfile: profile } : {}),
+      },
       seed,
     );
     if (!c.ok) return c;
@@ -657,11 +783,22 @@ async function renderLayeredWithEngine(opts: {
     report = r;
     attempts = attempt + 1;
     if (r.passed) break;
-    // Re-seeding only helps when there IS something scattered — static decor
-    // or the item pieces cut out of the generation.
+    // Пересев помогает только тем провалам, которые зависят от РАСКЛАДКИ.
+    // Масштаб субъекта или отсутствующая плашка от смены сида не изменятся —
+    // на них повтор только сожжёт время воркера.
+    const reseedable = new Set([
+      "safe-core-clean",
+      "safe-coverage",
+      // Задание 2: покрытие и число объектов в полосе, bleed, кроп заднего
+      // плана и чистота ядра — всё это результат сидированной раскладки.
+      "decor-coverage",
+      "decor-count",
+      "core-coverage",
+      "bleed",
+      "back-crop-top",
+    ]);
     const decorLayoutOnly =
-      decor.length + itemPieces.length > 0 &&
-      r.failedKeys.every((k) => k === "safe-core-clean" || k === "safe-coverage");
+      decor.length + itemPieces.length > 0 && r.failedKeys.every((k) => reseedable.has(k));
     if (!decorLayoutOnly) break;
     console.warn(`♻️ compose re-seed ${attempt + 1} for ${opts.assetKey}#${opts.assetId}: ${r.failedKeys.join(", ")}`);
   }
@@ -792,6 +929,8 @@ export async function processRenderAssetJob(
           itemLayerHash: variant.itemLayerHash,
           config,
           specRow,
+          campaignPrompt: variant.bundle.neuralPrompt ?? "",
+          styleProfile: variant.styleProfile,
         });
         if (!done.ok) {
           // Keep the validator report on the FAILED asset — the CRM shows WHY.

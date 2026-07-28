@@ -19,7 +19,9 @@
     "prisma:studio": "prisma studio",
     "prisma:seed": "tsx prisma/seed.ts",
     "test": "vitest run",
-    "test:watch": "vitest"
+    "test:watch": "vitest",
+    "check:fonts": "tsx scripts/check-fonts.ts",
+    "contact-sheet": "tsx scripts/contact-sheet.ts"
   },
   "keywords": [],
   "author": "",

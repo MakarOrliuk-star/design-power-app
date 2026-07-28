@@ -16,6 +16,7 @@ import {
   validateLayoutSpec,
   EMAIL_HERO_V1,
   EMAIL_HERO_V2,
+  EMAIL_HERO_V3,
   EMAIL_HERO_KEY,
   PUSH_HERO_V1,
   POPUP_HERO_V1,
@@ -181,9 +182,189 @@ describe("transparent specs — email v2, push, pop-up", () => {
 });
 
 // ------------------------------------------------------------------
+// email.hero v3 — визуальный паттерн эталонов (Задание 2, Фаза 1).
+// Числа ниже сняты скриптами Фазы 0 с эталонов дизайнеров:
+//   scripts/measure-visual-pattern.ts  — коридоры субъектов и полос;
+//   scripts/calibrate-scatter.ts       — кольцо и размеры слоёв (134 объекта);
+//   радиальный профиль альфы `эталон email.png` — плашка.
+// Это DoD Фазы 1: «значения совпадают с замерами эталонов в пределах допуска».
+// ------------------------------------------------------------------
+const PATTERN = {
+  // ex1..ex5, % высоты холста
+  personHeight: { min: 77.7, max: 92.0 },
+  itemHeight: { min: 84.4, max: 91.0 },
+  // покрытие полосы 25–72% и ядра 40–60%, %
+  decorCoverage: { min: 6.1, max: 10.2 },
+  coreBright: { min: 0.7, max: 2.4 },
+  // радиус в нормированном квадрате: ни одного объекта ближе к центру
+  ringEmptyBelow: 0.42,
+  ringP05: 0.57,
+  ringP95: 1.15,
+  // высоты объектов по слоям, % высоты холста
+  layerSize: { back: [22.3, 43.2], mid: [10.2, 20.9], front: [1.8, 10.0] },
+  // `эталон email.png`: alpha 47/255 в центре, углы 0
+  glowAlphaCenter: 47 / 255,
+} as const;
+
+describe("email.hero.v3 pattern calibration vs reference measurements", () => {
+  it("subject heights sit inside the measured corridors", () => {
+    const item = EMAIL_HERO_V3.subjects.item!;
+    expect(item.fitHeight.min * 100).toBeGreaterThanOrEqual(PATTERN.itemHeight.min - 1);
+    expect(item.fitHeight.max * 100).toBeLessThanOrEqual(PATTERN.itemHeight.max + 1);
+    const person = EMAIL_HERO_V3.subjects.person;
+    expect(person.fitHeight.min * 100).toBeGreaterThanOrEqual(PATTERN.personHeight.min - 1);
+    expect(person.fitHeight.max * 100).toBeLessThanOrEqual(PATTERN.personHeight.max + 1);
+  });
+
+  it("fixes the two P0 geometry defects of v2: item scale and the ground line", () => {
+    // v2 давало item в 62% высоты при эталонных 84–91% и оставляло 8% воздуха
+    // под фигурами — отсюда «висящие наклейки» на result.png.
+    expect(EMAIL_HERO_V2.subjects.item!.fitHeight.target).toBeLessThan(0.7);
+    expect(EMAIL_HERO_V3.subjects.item!.fitHeight.target).toBeGreaterThanOrEqual(0.84);
+    expect(EMAIL_HERO_V2.baseline).toBeLessThan(1);
+    expect(EMAIL_HERO_V3.baseline).toBe(1);
+  });
+
+  it("scatter ring keeps the core empty by geometry, not by prohibition", () => {
+    const ring = EMAIL_HERO_V3.scatter!.ring;
+    // Ни один объект эталонов не лежит ближе 0.42 — кольцо начинается дальше.
+    expect(ring.rMin).toBeGreaterThan(PATTERN.ringEmptyBelow);
+    expect(ring.rMin).toBeCloseTo(PATTERN.ringP05, 2);
+    expect(ring.rMax).toBeCloseTo(PATTERN.ringP95, 2);
+    // rMax > 1.0 → часть объектов свисает за кромку: приём П4 из геометрии.
+    expect(ring.rMax).toBeGreaterThan(1);
+  });
+
+  it("scatter layer sizes match the measured depth planes", () => {
+    const byId = Object.fromEntries(EMAIL_HERO_V3.scatter!.layers.map((l) => [l.id, l]));
+    for (const [id, [lo, hi]] of Object.entries(PATTERN.layerSize)) {
+      const layer = byId[id]!;
+      expect(layer.sizePct[0] * 100).toBeGreaterThanOrEqual(lo - 3);
+      expect(layer.sizePct[1] * 100).toBeLessThanOrEqual(hi + 3);
+    }
+    // П2: back — единственный слой с реальным блюром и обязательным кропом.
+    expect(byId.back!.mustCropEdge).toBe(true);
+    expect(byId.back!.edges).toEqual(["top"]);
+    expect(byId.back!.blurPx[0]).toBeGreaterThan(0);
+    expect(byId.front!.blurPx[1]).toBeLessThanOrEqual(1);
+  });
+
+  it("angle weights favour the upper half, as the references do", () => {
+    const w = EMAIL_HERO_V3.scatter!.angleWeights;
+    expect(w).toHaveLength(8);
+    // Сектора 4..7 (лево, верх-лево, верх, верх-право) против 0..3.
+    const upper = w[4]! + w[5]! + w[6]! + w[7]!;
+    const lower = w[0]! + w[1]! + w[2]! + w[3]!;
+    expect(upper).toBeGreaterThan(lower);
+  });
+
+  it("acceptance corridors V4/V5/V6 come from the measurements", () => {
+    const s = EMAIL_HERO_V3.scatter!;
+    expect(s.band).toEqual({ x: 0.25, w: 0.47 }); // полоса 25–72% из TASK §2.2
+    expect(s.targetCoveragePct[0]).toBeLessThanOrEqual(PATTERN.decorCoverage.min);
+    expect(s.targetCoveragePct[1]).toBeGreaterThanOrEqual(PATTERN.decorCoverage.max);
+    expect(s.targetObjectCount).toEqual([6, 11]);
+    // Ядро: эталоны дают 0.7–2.4% — порог не может быть строже факта.
+    expect(EMAIL_HERO_V3.safe!.levels!.core.maxCoverage * 100).toBeGreaterThanOrEqual(
+      PATTERN.coreBright.max,
+    );
+  });
+
+  it("glow plate matches the reference profile and keeps the corners clear", () => {
+    const plate = EMAIL_HERO_V3.background.glowPlate!;
+    expect(EMAIL_HERO_V3.background.source).toBe("transparent"); // D-E5 в силе
+    expect(plate.alphaCenter).toBeCloseTo(PATTERN.glowAlphaCenter, 2);
+    expect(plate.radius).toBeGreaterThan(1); // спадает к нулю за кромкой
+    // П8: цвет берётся из слоёв, а не настраивается на каждый бренд руками.
+    expect(plate.colorSource).toBe("auto-from-layers");
+    // V2′ — порог приёмки не строже того, что задаёт сама плашка.
+    expect(EMAIL_HERO_V3.validation!.glowAlphaCenterMin!).toBeLessThanOrEqual(plate.alphaCenter);
+    expect(EMAIL_HERO_V3.validation!.minTransparentSharePct!).toBeGreaterThan(0);
+  });
+
+  it("keeps the delivery contract of v2 untouched (D-E5, D-E7, DI-Q7)", () => {
+    expect(EMAIL_HERO_V3.canvas).toEqual(EMAIL_HERO_V2.canvas); // один файл 1200×600
+    expect(EMAIL_HERO_V3.safe!.zone).toEqual(EMAIL_HERO_V2.safe!.zone); // safe 46%
+    expect(EMAIL_HERO_V3.safe!.coreRects).toEqual(EMAIL_HERO_V2.safe!.coreRects);
+  });
+
+  it("crops the person to a waist-up plane from the shared full-body layer", () => {
+    // DV-C3: лишних генераций нет — режем кодом, push/pop-up не трогаем.
+    expect(EMAIL_HERO_V3.subjects.person.cropTopFraction).toBeGreaterThan(0.4);
+    expect(EMAIL_HERO_V3.subjects.person.cropTopFraction).toBeLessThan(0.8);
+    expect(PUSH_HERO_V1.subjects.person.cropTopFraction).toBeUndefined();
+    expect(POPUP_HERO_V1.subjects.person.cropTopFraction).toBeUndefined();
+  });
+
+  it("draws the sign itself and places it beside the person (DV-C4′)", () => {
+    const slots = Object.fromEntries(EMAIL_HERO_V3.typography3d!.slots.map((s) => [s.id, s]));
+    expect(slots.brandMark!.enabled).toBe(true);
+    expect(slots.brandMark!.tokens).toContain("FS");
+    // Вариант «просить объект у генератора» отпал: слой персонажа общий с
+    // push/pop-up, а там у части брендов персонаж — животное без рук (F2-1).
+    expect(slots.heldSign!.enabled).toBe(true);
+    expect(slots.heldSign!.placement).toBe("beside-person");
+    expect(slots.heldSign!.tokens).toContain("BIG WIN");
+  });
+
+  it("back layer stays within the ambience opacity limit", () => {
+    // TASK §4.4 разрешает ядру только расфокусированную ambience. Если слой
+    // `back` выйдет за `maxOpacity`, движок вытеснит его из центра и верх
+    // кадра опустеет — именно это и произошло на первой калибровке.
+    const back = EMAIL_HERO_V3.scatter!.layers.find((l) => l.id === "back")!;
+    const ambience = EMAIL_HERO_V3.safe!.levels!.ambience;
+    expect(back.opacity[1]).toBeLessThanOrEqual(ambience.maxOpacity);
+    expect(back.blurPx[0]).toBeGreaterThanOrEqual(ambience.minBlurPx);
+  });
+
+  it("does not touch the calibrated push/pop-up specs (DV-B2)", () => {
+    expect(PUSH_HERO_V1.background.glowPlate).toBeUndefined();
+    expect(PUSH_HERO_V1.scatter).toBeUndefined();
+    expect(POPUP_HERO_V1.scatter).toBeUndefined();
+    expect(PUSH_HERO_V1.subjects.person.zone).toEqual({ x: 0.28, y: 0, w: 0.44, h: 1 });
+  });
+
+  it("validates, and so do all older versions after the schema grew", () => {
+    for (const spec of [EMAIL_HERO_V1, EMAIL_HERO_V2, EMAIL_HERO_V3, PUSH_HERO_V1, POPUP_HERO_V1]) {
+      expect(layoutSpecSchema.safeParse(spec).success).toBe(true);
+    }
+  });
+});
+
+// ------------------------------------------------------------------
 // Schema validation (accepts future push/popup, rejects malformed geometry)
 // ------------------------------------------------------------------
 describe("layoutSpecSchema", () => {
+  it("rejects a scatter ring with rMin >= rMax", () => {
+    const bad = structuredClone(EMAIL_HERO_V3);
+    bad.scatter!.ring = { rMin: 1.2, rMax: 0.5 };
+    expect(layoutSpecSchema.safeParse(bad).success).toBe(false);
+  });
+
+  it("rejects angleWeights that are not the eight 45° sectors", () => {
+    const bad = structuredClone(EMAIL_HERO_V3);
+    bad.scatter!.angleWeights = [1, 2, 3, 4];
+    expect(layoutSpecSchema.safeParse(bad).success).toBe(false);
+  });
+
+  it("rejects an inverted range", () => {
+    const bad = structuredClone(EMAIL_HERO_V3);
+    bad.scatter!.layers[0]!.sizePct = [0.4, 0.1];
+    expect(layoutSpecSchema.safeParse(bad).success).toBe(false);
+  });
+
+  it("rejects a glow plate colour that is not #RRGGBB", () => {
+    const bad = structuredClone(EMAIL_HERO_V3);
+    bad.background.glowPlate = {
+      colorSource: "fixed",
+      fixedColor: "gold" as never,
+      alphaCenter: 0.2,
+      radius: 1,
+      falloff: "smooth",
+    };
+    expect(layoutSpecSchema.safeParse(bad).success).toBe(false);
+  });
+
   it("accepts a push spec (1024×512) without safe/decor sections", () => {
     const push = {
       canvas: { w: 1024, h: 512, scales: [1] },

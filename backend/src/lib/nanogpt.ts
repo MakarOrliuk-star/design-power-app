@@ -15,25 +15,25 @@ function headers() {
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
 /**
- * Build the Person image prompt: system = per-brand prompt, user = description.
- * Returns the generated text, or the fallback on any failure (resilient — a
- * missing/failing prompt config must never block generation).
+ * One chat/completions call with bounded retries (5xx/429 only). Returns the
+ * assistant text or null — the CALLER owns the fallback, потому что у разных
+ * потребителей он разный: промпт персонажа деградирует в сырой user-текст,
+ * а style-profile (DV-E1) — в детерминированное «профиля нет».
  */
-export async function buildPersonPrompt(
+export async function chatCompletion(
   systemPrompt: string,
   userText: string,
-): Promise<string> {
-  const fallback = userText.trim();
-  if (!systemPrompt) return fallback;
-
+  opts: { temperature?: number; maxTokens?: number } = {},
+): Promise<string | null> {
+  if (!env.NANO_GPT_API_KEY) return null;
   const payload = JSON.stringify({
     model: "google/gemini-3.5-flash",
     messages: [
       { role: "system", content: systemPrompt },
       { role: "user", content: userText },
     ],
-    temperature: 0.4,
-    max_tokens: 800,
+    temperature: opts.temperature ?? 0.4,
+    max_tokens: opts.maxTokens ?? 800,
     stream: false,
   });
 
@@ -44,7 +44,7 @@ export async function buildPersonPrompt(
       if (res.status === 200) {
         const j = JSON.parse(text) as { choices?: { message?: { content?: string } }[] };
         const content = j.choices?.[0]?.message?.content;
-        return content && content.trim() ? content.trim() : fallback;
+        return content && content.trim() ? content.trim() : null;
       }
       if (!(res.status >= 500 || res.status === 429)) break; // 4xx (non-429): don't retry
     } catch {
@@ -52,7 +52,25 @@ export async function buildPersonPrompt(
     }
     if (attempt < 3) await sleep(Math.min(6000, 1000 * 2 ** (attempt - 1)));
   }
-  return fallback;
+  return null;
+}
+
+/**
+ * Build the Person image prompt: system = per-brand prompt, user = description.
+ * Returns the generated text, or the fallback on any failure (resilient — a
+ * missing/failing prompt config must never block generation).
+ */
+export async function buildPersonPrompt(
+  systemPrompt: string,
+  userText: string,
+): Promise<string> {
+  const fallback = userText.trim();
+  if (!systemPrompt) return fallback;
+  const content = await chatCompletion(systemPrompt, userText, {
+    temperature: 0.4,
+    maxTokens: 800,
+  });
+  return content ?? fallback;
 }
 
 export interface ItemImageResult {

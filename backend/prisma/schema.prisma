@@ -569,6 +569,12 @@ model BundleBrandVariant {
   /// the composition engine (Phase 3) look up bbox dimensions.
   personLayerHash String?
   itemLayerHash   String?
+  /// Style-profile «казино-дизайнера» (DV-E1): данные, не координаты —
+  /// hue плашки, материал типографики, токены, плотность рассыпки, выбор
+  /// декора. Один вызов модели на brand-variant в stage A, результат живёт
+  /// здесь: повторный рендер того же бандла берёт сохранённый профиль.
+  /// `source: "manual"` — ручной override из админки, stage A его не трёт.
+  styleProfile    Json?
 
   assets BundleAsset[]
 

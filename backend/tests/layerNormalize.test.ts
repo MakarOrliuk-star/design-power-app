@@ -4,6 +4,7 @@ import {
   hasUsefulAlpha,
   normalizeLayer,
   ALPHA_NOISE_THRESHOLD,
+  cropLayerTop,
 } from "../src/lib/layerNormalize.js";
 
 // Real-sharp unit tests on synthetic images (TASK email-composition, Phase 2).
@@ -112,5 +113,84 @@ describe("normalizeLayer", () => {
     const r = await normalizeLayer(Buffer.from("not an image"));
     expect(r.ok).toBe(false);
     if (!r.ok) expect(r.reason).toContain("decode failed");
+  });
+});
+
+// ------------------------------------------------------------------
+// cropLayerTop — П5 «поясной кроп» (Задание 2, Фаза 2; решение DV-C3).
+// Слой персонажа ОДИН на email/push/pop-up; email режет из него поясной план
+// кодом, вместо того чтобы генерировать второго персонажа на каждый вариант.
+// ------------------------------------------------------------------
+describe("cropLayerTop", () => {
+  /** «Фигура в полный рост»: широкий торс сверху, узкие ноги снизу. */
+  async function fullBody(): Promise<Buffer> {
+    return makePng(100, 200, [
+      { x: 20, y: 0, w: 60, h: 100, rgba: [200, 150, 100, 255] }, // торс
+      { x: 40, y: 100, w: 20, h: 100, rgba: [200, 150, 100, 255] }, // ноги
+    ]);
+  }
+
+  it("keeps the requested top fraction of the subject", async () => {
+    const r = await cropLayerTop(await fullBody(), 0.5);
+    expect(r.ok).toBe(true);
+    if (!r.ok) return;
+    expect(r.height).toBe(100);
+  });
+
+  it("re-trims the sides — иначе узкие ноги оставили бы поля и соврал масштаб", async () => {
+    const whole = await normalizeLayer(await fullBody());
+    const waist = await cropLayerTop(await fullBody(), 0.5);
+    expect(whole.ok && waist.ok).toBe(true);
+    if (!whole.ok || !waist.ok) return;
+    // Полная фигура шириной по торсу (60) — и поясной план тоже 60, но без
+    // пустоты по бокам: проверяем, что ширина взята по фактическому bbox.
+    expect(whole.width).toBe(60);
+    expect(waist.width).toBe(60);
+    // Главное: поясной план стал заметно «портретнее по-другому» — ниже.
+    expect(waist.height).toBeLessThan(whole.height);
+  });
+
+  it("makes the subject less elongated — это и есть крупный план", async () => {
+    const whole = await normalizeLayer(await fullBody());
+    const waist = await cropLayerTop(await fullBody(), 0.55);
+    if (!whole.ok || !waist.ok) throw new Error("setup failed");
+    const aspect = (r: { width: number; height: number }) => r.width / r.height;
+    expect(aspect(waist)).toBeGreaterThan(aspect(whole));
+  });
+
+  it("fraction = 1 is a plain normalize (push/pop-up path)", async () => {
+    const src = await fullBody();
+    const cropped = await cropLayerTop(src, 1);
+    const plain = await normalizeLayer(src);
+    expect(cropped.ok && plain.ok).toBe(true);
+    if (!cropped.ok || !plain.ok) return;
+    expect(cropped.png.equals(plain.png)).toBe(true);
+  });
+
+  it("is deterministic", async () => {
+    const src = await fullBody();
+    const a = await cropLayerTop(src, 0.55);
+    const b = await cropLayerTop(src, 0.55);
+    if (!a.ok || !b.ok) throw new Error("setup failed");
+    expect(a.png.equals(b.png)).toBe(true);
+  });
+
+  it("rejects a fraction outside (0, 1]", async () => {
+    const src = await fullBody();
+    for (const bad of [0, -0.2, 1.5]) {
+      const r = await cropLayerTop(src, bad);
+      expect(r.ok).toBe(false);
+      if (!r.ok) expect(r.reason).toContain("cropTopFraction");
+    }
+  });
+
+  it("fails loudly when the cut leaves nothing", async () => {
+    // Субъект только в нижней трети: рез верхних 10% отдаёт пустоту, и это
+    // должно быть явной ошибкой, а не пустым слоем в композите.
+    const png = await makePng(100, 200, [
+      { x: 20, y: 150, w: 60, h: 50, rgba: [200, 150, 100, 255] },
+    ]);
+    const r = await cropLayerTop(png, 0.1);
+    expect(r.ok).toBe(false);
   });
 });

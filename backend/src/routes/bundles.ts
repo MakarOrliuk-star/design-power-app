@@ -257,6 +257,9 @@ bundlesRouter.get("/:id", async (req: Request, res: Response) => {
       id: v.id,
       brandName: v.brandName,
       displayName: v.displayName,
+      // Style-profile «казино-дизайнера» (DV-E1) — данные стиля, не координаты.
+      // Отдаётся как есть: редактор в CRM (админ) показывает и правит его же.
+      styleProfile: v.styleProfile ?? null,
       assets,
       approvedCount: assets.filter((a) => a.approved).length,
     };
