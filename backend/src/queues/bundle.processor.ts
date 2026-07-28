@@ -708,8 +708,26 @@ async function renderLayeredWithEngine(opts: {
     return { data: buf, width: row.width, height: row.height };
   };
 
-  const person = await loadLayer(opts.personLayerHash, "person");
+  let person = await loadLayer(opts.personLayerHash, "person");
   if ("error" in person) return { ok: false, reason: person.error };
+
+  // Контракт слоя требует «single character only», но генератор регулярно
+  // добавляет рядом летающие монетки/фишки. Они раздувают bbox слоя В ШИРИНУ,
+  // движок упирается в ширину зоны и роняет высоту персонажа (живой прогон:
+  // 52% при коридоре 78–91%). Крупнейший связный компонент = персонаж;
+  // побочные куски не выбрасываются, а уходят в реквизит сцены — в эталонах
+  // монеты вокруг персонажа и есть декор.
+  let personProps: EngineLayer[] = [];
+  const personSplit = await splitLayerPieces(person.data, {});
+  if (personSplit.length > 1) {
+    const [main, ...extras] = personSplit;
+    person = { data: main!.png, width: main!.width, height: main!.height };
+    personProps = extras.map((p) => ({ data: p.png, width: p.width, height: p.height }));
+    console.log(
+      `✂️ person layer ${opts.assetKey}#${opts.assetId}: ${personSplit.length} компонент(а) — ` +
+        `персонаж ${main!.width}×${main!.height}, ${personProps.length} шт. в реквизит`,
+    );
+  }
 
   // The ITEM generation returns several separate objects on one layer; the
   // эталоны place them as individual props. Cutting the layer into its
@@ -734,6 +752,10 @@ async function renderLayeredWithEngine(opts: {
         itemPieces.map((p) => `${p.width}×${p.height}`).join(", "),
     );
   }
+  // Монетки, отрезанные от слоя персонажа, — в общий пул реквизита. В КОНЕЦ:
+  // первый кусок пула — кандидат в субъект item, и им обязан остаться кусок
+  // ITEM-слоя, а не случайная монета (потому же и только при непустом пуле).
+  if (itemPieces.length > 0) itemPieces = [...itemPieces, ...personProps];
 
   // Static decor cutouts — normalized + cached exactly like subject layers.
   // DV-E1: профиль может СУЗИТЬ библиотеку до ассетов, уместных кампании
