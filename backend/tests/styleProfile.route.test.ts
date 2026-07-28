@@ -10,6 +10,10 @@ const db = vi.hoisted(() => ({
     findUnique: vi.fn(),
     update: vi.fn(),
   },
+  // DV-C2′: кламп идёт по эффективной библиотеке — бренда, а без неё общей.
+  brand: {
+    findUnique: vi.fn(),
+  },
 }));
 const cloud = vi.hoisted(() => ({
   uploadBase64: vi.fn(),
@@ -54,7 +58,10 @@ const variantRow = () => ({
 beforeEach(() => {
   db.bundleBrandVariant.findUnique.mockReset();
   db.bundleBrandVariant.update.mockReset();
+  db.brand.findUnique.mockReset();
   db.bundleBrandVariant.findUnique.mockResolvedValue(variantRow());
+  // У бренда своей библиотеки нет → эффективная = общая по слотам (LIB).
+  db.brand.findUnique.mockResolvedValue({ decorUrls: null });
   db.bundleBrandVariant.update.mockImplementation(
     async (args: { data: { styleProfile: unknown } }) => ({
       id: "v1",
@@ -104,6 +111,19 @@ describe("PATCH /api/admin/bundle-variants/:id/style-profile", () => {
       .send({ profile: null });
     expect(res.status).toBe(200);
     expect(db.bundleBrandVariant.update.mock.calls[0]![0].data.styleProfile).toBe(Prisma.DbNull);
+  });
+
+  it("у бренда своя библиотека (DV-C2′) → кламп идёт по ней, слотовые URL отпадают", async () => {
+    const BRAND_LIB = ["https://cdn/brand/star.png"];
+    db.brand.findUnique.mockResolvedValue({ decorUrls: BRAND_LIB });
+    const res = await request(makeApp())
+      .patch("/api/admin/bundle-variants/v1/style-profile")
+      .send({ profile: { decorUrls: [BRAND_LIB[0], LIB[0]] } });
+    expect(res.status).toBe(200);
+    expect(db.bundleBrandVariant.update.mock.calls[0]![0].data.styleProfile).toEqual({
+      decorUrls: BRAND_LIB, // общий LIB[0] больше не в эффективной библиотеке
+      source: "manual",
+    });
   });
 
   it("неизвестный вариант → 404", async () => {

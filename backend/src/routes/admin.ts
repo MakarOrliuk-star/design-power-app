@@ -634,19 +634,28 @@ adminRouter.patch("/bundle-variants/:id/style-profile", async (req: Request, res
 
   let value: Prisma.InputJsonValue | typeof Prisma.DbNull = Prisma.DbNull;
   if (parsed.data.profile !== null) {
-    // Кламп против библиотек декора layered-ассетов этого типа бандла —
-    // ровно тех, среди которых профиль потом выбирает на рендере.
+    // Кламп против ЭФФЕКТИВНОЙ библиотеки декора — той же, из которой рендер
+    // потом соберёт кадр: библиотека бренда (DV-C2′), а без неё — общая по
+    // layered-слотам типа бандла.
+    const brand = await prisma.brand.findUnique({
+      where: { name: variant.brandName },
+      select: { decorUrls: true },
+    });
+    const brandUrls = Array.isArray(brand?.decorUrls)
+      ? brand.decorUrls.filter((u): u is string => typeof u === "string")
+      : [];
     const typeAssets = variant.bundle.bundleType.assets as unknown as Array<{
       composeMode?: string;
       decorUrls?: string[];
     }>;
-    const libraryUrls: string[] = [];
+    const slotUrls: string[] = [];
     for (const a of typeAssets) {
       if (a.composeMode !== "layered") continue;
       for (const url of a.decorUrls ?? []) {
-        if (!libraryUrls.includes(url)) libraryUrls.push(url);
+        if (!slotUrls.includes(url)) slotUrls.push(url);
       }
     }
+    const libraryUrls = brandUrls.length > 0 ? brandUrls : slotUrls;
     const clamped = clampStyleProfile(parsed.data.profile, { libraryUrls });
     if (!clamped) {
       res.status(400).json({

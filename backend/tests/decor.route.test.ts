@@ -11,6 +11,12 @@ const db = vi.hoisted(() => ({
     findMany: vi.fn(),
     update: vi.fn(),
   },
+  // DV-C2′: библиотека декора БРЕНДА живёт в Brand.decorUrls.
+  brand: {
+    findMany: vi.fn(),
+    findUnique: vi.fn(),
+    update: vi.fn(),
+  },
 }));
 const cloud = vi.hoisted(() => ({
   uploadBuffer: vi.fn(),
@@ -66,10 +72,19 @@ const slots = () => [
 beforeEach(() => {
   db.bundleType.findMany.mockReset();
   db.bundleType.update.mockReset();
+  db.brand.findMany.mockReset();
+  db.brand.findUnique.mockReset();
+  db.brand.update.mockReset();
   cloud.uploadBuffer.mockReset();
   cloud.withRetry.mockReset();
   db.bundleType.findMany.mockResolvedValue(slots());
   db.bundleType.update.mockResolvedValue({});
+  db.brand.findMany.mockResolvedValue([
+    { id: "br1", name: "Betnella(Men)", decorUrls: ["https://cdn/brand/coin.png"] },
+    { id: "br2", name: "Spinogambino(Men)", decorUrls: null },
+  ]);
+  db.brand.findUnique.mockResolvedValue({ id: "br1", decorUrls: ["https://cdn/brand/coin.png"] });
+  db.brand.update.mockResolvedValue({});
   cloud.withRetry.mockImplementation((fn: () => unknown) => fn());
   cloud.uploadBuffer.mockResolvedValue({
     success: true,
@@ -86,6 +101,15 @@ describe("GET /api/admin/decor", () => {
     expect(res.body.slots[0]).toMatchObject({ assetKey: "email", decorUrls: [] });
     expect(res.body.slots[1]).toMatchObject({ assetKey: "push", decorUrls: ["https://cdn/x.png"] });
     expect(res.body.limits.perSlot).toBe(MAX_DECOR_PER_SLOT);
+  });
+
+  it("lists brand libraries; a null column reads as an empty one (DV-C2′)", async () => {
+    const res = await request(makeApp()).get("/api/admin/decor");
+    expect(res.status).toBe(200);
+    expect(res.body.brands).toEqual([
+      { id: "br1", name: "Betnella(Men)", decorUrls: ["https://cdn/brand/coin.png"] },
+      { id: "br2", name: "Spinogambino(Men)", decorUrls: [] },
+    ]);
   });
 });
 
@@ -183,6 +207,34 @@ describe("POST /api/admin/decor", () => {
     expect(res.status).toBe(400);
     expect(res.body.error).toBe("no_files");
   });
+
+  it("brandId targets the BRAND library and leaves the slots alone (DV-C2′)", async () => {
+    const res = await request(makeApp())
+      .post("/api/admin/decor")
+      .field("brandId", "br1")
+      .attach("files", await cutout(60, 40, false), "coin.png");
+
+    expect(res.status).toBe(201);
+    expect(res.body.results[0].ok).toBe(true);
+    expect(res.body.brand).toMatchObject({ brandId: "br1", total: 2, skipped: 0 });
+    // Дозапись без дублей: у бренда уже был coin.png, добавился abc.png.
+    expect(db.brand.update.mock.calls[0]![0].data.decorUrls).toEqual([
+      "https://cdn/brand/coin.png",
+      "https://cdn/decor/abc.png",
+    ]);
+    expect(db.bundleType.update).not.toHaveBeenCalled();
+  });
+
+  it("unknown brandId → 404 BEFORE any file is processed", async () => {
+    db.brand.findUnique.mockResolvedValue(null);
+    const res = await request(makeApp())
+      .post("/api/admin/decor")
+      .field("brandId", "ghost")
+      .attach("files", await cutout(60, 40, false), "coin.png");
+
+    expect(res.status).toBe(404);
+    expect(cloud.uploadBuffer).not.toHaveBeenCalled();
+  });
 });
 
 describe("DELETE /api/admin/decor", () => {
@@ -195,6 +247,24 @@ describe("DELETE /api/admin/decor", () => {
     expect(res.body.removed).toBe(1);
     const written = db.bundleType.update.mock.calls[0]![0].data.assets;
     expect(written.find((a: { key: string }) => a.key === "push").decorUrls).toEqual([]);
+  });
+
+  it("brandId detaches from the brand library, slots untouched", async () => {
+    const res = await request(makeApp())
+      .delete("/api/admin/decor")
+      .send({ brandId: "br1", url: "https://cdn/brand/coin.png" });
+
+    expect(res.status).toBe(200);
+    expect(res.body.removed).toBe(1);
+    expect(db.brand.update.mock.calls[0]![0].data.decorUrls).toEqual([]);
+    expect(db.bundleType.update).not.toHaveBeenCalled();
+  });
+
+  it("rejects a body with BOTH assetKey and brandId — адресат должен быть один", async () => {
+    const res = await request(makeApp())
+      .delete("/api/admin/decor")
+      .send({ assetKey: "email", brandId: "br1", url: "https://cdn/x.png" });
+    expect(res.status).toBe(400);
   });
 
   it("is a no-op for a url that is not attached", async () => {
