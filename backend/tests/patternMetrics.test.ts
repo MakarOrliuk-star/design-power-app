@@ -61,7 +61,12 @@ describe.skipIf(!haveExamples)("пороги паттерна пропускаю
   });
 });
 
-describe.skipIf(!haveExamples)("те же пороги бракуют текущий автогенерат", () => {
+// result.png — исторический автогенерат Фазы 0. Файлы в figma/ вне git и
+// принадлежат заказчику: эталоны на месте, а result.png может быть заменён
+// свежими прогонами (result-2.png и далее) — скипаемся, а не падаем.
+const haveResult = existsSync(path.join(EXAMPLES, "result.png"));
+
+describe.skipIf(!haveExamples || !haveResult)("те же пороги бракуют текущий автогенерат", () => {
   it("result.png проваливает V4, V5 и V7 — ровно те дефекты, что описаны в TASK §2.3", async () => {
     const m = await metricsOf("result.png");
     expect(m.coverage).toBeLessThan(scatter.targetCoveragePct[0]); // декора нет

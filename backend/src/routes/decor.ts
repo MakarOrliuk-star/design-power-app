@@ -18,9 +18,14 @@ import type { BundleTypeAsset } from "../services/bundle.service.js";
  * Библиотеку отдаёт заказчик; этот роутер — приёмник, чтобы файлы можно было
  * залить из админки, а не коммитом.
  *
- * Хранение — по решению DV-C2: отдельная таблица не заводится, URL-ы лежат в
- * `BundleType.assets[].decorUrls`, откуда их уже забирает процессор рендера
- * (нормализация и кэш по хэшу там работают с Фазы 2 Задания 1).
+ * Хранение — без отдельной таблицы (DV-C2), двумя уровнями (DV-C2′):
+ *   - ОБЩАЯ библиотека: `BundleType.assets[].decorUrls` — фолбэк для брендов
+ *     без своего набора;
+ *   - библиотека БРЕНДА: `Brand.decorUrls` — непустая перекрывает общую для
+ *     всех рендеров этого бренда.
+ * Процессор рендера забирает эффективный список сам (нормализация и кэш по
+ * хэшу работают с Фазы 2 Задания 1); перекраска под палитру кадра (П8)
+ * применяется к обоим уровням одинаково.
  *
  * Приёмка файла строгая и с внятной причиной отказа: непрозрачный PNG или
  * JPEG молча превратился бы в прямоугольную плашку поверх сцены, и увидел бы
@@ -48,7 +53,12 @@ export interface DecorUploadResult {
 
 const assetKeysSchema = z.array(z.string().min(1).max(40)).min(1).max(8);
 
-/** Куски `decorUrls` всех слотов типа бандла — для экрана библиотеки. */
+/** `Brand.decorUrls` — string[] в Json-колонке; всё прочее считаем пустым. */
+export function brandDecorUrls(raw: unknown): string[] {
+  return Array.isArray(raw) ? raw.filter((u): u is string => typeof u === "string") : [];
+}
+
+/** Библиотеки для экрана админки: общая (по слотам) + бренды (DV-C2′). */
 decorRouter.get("/", async (_req: Request, res: Response) => {
   const types = await prisma.bundleType.findMany({ orderBy: { createdAt: "asc" } });
   const slots = types.flatMap((t) =>
@@ -59,12 +69,23 @@ decorRouter.get("/", async (_req: Request, res: Response) => {
       decorUrls: a.decorUrls ?? [],
     })),
   );
-  res.json({ slots, limits: { perSlot: MAX_DECOR_PER_SLOT, maxFiles: MAX_DECOR_FILES } });
+  const brandRows = await prisma.brand.findMany({
+    where: { isActive: true },
+    orderBy: { name: "asc" },
+    select: { id: true, name: true, decorUrls: true },
+  });
+  const brands = brandRows.map((b) => ({
+    id: b.id,
+    name: b.name,
+    decorUrls: brandDecorUrls(b.decorUrls),
+  }));
+  res.json({ slots, brands, limits: { perSlot: MAX_DECOR_PER_SLOT, maxFiles: MAX_DECOR_FILES } });
 });
 
 /**
- * Приём файлов. multipart: поле `files` (можно несколько) + поле `assetKeys`
- * с JSON-массивом слотов, куда прицепить результат.
+ * Приём файлов. multipart: поле `files` (можно несколько) + цель:
+ *   - `brandId` — библиотека БРЕНДА (DV-C2′), или
+ *   - `assetKeys` (JSON-массив слотов) — общая библиотека.
  *
  * Дедупликация: public_id = sha256 нормализованных байтов. Один и тот же
  * ассет, залитый дважды, перезапишет сам себя и не размножит библиотеку.
@@ -81,13 +102,30 @@ decorRouter.post("/", async (req: Request, res: Response) => {
   try {
     const [fields, files] = await form.parse(req);
 
+    const rawBrandId = Array.isArray(fields.brandId) ? fields.brandId[0] : fields.brandId;
+    const brandId = typeof rawBrandId === "string" && rawBrandId.trim() ? rawBrandId.trim() : null;
+
     const rawKeys = Array.isArray(fields.assetKeys) ? fields.assetKeys[0] : fields.assetKeys;
-    let assetKeys: string[];
-    try {
-      assetKeys = assetKeysSchema.parse(JSON.parse(rawKeys ?? "[]"));
-    } catch {
-      res.status(400).json({ error: "invalid_asset_keys", hint: 'ожидается JSON-массив, например ["email"]' });
-      return;
+    let assetKeys: string[] = [];
+    if (!brandId) {
+      try {
+        assetKeys = assetKeysSchema.parse(JSON.parse(rawKeys ?? "[]"));
+      } catch {
+        res.status(400).json({
+          error: "invalid_asset_keys",
+          hint: 'нужен brandId (библиотека бренда) или assetKeys — JSON-массив, например ["email"]',
+        });
+        return;
+      }
+    }
+
+    // Цель проверяется ДО обработки файлов: заливать 20 картинок ради 404 глупо.
+    if (brandId) {
+      const brand = await prisma.brand.findUnique({ where: { id: brandId }, select: { id: true } });
+      if (!brand) {
+        res.status(404).json({ error: "brand_not_found" });
+        return;
+      }
     }
 
     const uploaded = Object.values(files)
@@ -138,9 +176,14 @@ decorRouter.post("/", async (req: Request, res: Response) => {
     }
 
     const newUrls = results.filter((r) => r.ok && r.url).map((r) => r.url!);
-    const slotUpdates = newUrls.length > 0 ? await attachToSlots(assetKeys, newUrls) : [];
+    let slotUpdates: Array<{ assetKey: string; total: number; skipped: number }> = [];
+    let brandUpdate: { brandId: string; total: number; skipped: number } | null = null;
+    if (newUrls.length > 0) {
+      if (brandId) brandUpdate = await attachToBrand(brandId, newUrls);
+      else slotUpdates = await attachToSlots(assetKeys, newUrls);
+    }
 
-    res.status(201).json({ results, slots: slotUpdates });
+    res.status(201).json({ results, slots: slotUpdates, brand: brandUpdate });
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
     // formidable сообщает о превышениях своим текстом — прокидываем как есть,
@@ -151,20 +194,45 @@ decorRouter.post("/", async (req: Request, res: Response) => {
   }
 });
 
-const detachSchema = z.object({
-  assetKey: z.string().min(1).max(40),
-  url: z.string().url(),
-});
+const detachSchema = z
+  .object({
+    assetKey: z.string().min(1).max(40).optional(),
+    brandId: z.string().min(1).max(64).optional(),
+    url: z.string().url(),
+  })
+  .refine((v) => Boolean(v.assetKey) !== Boolean(v.brandId), {
+    message: "нужен ровно один адресат: assetKey (общая библиотека) или brandId (бренд)",
+  });
 
-/** Убрать ассет из слота. Файл в Cloudinary остаётся — он может быть в других
- *  слотах, а удаление чужих байтов по одной отвязке было бы сюрпризом. */
+/** Убрать ассет из слота или из библиотеки бренда. Файл в Cloudinary остаётся —
+ *  он может быть в других библиотеках, а удаление чужих байтов по одной
+ *  отвязке было бы сюрпризом. */
 decorRouter.delete("/", async (req: Request, res: Response) => {
   const parsed = detachSchema.safeParse(req.body);
   if (!parsed.success) {
-    res.status(400).json({ error: "invalid_body", details: parsed.error.flatten().fieldErrors });
+    res.status(400).json({ error: "invalid_body", details: parsed.error.flatten() });
     return;
   }
-  const { assetKey, url } = parsed.data;
+  const { assetKey, brandId, url } = parsed.data;
+
+  if (brandId) {
+    const brand = await prisma.brand.findUnique({
+      where: { id: brandId },
+      select: { id: true, decorUrls: true },
+    });
+    if (!brand) {
+      res.status(404).json({ error: "brand_not_found" });
+      return;
+    }
+    const current = brandDecorUrls(brand.decorUrls);
+    const next = current.filter((u) => u !== url);
+    if (next.length !== current.length) {
+      await prisma.brand.update({ where: { id: brandId }, data: { decorUrls: next } });
+    }
+    res.json({ removed: current.length - next.length });
+    return;
+  }
+
   const types = await prisma.bundleType.findMany();
   let removed = 0;
   for (const t of types) {
@@ -185,6 +253,31 @@ decorRouter.delete("/", async (req: Request, res: Response) => {
   }
   res.json({ removed });
 });
+
+/** Дописывает URL-ы в библиотеку бренда — те же правила, что у слота:
+ *  без дублей, с сохранением порядка (раскладка сидирована по списку) и с
+ *  тем же потолком MAX_DECOR_PER_SLOT. */
+async function attachToBrand(
+  brandId: string,
+  urls: string[],
+): Promise<{ brandId: string; total: number; skipped: number }> {
+  const brand = await prisma.brand.findUnique({
+    where: { id: brandId },
+    select: { decorUrls: true },
+  });
+  const merged = brandDecorUrls(brand?.decorUrls);
+  let skipped = 0;
+  for (const u of urls) {
+    if (merged.includes(u)) continue;
+    if (merged.length >= MAX_DECOR_PER_SLOT) {
+      skipped++;
+      continue;
+    }
+    merged.push(u);
+  }
+  await prisma.brand.update({ where: { id: brandId }, data: { decorUrls: merged } });
+  return { brandId, total: merged.length, skipped };
+}
 
 /**
  * Дописывает URL-ы в `decorUrls` указанных слотов, без дублей и с потолком.

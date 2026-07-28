@@ -27,6 +27,11 @@ export interface LayerPiece {
   height: number;
   /** Opaque pixel count — the sort key (largest piece is the "hero" object). */
   area: number;
+  /** Bbox origin on the SOURCE layer — where the piece was cut from. Lets a
+   *  caller reason about the original arrangement (e.g. «person is the tall
+   *  component on the right») without re-labeling the layer. */
+  left: number;
+  top: number;
 }
 
 const PNG_OPTS = { compressionLevel: 9, adaptiveFiltering: false, palette: false } as const;
@@ -124,7 +129,7 @@ export async function splitLayerPieces(
     const png = await sharp(out, { raw: { width: w, height: h, channels: 4 } })
       .png(PNG_OPTS)
       .toBuffer();
-    pieces.push({ png, width: w, height: h, area: b.area });
+    pieces.push({ png, width: w, height: h, area: b.area, left: b.x0, top: b.y0 });
   }
   return pieces;
 }

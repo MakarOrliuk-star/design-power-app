@@ -85,6 +85,11 @@ model Brand {
   // otherwise a MODEL_REGISTRY key (e.g. "xai/grok-imagine-image"). The endpoint
   // (/edit vs text-to-image) and request body are derived from the registry.
   imageModel        String?
+  // Библиотека декора БРЕНДА (Задание 2, DV-C2′ — заказчик 2026-07-28:
+  // «для каждого бренда своя библиотека»): string[] нормализованных URL.
+  // Непустая перекрывает общую библиотеку слота; пустая/null — бренд берёт
+  // общую (фолбэк). Перекраска под палитру кадра (П8) работает в обоих случаях.
+  decorUrls         Json?
   // Ownership (TASK super-designer): the user who created the brand. Legacy
   // brands are null ("nobody's") — editable only via the admin panel. A
   // super-designer may edit/delete/test ONLY brands where createdById = self.

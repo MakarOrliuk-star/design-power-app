@@ -61,6 +61,9 @@ export const BUNDLE_DEFAULT_ITEM_KEY = "bundle_default";
 export const PERSON_LAYER_CONTRACT =
   "Single character only, full body from head to feet, feet fully visible and not cropped, " +
   "standing in a confident advertising pose facing slightly toward the center (3/4 view), " +
+  // Взгляд в камеру — требование TASK Фазы 2 и приём эталонов 1–5: персонаж
+  // «продаёт» зрителю, а не смотрит в сторону из кадра.
+  "eyes looking straight at the camera (direct eye contact with the viewer), " +
   "with clear margins between the character and every frame edge, on a plain even light-gray " +
   "studio background with strong contrast to the character. No text, no logos, no other objects.";
 /** Bounded auto-retry for a broken person layer (Phase 4, лимит DI-Q13). */
@@ -357,6 +360,11 @@ export function backgroundPrompt(neuralPrompt: string): string {
 // Stage A — prepare-variant
 // ------------------------------------------------------------------
 
+/** `Brand.decorUrls` — string[] в Json-колонке; всё прочее считаем пустым. */
+function brandDecorUrlsOf(raw: unknown): string[] {
+  return Array.isArray(raw) ? raw.filter((u): u is string => typeof u === "string") : [];
+}
+
 /**
  * DV-E1 — получить style-profile варианта. Возвращает:
  *   - `undefined` — колонку не трогать (ручной override, прослойке нечего
@@ -374,13 +382,15 @@ async function buildVariantStyleProfile(opts: {
   existing: unknown;
   campaignPrompt: string;
   brandName: string;
+  /** Библиотека декора БРЕНДА (DV-C2′): непустая перекрывает общую. */
+  brandDecorUrls: string[];
   personLayer: { url: string; width: number; height: number } | null;
 }): Promise<StyleProfile | undefined> {
   // Ограничение 4: ручной override из админки живёт, пока его не сняли руками.
   const existing = opts.existing as { source?: unknown } | null;
   if (existing && existing.source === "manual") return undefined;
 
-  const libraryUrls: string[] = [];
+  const slotUrls: string[] = [];
   let sceneActive = false;
   for (const config of opts.typeAssets) {
     if (config.composeMode !== "layered") continue;
@@ -391,7 +401,7 @@ async function buildVariantStyleProfile(opts: {
       if (specRow?.spec.scatter) {
         sceneActive = true;
         for (const url of config.decorUrls ?? []) {
-          if (!libraryUrls.includes(url)) libraryUrls.push(url);
+          if (!slotUrls.includes(url)) slotUrls.push(url);
         }
       }
     } catch {
@@ -400,6 +410,9 @@ async function buildVariantStyleProfile(opts: {
     }
   }
   if (!sceneActive) return undefined;
+  // DV-C2′: модель выбирает из той же библиотеки, из которой потом соберёт
+  // кадр рендер, — у бренда своя, у остальных общая.
+  const libraryUrls = opts.brandDecorUrls.length > 0 ? opts.brandDecorUrls : slotUrls;
 
   // Цвет, который движок увидел бы в auto-режиме, — чтобы модель предлагала
   // hue, гармонирующий с реально сгенерированными слоями, а не вслепую.
@@ -455,7 +468,11 @@ export async function processPrepareVariantJob(bundleId: string, variantId: stri
 
   const brand = await prisma.brand.findUnique({
     where: { name: variant.brandName },
-    select: { imageModel: true, nanoRef: { select: { referenceImages: true } } },
+    select: {
+      imageModel: true,
+      decorUrls: true,
+      nanoRef: { select: { referenceImages: true } },
+    },
   });
   const refs = brand?.nanoRef?.referenceImages ?? [];
   const neuralPrompt = variant.bundle.neuralPrompt;
@@ -566,6 +583,7 @@ export async function processPrepareVariantJob(bundleId: string, variantId: stri
     existing: variant.styleProfile,
     campaignPrompt: neuralPrompt,
     brandName: variant.brandName,
+    brandDecorUrls: brandDecorUrlsOf(brand?.decorUrls),
     personLayer: personLayerRow
       ? { url: personLayerRow.url, width: personLayerRow.width, height: personLayerRow.height }
       : null,
@@ -639,15 +657,20 @@ async function renderLayeredWithEngine(opts: {
   /** Сырой style-profile с варианта (DV-E1) — клампится ЗДЕСЬ, при каждом
    *  рендере: библиотека декора могла измениться после сохранения профиля. */
   styleProfile: unknown;
+  /** Библиотека декора БРЕНДА (DV-C2′): непустая перекрывает общую слота. */
+  brandDecorUrls: string[];
 }): Promise<EngineRenderResult> {
   const { specRow, config } = opts;
   const spec = specRow.spec;
 
+  // DV-C2′: у бренда своя библиотека — общая остаётся фолбэком для брендов
+  // без своего набора.
+  const libraryUrls =
+    opts.brandDecorUrls.length > 0 ? opts.brandDecorUrls : (config.decorUrls ?? []);
+
   // Ограничение 3 DV-E1: сохранённый профиль зажимается в коридоры на входе
   // рендера. Мусор/устаревшие ссылки деградируют к дефолтам, а не роняют джобу.
-  const profile = clampStyleProfile(opts.styleProfile, {
-    libraryUrls: config.decorUrls ?? [],
-  });
+  const profile = clampStyleProfile(opts.styleProfile, { libraryUrls });
 
   if (config.width !== spec.canvas.w || config.height !== spec.canvas.h) {
     return {
@@ -715,7 +738,7 @@ async function renderLayeredWithEngine(opts: {
   // Static decor cutouts — normalized + cached exactly like subject layers.
   // DV-E1: профиль может СУЗИТЬ библиотеку до ассетов, уместных кампании
   // (кламп уже отбросил чужие URL; пустой выбор = вся библиотека).
-  const decorSourceUrls = profile?.decorUrls ?? config.decorUrls ?? [];
+  const decorSourceUrls = profile?.decorUrls ?? libraryUrls;
   const decor: EngineLayer[] = [];
   for (const [i, url] of decorSourceUrls.entries()) {
     const norm = await getOrCreateNormalizedLayer(url, `decor${i}#${opts.assetKey}`);
@@ -920,6 +943,12 @@ export async function processRenderAssetJob(
         return;
       }
       if (specRow) {
+        // DV-C2′: библиотека декора бренда (снимок по имени, как и остальные
+        // brand-поля варианта). Бренд удалён/пуст → общая библиотека слота.
+        const brandRow = await prisma.brand.findUnique({
+          where: { name: variant.brandName },
+          select: { decorUrls: true },
+        });
         const done = await renderLayeredWithEngine({
           bundleId,
           assetId,
@@ -931,6 +960,7 @@ export async function processRenderAssetJob(
           specRow,
           campaignPrompt: variant.bundle.neuralPrompt ?? "",
           styleProfile: variant.styleProfile,
+          brandDecorUrls: brandDecorUrlsOf(brandRow?.decorUrls),
         });
         if (!done.ok) {
           // Keep the validator report on the FAILED asset — the CRM shows WHY.

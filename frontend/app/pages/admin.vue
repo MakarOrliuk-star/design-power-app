@@ -815,6 +815,11 @@ interface DecorSlot {
   label?: string;
   decorUrls: string[];
 }
+interface DecorBrand {
+  id: string;
+  name: string;
+  decorUrls: string[];
+}
 interface DecorUploadResult {
   name: string;
   ok: boolean;
@@ -823,10 +828,15 @@ interface DecorUploadResult {
 }
 
 const decorSlots = ref<DecorSlot[]>([]);
+// DV-C2′: у каждого бренда своя библиотека; непустая перекрывает общую,
+// пустая — бренд берёт общую (фолбэк).
+const decorBrands = ref<DecorBrand[]>([]);
 const decorLimits = ref({ perSlot: 20, maxFiles: 24 });
 // По умолчанию только email: push и pop-up откалиброваны по своим эталонам,
 // декор поменял бы их вид (решение DV-B2).
 const decorTargets = ref<string[]>(["email"]);
+// "" = общая библиотека (слоты); иначе id бренда-адресата загрузки.
+const decorBrandId = ref<string>("");
 const decorInput = ref<HTMLInputElement | null>(null);
 const decorBusy = ref(false);
 const decorMsg = ref("");
@@ -834,10 +844,13 @@ const decorErrors = ref<Array<{ name: string; reason: string }>>([]);
 
 async function loadDecor() {
   try {
-    const res = await api<{ slots: DecorSlot[]; limits: typeof decorLimits.value }>(
-      "/api/admin/decor",
-    );
+    const res = await api<{
+      slots: DecorSlot[];
+      brands: DecorBrand[];
+      limits: typeof decorLimits.value;
+    }>("/api/admin/decor");
     decorSlots.value = res.slots;
+    decorBrands.value = res.brands ?? [];
     decorLimits.value = res.limits;
   } catch {
     decorMsg.value = "Не удалось загрузить библиотеку декора";
@@ -858,7 +871,8 @@ async function uploadDecor(event: Event) {
   try {
     const form = new FormData();
     for (const f of files) form.append("files", f);
-    form.append("assetKeys", JSON.stringify(decorTargets.value));
+    if (decorBrandId.value) form.append("brandId", decorBrandId.value);
+    else form.append("assetKeys", JSON.stringify(decorTargets.value));
     const res = await api<{ results: DecorUploadResult[] }>("/api/admin/decor", {
       method: "POST",
       body: form,
@@ -880,12 +894,12 @@ async function uploadDecor(event: Event) {
   }
 }
 
-async function detachDecor(assetKey: string, url: string) {
+async function detachDecor(target: { assetKey?: string; brandId?: string }, url: string) {
   try {
-    await api("/api/admin/decor", { method: "DELETE", body: { assetKey, url } });
+    await api("/api/admin/decor", { method: "DELETE", body: { ...target, url } });
     await loadDecor();
   } catch {
-    decorMsg.value = "Не удалось убрать ассет из слота";
+    decorMsg.value = "Не удалось убрать ассет из библиотеки";
   }
 }
 
@@ -1629,20 +1643,32 @@ onMounted(() => {
         делаем сами. Одинаковые файлы не дублируются.
       </p>
       <p class="muted">
-        Набор общий для всех брендов — цвет под палитру бренда приводит движок. Рекомендуемый
-        минимум: <b>12 объектов</b>, из них хотя бы один крупный (монета) — он уходит в размытый
-        задний план и подрезается верхним краем.
+        Библиотеки двухуровневые (DV-C2′): у бренда может быть <b>своя</b> — тогда его баннеры
+        собираются только из неё; бренды без своей библиотеки берут <b>общую</b>. Цвет под палитру
+        кадра в обоих случаях приводит движок. Рекомендуемый минимум на библиотеку:
+        <b>12 объектов</b>, из них хотя бы один крупный (монета) — он уходит в размытый задний
+        план и подрезается верхним краем.
       </p>
 
-      <div class="dec__slots">
+      <label class="dec__brandpick">
+        Куда грузим:
+        <select v-model="decorBrandId">
+          <option value="">Общая библиотека (по слотам)</option>
+          <option v-for="b in decorBrands" :key="b.id" :value="b.id">
+            {{ b.name }} ({{ b.decorUrls.length }}/{{ decorLimits.perSlot }})
+          </option>
+        </select>
+      </label>
+
+      <div v-if="!decorBrandId" class="dec__slots">
         <label v-for="s in decorSlots" :key="s.assetKey" class="dec__slot">
           <input v-model="decorTargets" type="checkbox" :value="s.assetKey" />
           {{ s.label || s.assetKey }}
           <span class="muted">({{ s.decorUrls.length }}/{{ decorLimits.perSlot }})</span>
         </label>
       </div>
-      <p class="muted">
-        Куда прицепить загруженные файлы. По умолчанию только email: push и pop-up собираются по
+      <p v-if="!decorBrandId" class="muted">
+        Слоты общей библиотеки. По умолчанию только email: push и pop-up собираются по
         своим эталонам, и декор изменил бы их вид.
       </p>
 
@@ -1655,7 +1681,11 @@ onMounted(() => {
           multiple
           @change="uploadDecor"
         />
-        <button class="btn-primary" :disabled="decorBusy || !decorTargets.length" @click="pickDecor">
+        <button
+          class="btn-primary"
+          :disabled="decorBusy || (!decorBrandId && !decorTargets.length)"
+          @click="pickDecor"
+        >
           {{ decorBusy ? "Загрузка…" : "Выбрать файлы" }}
         </button>
       </div>
@@ -1665,18 +1695,42 @@ onMounted(() => {
       </ul>
 
       <div v-for="s in decorSlots" :key="`grid-${s.assetKey}`">
-        <h3 v-if="s.decorUrls.length" class="bt__title">{{ s.label || s.assetKey }}</h3>
+        <h3 v-if="s.decorUrls.length" class="bt__title">Общая — {{ s.label || s.assetKey }}</h3>
         <div v-if="s.decorUrls.length" class="dec__grid">
           <figure v-for="url in s.decorUrls" :key="url" class="dec__item">
             <img :src="url" :alt="s.assetKey" loading="lazy" />
-            <button class="btn-toggle" title="Убрать из слота" @click="detachDecor(s.assetKey, url)">
+            <button
+              class="btn-toggle"
+              title="Убрать из слота"
+              @click="detachDecor({ assetKey: s.assetKey }, url)"
+            >
               убрать
             </button>
           </figure>
         </div>
       </div>
-      <p v-if="decorSlots.every((s) => !s.decorUrls.length)" class="muted">
-        Библиотека пуста — сейчас декор берётся из кусков сгенерированного ITEM-слоя, и кадр
+
+      <div v-for="b in decorBrands" :key="`brand-grid-${b.id}`">
+        <h3 v-if="b.decorUrls.length" class="bt__title">Бренд — {{ b.name }}</h3>
+        <div v-if="b.decorUrls.length" class="dec__grid">
+          <figure v-for="url in b.decorUrls" :key="url" class="dec__item">
+            <img :src="url" :alt="b.name" loading="lazy" />
+            <button
+              class="btn-toggle"
+              title="Убрать из библиотеки бренда"
+              @click="detachDecor({ brandId: b.id }, url)"
+            >
+              убрать
+            </button>
+          </figure>
+        </div>
+      </div>
+
+      <p
+        v-if="decorSlots.every((s) => !s.decorUrls.length) && decorBrands.every((b) => !b.decorUrls.length)"
+        class="muted"
+      >
+        Библиотеки пусты — сейчас декор берётся из кусков сгенерированного ITEM-слоя, и кадр
         выходит разреженнее эталонов.
       </p>
     </section>
@@ -2183,6 +2237,13 @@ select {
 }
 
 /* Библиотека декора */
+.dec__brandpick {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 13px;
+  margin-bottom: 8px;
+}
 .dec__slots {
   display: flex;
   gap: 16px;
