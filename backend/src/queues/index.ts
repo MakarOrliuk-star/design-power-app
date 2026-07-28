@@ -132,3 +132,44 @@ export function getSmarticoQueue(): Queue<SmarticoQueueData, unknown, SmarticoJo
   }
   return _smarticoQueue;
 }
+
+// ============================================================
+// SMS Route Tester Queue
+// ============================================================
+export const SMS_QUEUE = "sms-queue";
+
+export interface SmsNetworkTarget {
+  mcc: string;
+  mnc: string;
+  country: string;
+  network: string;
+  language: string;
+}
+
+export interface SmsBatchJobData {
+  campaignId: string;
+  userId: string;
+  provider: "dm" | "miatel" | "fortytwo" | "messagewhiz";
+  dmTokenKey?: string;
+  senderId: string;
+  targets: SmsNetworkTarget[];
+}
+
+export interface SmsPollingJobData {
+  campaignId: string;
+  attempt: number;
+}
+
+export type SmsQueueData = SmsBatchJobData | SmsPollingJobData;
+export type SmsJobName = "send-batch" | "poll-status";
+
+let _smsQueue: Queue<SmsQueueData, void, SmsJobName> | null = null;
+export function getSmsQueue(): Queue<SmsQueueData, void, SmsJobName> {
+  if (!_smsQueue) {
+    _smsQueue = new Queue<SmsQueueData, void, SmsJobName>(SMS_QUEUE, {
+      connection: getBullConnection(),
+      defaultJobOptions,
+    });
+  }
+  return _smsQueue;
+}

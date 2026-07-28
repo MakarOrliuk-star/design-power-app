@@ -29,6 +29,8 @@ import { startSmarticoWorker, stopSmarticoWorker } from "./queues/smartico.worke
 
 import { calculatorService } from "./services/calculator.service.js";
 
+import { smsRouter } from "./routes/sms.js";
+
 assertApiProductionConfig();
 
 const app = express();
@@ -64,6 +66,9 @@ app.use("/api/my-brands", loadUser, requireAuth, requireSuperDesigner, myBrandsR
 // Generic /api (generate) is a Design-zone route — keep it last so the more
 // specific prefixes above match first.
 app.use("/api", loadUser, requireAuth, requireZone("DESIGNER"), generateRouter);
+
+app.use("/api/sms", loadUser, requireAuth, requireZone("CRM"), smsRouter);
+
 
 const server = app.listen(env.PORT, "0.0.0.0", () => {
   console.log(`Backend listening on http://0.0.0.0:${env.PORT} (${env.NODE_ENV})`);
