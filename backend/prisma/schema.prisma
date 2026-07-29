@@ -85,6 +85,11 @@ model Brand {
   // otherwise a MODEL_REGISTRY key (e.g. "xai/grok-imagine-image"). The endpoint
   // (/edit vs text-to-image) and request body are derived from the registry.
   imageModel        String?
+  // Библиотека декора БРЕНДА (Задание 2, DV-C2′ — заказчик 2026-07-28:
+  // «для каждого бренда своя библиотека»): string[] нормализованных URL.
+  // Непустая перекрывает общую библиотеку слота; пустая/null — бренд берёт
+  // общую (фолбэк). Перекраска под палитру кадра (П8) работает в обоих случаях.
+  decorUrls         Json?
   // Ownership (TASK super-designer): the user who created the brand. Legacy
   // brands are null ("nobody's") — editable only via the admin panel. A
   // super-designer may edit/delete/test ONLY brands where createdById = self.
@@ -311,10 +316,34 @@ model Job {
   responseUrl       String?
   cloudinaryFolder  String?
   attempts          Int         @default(0)
+  // Draft brand-test overrides (TASK download-and-edit-style §2): unsaved
+  // personPrompt / imageModel values a super-designer is trying out before
+  // hitting «Сохранить». The person processor prefers these over the DB rows.
+  draftOverrides    Json?
   createdAt         DateTime    @default(now())
   updatedAt         DateTime    @updatedAt
 
   @@index([status, type])
+}
+
+/// Audit trail for brand edits made outside the admin panel (TASK
+/// download-and-edit-style §2): who changed which brand, full before/after
+/// snapshots and when. brandName/userEmail are denormalized so the log
+/// survives brand or user deletion. Rollback restores `before` of the latest
+/// entry and writes its own ROLLBACK entry.
+model BrandChangeLog {
+  id        String   @id @default(cuid())
+  brandId   String? // no FK — the log must outlive the brand
+  brandName String
+  userId    String?
+  userEmail String
+  action    String // UPDATE | ROLLBACK
+  before    Json
+  after     Json
+  createdAt DateTime @default(now())
+
+  @@index([brandId, createdAt])
+  @@index([createdAt])
 }
 
 // ============================================================
@@ -396,7 +425,10 @@ model TournamentElement {
   id              String             @id @default(cuid())
   categoryId      String
   category        TournamentCategory @relation(fields: [categoryId], references: [id], onDelete: Cascade)
-  name            String // "Tournament_1", "Playson & Booongo"
+  name            String // BASE name (and the only name for fixed-mode categories), e.g. "Tournament_1_BASE"
+  // VIP display name for hasModes categories ("Tournament_1_VIP"); null falls
+  // back to `name` everywhere (generation, page, ZIP file names).
+  nameVip         String?
   order           Int                @default(0)
   isActive        Boolean            @default(true)
   // Provider category only: the 2 provider reference images (Cloudinary URLs)
@@ -537,6 +569,17 @@ model BundleBrandVariant {
   // layer compositor references overlays by public id, not URL.
   personCutoutId String?
   itemCutoutId   String?
+  /// sha256 of the SOURCE image bytes each cutout was normalized from
+  /// (Phase 2): links the variant to the NormalizedLayer cache rows and lets
+  /// the composition engine (Phase 3) look up bbox dimensions.
+  personLayerHash String?
+  itemLayerHash   String?
+  /// Style-profile «казино-дизайнера» (DV-E1): данные, не координаты —
+  /// hue плашки, материал типографики, токены, плотность рассыпки, выбор
+  /// декора. Один вызов модели на brand-variant в stage A, результат живёт
+  /// здесь: повторный рендер того же бандла берёт сохранённый профиль.
+  /// `source: "manual"` — ручной override из админки, stage A его не трёт.
+  styleProfile    Json?
 
   assets BundleAsset[]
 
@@ -558,11 +601,49 @@ model BundleAsset {
   status       BundleAssetStatus @default(PENDING)
   approved     Boolean           @default(false)
   errorMessage String?
+  /// Composition metadata for the email template + debugging (Phase 3):
+  /// spec key/version, seed, safe-zone %, luminance/contrast, recommended
+  /// text color, layer bboxes, retina URL. Written by the engine render path.
+  metadata     Json?
   createdAt    DateTime          @default(now())
   updatedAt    DateTime          @updatedAt
 
   @@unique([variantId, assetKey])
   @@index([bundleId])
+}
+
+/// Cache of normalized transparent layers keyed by the sha256 of the SOURCE
+/// image bytes (TASK email-composition, Phase 2). Re-running stage A on the
+/// same source skips background removal + normalization + upload entirely;
+/// `publicId` is deterministic (layer_<hash>), so Cloudinary never grows
+/// duplicates. width/height are the alpha-bbox pixel dimensions the
+/// composition engine scales from (fit by subject bbox, not by file — RC1).
+model NormalizedLayer {
+  id         String   @id @default(cuid())
+  sourceHash String   @unique
+  publicId   String
+  url        String
+  width      Int
+  height     Int
+  createdAt  DateTime @default(now())
+}
+
+/// Versioned layout spec for deterministic asset composition (TASK
+/// email-composition, Phase 1). Geometry is data, not code: zones, anchors,
+/// fit heights, baseline, safe-zone and decor rules live in `spec` (validated
+/// by layoutSpecSchema at runtime). Rows are immutable — editing from the
+/// admin creates the NEXT version; old bundles keep the version they used.
+model LayoutSpec {
+  id        String   @id @default(cuid())
+  key       String // e.g. "email.hero" (also planned: "push.hero", "popup.hero")
+  version   Int
+  spec      Json
+  isActive  Boolean  @default(true)
+  createdAt DateTime @default(now())
+  createdBy String? // admin email snapshot, informational
+
+  @@unique([key, version])
+  @@index([key, isActive])
 }
 
 /// Global admin-editable Neural prompt suggestions shown on textarea focus (D8).

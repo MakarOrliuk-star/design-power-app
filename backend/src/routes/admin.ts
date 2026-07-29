@@ -6,6 +6,9 @@ import { cloudinaryConfigured } from "../env.js";
 import { uploadBase64, withRetry } from "../lib/cloudinary.js";
 import { MODEL_KEYS, MODEL_OPTIONS } from "../lib/falModels.js";
 import { createBrand } from "../services/brand.service.js";
+import { layoutSpecSchema, createLayoutSpecVersion } from "../services/layoutSpec.js";
+import { clampStyleProfile } from "../lib/styleProfile.js";
+import { Prisma } from "../../generated/prisma/client.js";
 
 // All routes here are mounted behind loadUser + requireAdmin (see index.ts).
 export const adminRouter: Router = Router();
@@ -317,6 +320,45 @@ adminRouter.post("/upload", async (req: Request, res: Response) => {
 });
 
 // ============================================================
+// Brand change log (TASK download-and-edit-style §2): who edited which brand,
+// full before/after snapshots — written by the super-designer edit surface.
+// ============================================================
+const brandLogsSchema = z.object({
+  brandId: z.string().optional(),
+  limit: z.coerce.number().int().min(1).max(200).default(50),
+  offset: z.coerce.number().int().min(0).default(0),
+});
+adminRouter.get("/brand-logs", async (req: Request, res: Response) => {
+  const parsed = brandLogsSchema.safeParse(req.query);
+  if (!parsed.success) {
+    res.status(400).json({ error: "invalid_query" });
+    return;
+  }
+  const { brandId, limit, offset } = parsed.data;
+  const where = brandId ? { brandId } : {};
+  const [logs, total] = await Promise.all([
+    prisma.brandChangeLog.findMany({
+      where,
+      orderBy: { createdAt: "desc" },
+      take: limit,
+      skip: offset,
+      select: {
+        id: true,
+        brandId: true,
+        brandName: true,
+        userEmail: true,
+        action: true,
+        before: true,
+        after: true,
+        createdAt: true,
+      },
+    }),
+    prisma.brandChangeLog.count({ where }),
+  ]);
+  res.json({ logs, total, hasMore: offset + logs.length < total });
+});
+
+// ============================================================
 // Smartico brands (Unique-Image-Smartico maintenance)
 // Canonical brand_id list used to normalize ZIP folder names. CRUD for the CRM
 // service; seeded from the legacy SMARTICO_BRANDS list.
@@ -417,6 +459,13 @@ const bundleTypeAssetSchema = z.object({
     )
     .optional(),
   composeMode: z.enum(["ai", "layered"]).optional(),
+  // Versioned geometry reference (Phase 1): render resolves the latest active
+  // LayoutSpec with this key. Absent → legacy zones/composeMode path.
+  layoutSpecKey: z.string().min(1).max(60).optional(),
+  // Static decor cutout URLs the engine scatters into decor bands (Phase 3).
+  decorUrls: z.array(z.string().url()).max(20).optional(),
+  // Golden composite for the validator's SSIM check (Phase 4/6).
+  goldenUrl: z.string().url().optional(),
 });
 
 const bundleTypeSchema = z.object({
@@ -481,6 +530,151 @@ adminRouter.patch("/bundle-types/:id", async (req: Request, res: Response) => {
   } catch {
     res.status(404).json({ error: "not_found" });
   }
+});
+
+// ============================================================
+// Layout specs (TASK email-composition, Phase 1) — versioned geometry.
+// Rows are immutable: POST creates the NEXT version for the key; PATCH only
+// toggles isActive (rollback = deactivate the newer version). Editing needs
+// no code deploy — the render path resolves the latest active version.
+// ============================================================
+
+adminRouter.get("/layout-specs", async (_req: Request, res: Response) => {
+  const layoutSpecs = await prisma.layoutSpec.findMany({
+    orderBy: [{ key: "asc" }, { version: "desc" }],
+  });
+  res.json({ layoutSpecs });
+});
+
+const createLayoutSpecSchema = z.object({
+  key: z.string().min(1).max(60),
+  spec: z.unknown(),
+});
+
+adminRouter.post("/layout-specs", async (req: Request, res: Response) => {
+  const parsed = createLayoutSpecSchema.safeParse(req.body);
+  if (!parsed.success) {
+    res.status(400).json({ error: "invalid_body", details: parsed.error.flatten().fieldErrors });
+    return;
+  }
+  const specParsed = layoutSpecSchema.safeParse(parsed.data.spec);
+  if (!specParsed.success) {
+    // `issues` с полным путём поля, а не только flatten по первому сегменту:
+    // спека Задания 2 глубоко вложена (scatter.layers[0].sizePct,
+    // background.glowPlate.radius, safe.levels.ambience.coveragePct), и без
+    // пути редактор в админке не поймёт, что именно он сломал.
+    res.status(400).json({
+      error: "invalid_spec",
+      details: specParsed.error.flatten(),
+      issues: specParsed.error.issues.map((i) => ({
+        path: i.path.join("."),
+        message: i.message,
+      })),
+    });
+    return;
+  }
+  const created = await createLayoutSpecVersion(
+    parsed.data.key,
+    specParsed.data,
+    req.user?.email,
+  );
+  res.status(201).json({ layoutSpec: created });
+});
+
+adminRouter.patch("/layout-specs/:id", async (req: Request, res: Response) => {
+  const id = req.params.id;
+  if (typeof id !== "string" || !id) {
+    res.status(400).json({ error: "id_required" });
+    return;
+  }
+  const parsed = z.object({ isActive: z.boolean() }).safeParse(req.body);
+  if (!parsed.success) {
+    res.status(400).json({ error: "invalid_body", details: parsed.error.flatten().fieldErrors });
+    return;
+  }
+  try {
+    const updated = await prisma.layoutSpec.update({
+      where: { id },
+      data: { isActive: parsed.data.isActive },
+    });
+    res.json({ layoutSpec: updated });
+  } catch {
+    res.status(404).json({ error: "not_found" });
+  }
+});
+
+// ---- Style-profile «казино-дизайнера» (DV-E1, ограничение 4) ----
+// Ручной override профиля brand-variant'а. Тот же кламп, что у модели и у
+// рендера: координат в профиле нет и быть не может, значения вне коридоров
+// отбрасываются. `profile: null` снимает override — следующий prepare-variant
+// снова спросит модель. Применяется при следующем рендере ассета
+// (перегенерация из CRM), в сохранённые картинки задним числом не лезет.
+adminRouter.patch("/bundle-variants/:id/style-profile", async (req: Request, res: Response) => {
+  const id = req.params.id;
+  if (typeof id !== "string" || !id) {
+    res.status(400).json({ error: "id_required" });
+    return;
+  }
+  const parsed = z
+    .object({ profile: z.record(z.unknown()).nullable() })
+    .safeParse(req.body);
+  if (!parsed.success) {
+    res.status(400).json({ error: "invalid_body", details: parsed.error.flatten().fieldErrors });
+    return;
+  }
+
+  const variant = await prisma.bundleBrandVariant.findUnique({
+    where: { id },
+    include: { bundle: { select: { bundleType: { select: { assets: true } } } } },
+  });
+  if (!variant) {
+    res.status(404).json({ error: "not_found" });
+    return;
+  }
+
+  let value: Prisma.InputJsonValue | typeof Prisma.DbNull = Prisma.DbNull;
+  if (parsed.data.profile !== null) {
+    // Кламп против ЭФФЕКТИВНОЙ библиотеки декора — той же, из которой рендер
+    // потом соберёт кадр: библиотека бренда (DV-C2′), а без неё — общая по
+    // layered-слотам типа бандла.
+    const brand = await prisma.brand.findUnique({
+      where: { name: variant.brandName },
+      select: { decorUrls: true },
+    });
+    const brandUrls = Array.isArray(brand?.decorUrls)
+      ? brand.decorUrls.filter((u): u is string => typeof u === "string")
+      : [];
+    const typeAssets = variant.bundle.bundleType.assets as unknown as Array<{
+      composeMode?: string;
+      decorUrls?: string[];
+    }>;
+    const slotUrls: string[] = [];
+    for (const a of typeAssets) {
+      if (a.composeMode !== "layered") continue;
+      for (const url of a.decorUrls ?? []) {
+        if (!slotUrls.includes(url)) slotUrls.push(url);
+      }
+    }
+    const libraryUrls = brandUrls.length > 0 ? brandUrls : slotUrls;
+    const clamped = clampStyleProfile(parsed.data.profile, { libraryUrls });
+    if (!clamped) {
+      res.status(400).json({
+        error: "invalid_profile",
+        details:
+          "ни одно поле не прошло кламп (glowHex #RRGGBB; typoMaterial из пресетов; " +
+          "tokens ≤ 3 по ≤ 14 символов; density 0..1; decorUrls из библиотеки слота)",
+      });
+      return;
+    }
+    value = { ...clamped, source: "manual" } as unknown as Prisma.InputJsonValue;
+  }
+
+  const updated = await prisma.bundleBrandVariant.update({
+    where: { id },
+    data: { styleProfile: value },
+    select: { id: true, brandName: true, styleProfile: true },
+  });
+  res.json({ variant: updated });
 });
 
 const promptPresetSchema = z.object({

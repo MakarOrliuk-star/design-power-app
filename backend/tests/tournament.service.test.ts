@@ -37,6 +37,7 @@ vi.mock("../src/queues/index.js", () => ({
 
 import {
   sanitizeName,
+  displayNameOf,
   buildTournamentPrompt,
   nextDesNumber,
   createTournamentBatches,
@@ -52,6 +53,19 @@ describe("sanitizeName", () => {
     expect(sanitizeName("Playson & Booongo")).toBe("Playson_&_Booongo");
     expect(sanitizeName("Tournament Halloween")).toBe("Tournament_Halloween");
     expect(sanitizeName("Tournament_1")).toBe("Tournament_1");
+  });
+});
+
+/** Separate Base/VIP names (TASK crm-bundle): VIP uses nameVip, falling back to name. */
+describe("displayNameOf", () => {
+  it("VIP picks nameVip; BASE always picks name", () => {
+    const el = { name: "Tournament_1_BASE", nameVip: "Tournament_1_VIP" };
+    expect(displayNameOf(el, "VIP")).toBe("Tournament_1_VIP");
+    expect(displayNameOf(el, "BASE")).toBe("Tournament_1_BASE");
+  });
+  it("VIP falls back to name when nameVip is null or blank", () => {
+    expect(displayNameOf({ name: "Tournament_1", nameVip: null }, "VIP")).toBe("Tournament_1");
+    expect(displayNameOf({ name: "Tournament_1", nameVip: "  " }, "VIP")).toBe("Tournament_1");
   });
 });
 
@@ -115,6 +129,7 @@ const ELEMENTS = [
   {
     id: "e1",
     name: "Tournament_1",
+    nameVip: "Tournament_1_VIP",
     referenceImages: [],
     category: { key: "tournament", hasModes: true, fixedMode: null },
     prompts: [
@@ -125,6 +140,7 @@ const ELEMENTS = [
   {
     id: "e2",
     name: "Playson & Booongo",
+    nameVip: null,
     referenceImages: ["https://cdn/prov-1.png", "https://cdn/prov-2.png"],
     category: { key: "provider", hasModes: false, fixedMode: "BASE" },
     prompts: [{ mode: "BASE", content: "provider prompt" }],
@@ -202,6 +218,32 @@ describe("createTournamentBatches", () => {
       (r) => r.brandName === "Spinogambino(Men)" && r.tourCategoryKey === "tournament",
     )!;
     expect(menRow.tourFileName).toMatch(/^SpinogambinoMen_Tournament_1_[12]$/);
+  });
+
+  it("a VIP selection names the rows by nameVip (file name AND denormalized element name)", async () => {
+    db.brandFindMany.mockResolvedValue([BRANDS[0]!]);
+    await createTournamentBatches(
+      baseParams({ brandIds: ["b1"], selections: [{ elementId: "e1", mode: "VIP" }] }),
+    );
+    const rows = db.generationCreate.mock.calls.map((c) => c[0].data);
+    expect(rows).toHaveLength(2);
+    expect(rows[0]!.tourElementName).toBe("Tournament_1_VIP");
+    expect(rows[0]!.tourFileName).toBe("Bonuskong_Tournament_1_VIP_1");
+    expect(rows[1]!.tourFileName).toBe("Bonuskong_Tournament_1_VIP_2");
+    expect(rows[0]!.tourMode).toBe("VIP");
+    // The VIP prompt set is untouched by the naming change.
+    expect(rows[0]!.description).toBe("SYS[vip tournament prompt]");
+  });
+
+  it("a VIP selection falls back to the BASE name while nameVip is unset", async () => {
+    db.brandFindMany.mockResolvedValue([BRANDS[0]!]);
+    db.elementFindMany.mockResolvedValue([{ ...ELEMENTS[0]!, nameVip: null }]);
+    await createTournamentBatches(
+      baseParams({ brandIds: ["b1"], count: 1, selections: [{ elementId: "e1", mode: "VIP" }] }),
+    );
+    const rows = db.generationCreate.mock.calls.map((c) => c[0].data);
+    expect(rows[0]!.tourElementName).toBe("Tournament_1");
+    expect(rows[0]!.tourFileName).toBe("Bonuskong_Tournament_1_1");
   });
 
   it("provider elements use the provider's admin refs, not the brand images", async () => {

@@ -408,6 +408,7 @@ interface TourPrompt {
 interface TourElement {
   id: string;
   name: string;
+  nameVip: string | null;
   order: number;
   isActive: boolean;
   referenceImages: string[];
@@ -426,7 +427,8 @@ interface TourCategory {
 const tourCategories = ref<TourCategory[]>([]);
 const tourSystemPrompt = ref("");
 const tourMsg = ref<Record<string, string>>({}); // element id | "system" | category id
-const newElementName = ref<Record<string, string>>({}); // per category id
+const newElementName = ref<Record<string, string>>({}); // per category id (Base name)
+const newElementNameVip = ref<Record<string, string>>({}); // per category id (VIP name, hasModes only)
 
 function padTo2(arr: string[]): string[] {
   const a = [...arr];
@@ -515,13 +517,19 @@ async function deleteTourCategory(cat: TourCategory) {
 async function addTourElement(cat: TourCategory) {
   const name = (newElementName.value[cat.id] ?? "").trim();
   if (!name) return;
+  const nameVip = (newElementNameVip.value[cat.id] ?? "").trim();
+  if (cat.hasModes && !nameVip) {
+    tourMsg.value[cat.id] = "Укажите название для VIP.";
+    return;
+  }
   tourMsg.value[cat.id] = "";
   try {
     await api("/api/tournament-admin/elements", {
       method: "POST",
-      body: { categoryId: cat.id, name },
+      body: { categoryId: cat.id, name, ...(cat.hasModes ? { nameVip } : {}) },
     });
     newElementName.value[cat.id] = "";
+    newElementNameVip.value[cat.id] = "";
     tourMsg.value[cat.id] = "Элемент добавлен ✓";
     await loadTournaments();
   } catch (e: unknown) {
@@ -544,11 +552,18 @@ async function saveTourPrompt(el: TourElement, p: TourPrompt) {
   }
 }
 
-/** Save the element's name (+ provider refs) — the card's Сохранить button. */
+/** Save the element's names (+ provider refs) — the card's Сохранить button. */
 async function saveTourElement(cat: TourCategory, el: TourElement) {
   tourMsg.value[el.id] = "";
+  if (cat.hasModes && !(el.nameVip ?? "").trim()) {
+    tourMsg.value[el.id] = "Укажите название для VIP.";
+    return;
+  }
   try {
-    const body: { name: string; referenceImages?: string[] } = { name: el.name.trim() };
+    const body: { name: string; nameVip?: string; referenceImages?: string[] } = {
+      name: el.name.trim(),
+    };
+    if (cat.hasModes) body.nameVip = (el.nameVip ?? "").trim();
     if (cat.key === "provider")
       body.referenceImages = el.referenceImages.map((s) => s.trim()).filter(Boolean);
     await api(`/api/tournament-admin/elements/${el.id}`, { method: "PATCH", body });
@@ -692,6 +707,284 @@ async function setComposeMode(t: AdminBundleType, a: AdminBundleTypeAsset, e: Ev
   }
 }
 
+// ---- Layout-спеки композиции (TASK email-composition, Phase 1) ----
+// Геометрия email-баннера как данные: версии неизменяемы, «сохранить» всегда
+// создаёт следующую версию ключа; откат = деактивация новой версии.
+interface AdminLayoutSpec {
+  id: string;
+  key: string;
+  version: number;
+  spec: Record<string, unknown>;
+  isActive: boolean;
+  createdAt: string;
+  createdBy: string | null;
+}
+
+const layoutSpecs = ref<AdminLayoutSpec[]>([]);
+const lsDraft = ref<Record<string, string>>({});
+const lsMsg = ref<Record<string, string>>({});
+const lsKeys = computed(() => [...new Set(layoutSpecs.value.map((s) => s.key))]);
+
+function lsVersions(key: string): AdminLayoutSpec[] {
+  return layoutSpecs.value.filter((s) => s.key === key);
+}
+
+async function loadLayoutSpecs() {
+  try {
+    const res = await api<{ layoutSpecs: AdminLayoutSpec[] }>("/api/admin/layout-specs");
+    layoutSpecs.value = res.layoutSpecs;
+    for (const key of lsKeys.value) {
+      const newest = lsVersions(key)[0];
+      if (newest && !lsDraft.value[key]) {
+        lsDraft.value[key] = JSON.stringify(newest.spec, null, 2);
+      }
+    }
+  } catch {
+    error.value = "Не удалось загрузить layout-спеки.";
+  }
+}
+
+/** Специи чаще всего копируют из документации/чата, поэтому черновик может
+ *  приехать в ```json-обёртке или с лишним текстом вокруг — вырезаем сам
+ *  объект, чтобы человек не искал руками, что не так. */
+function cleanSpecDraft(raw: string): string {
+  let s = raw.trim();
+  s = s.replace(/^```[a-z]*\s*/i, "").replace(/```$/, "").trim();
+  const first = s.indexOf("{");
+  const last = s.lastIndexOf("}");
+  if (first > 0 || (last >= 0 && last < s.length - 1)) s = s.slice(first, last + 1);
+  return s;
+}
+
+async function saveLayoutSpecVersion(key: string) {
+  lsMsg.value[key] = "";
+  let spec: unknown;
+  const cleaned = cleanSpecDraft(lsDraft.value[key] ?? "");
+  if (!cleaned) {
+    lsMsg.value[key] = "Черновик пуст — вставьте JSON спеки.";
+    return;
+  }
+  try {
+    spec = JSON.parse(cleaned);
+    lsDraft.value[key] = cleaned; // показать ровно то, что уходит на сервер
+  } catch (err) {
+    // Точное место поломки вместо «исправьте черновик».
+    lsMsg.value[key] = `Невалидный JSON: ${err instanceof Error ? err.message : String(err)}`;
+    return;
+  }
+  try {
+    const res = await api<{ layoutSpec: AdminLayoutSpec }>("/api/admin/layout-specs", {
+      method: "POST",
+      body: { key, spec },
+    });
+    lsMsg.value[key] = `Сохранено как v${res.layoutSpec.version} ✓ — применится к новым рендерам`;
+    await loadLayoutSpecs();
+  } catch (err) {
+    // Сервер присылает issues с путём поля — показываем их, иначе в спеке на
+    // полсотни вложенных полей непонятно, что именно править.
+    const issues = (err as { data?: { issues?: Array<{ path: string; message: string }> } })?.data
+      ?.issues;
+    lsMsg.value[key] = issues?.length
+      ? `Спека отклонена: ${issues
+          .slice(0, 3)
+          .map((i) => `${i.path || "корень"} — ${i.message}`)
+          .join("; ")}${issues.length > 3 ? ` (и ещё ${issues.length - 3})` : ""}`
+      : "Спека отклонена валидацией (границы 0..1, min≤target≤max, зоны внутри холста).";
+  }
+}
+
+async function toggleLayoutSpec(s: AdminLayoutSpec) {
+  try {
+    await api(`/api/admin/layout-specs/${s.id}`, {
+      method: "PATCH",
+      body: { isActive: !s.isActive },
+    });
+    s.isActive = !s.isActive;
+    lsMsg.value[s.key] = `v${s.version} ${s.isActive ? "активирована" : "деактивирована"} ✓`;
+  } catch {
+    lsMsg.value[s.key] = "Ошибка переключения версии";
+  }
+}
+
+// ---- Библиотека декора (Задание 2 «визуальный паттерн», Фаза 2) ----
+// Загрузка прозрачных PNG для раскладки по кольцу. Файлы принимает
+// /api/admin/decor: там же чистка ореолов, обрезка по bbox и дедупликация.
+interface DecorSlot {
+  bundleTypeKey: string;
+  assetKey: string;
+  label?: string;
+  decorUrls: string[];
+}
+interface DecorBrand {
+  id: string;
+  name: string;
+  decorUrls: string[];
+}
+interface DecorUploadResult {
+  name: string;
+  ok: boolean;
+  url?: string;
+  reason?: string;
+}
+
+const decorSlots = ref<DecorSlot[]>([]);
+// DV-C2′: у каждого бренда своя библиотека; непустая перекрывает общую,
+// пустая — бренд берёт общую (фолбэк).
+const decorBrands = ref<DecorBrand[]>([]);
+const decorLimits = ref({ perSlot: 20, maxFiles: 24 });
+// По умолчанию только email: push и pop-up откалиброваны по своим эталонам,
+// декор поменял бы их вид (решение DV-B2).
+const decorTargets = ref<string[]>(["email"]);
+// "" = общая библиотека (слоты); иначе id бренда-адресата загрузки.
+const decorBrandId = ref<string>("");
+const decorInput = ref<HTMLInputElement | null>(null);
+const decorBusy = ref(false);
+const decorMsg = ref("");
+const decorErrors = ref<Array<{ name: string; reason: string }>>([]);
+
+async function loadDecor() {
+  try {
+    const res = await api<{
+      slots: DecorSlot[];
+      brands: DecorBrand[];
+      limits: typeof decorLimits.value;
+    }>("/api/admin/decor");
+    decorSlots.value = res.slots;
+    decorBrands.value = res.brands ?? [];
+    decorLimits.value = res.limits;
+  } catch {
+    decorMsg.value = "Не удалось загрузить библиотеку декора";
+  }
+}
+
+function pickDecor() {
+  decorInput.value?.click();
+}
+
+async function uploadDecor(event: Event) {
+  const input = event.target as HTMLInputElement;
+  const files = [...(input.files ?? [])];
+  if (files.length === 0) return;
+  decorBusy.value = true;
+  decorMsg.value = "";
+  decorErrors.value = [];
+  try {
+    const form = new FormData();
+    for (const f of files) form.append("files", f);
+    if (decorBrandId.value) form.append("brandId", decorBrandId.value);
+    else form.append("assetKeys", JSON.stringify(decorTargets.value));
+    const res = await api<{ results: DecorUploadResult[] }>("/api/admin/decor", {
+      method: "POST",
+      body: form,
+    });
+    const ok = res.results.filter((r) => r.ok).length;
+    // Отказы показываем поимённо: «нет альфа-канала» на конкретном файле —
+    // единственная подсказка, которая реально помогает его переделать.
+    decorErrors.value = res.results
+      .filter((r) => !r.ok)
+      .map((r) => ({ name: r.name, reason: r.reason ?? "не принят" }));
+    decorMsg.value = `Принято ${ok} из ${res.results.length} ✓`;
+    await loadDecor();
+  } catch (err) {
+    const details = (err as { data?: { details?: string } })?.data?.details;
+    decorMsg.value = details ? `Загрузка не удалась: ${details}` : "Загрузка не удалась";
+  } finally {
+    decorBusy.value = false;
+    input.value = ""; // иначе повторный выбор того же файла не даст change
+  }
+}
+
+async function detachDecor(target: { assetKey?: string; brandId?: string }, url: string) {
+  try {
+    await api("/api/admin/decor", { method: "DELETE", body: { ...target, url } });
+    await loadDecor();
+  } catch {
+    decorMsg.value = "Не удалось убрать ассет из библиотеки";
+  }
+}
+
+// ---- Brand change log (TASK download-and-edit-style §2) ----
+// Every «Edit current style» save/rollback lands here: who, when, before → after.
+interface BrandLogEntry {
+  id: string;
+  brandId: string | null;
+  brandName: string;
+  userEmail: string;
+  action: string;
+  before: Record<string, unknown>;
+  after: Record<string, unknown>;
+  createdAt: string;
+}
+
+const brandLogs = ref<BrandLogEntry[]>([]);
+const brandLogsTotal = ref(0);
+const brandLogsHasMore = ref(false);
+const brandLogsFilter = ref(""); // brandId, "" = all
+const brandLogsLoading = ref(false);
+const LOGS_PAGE = 50;
+
+async function loadBrandLogs(reset = true) {
+  brandLogsLoading.value = true;
+  try {
+    const offset = reset ? 0 : brandLogs.value.length;
+    const res = await api<{ logs: BrandLogEntry[]; total: number; hasMore: boolean }>(
+      "/api/admin/brand-logs",
+      {
+        query: {
+          limit: LOGS_PAGE,
+          offset,
+          ...(brandLogsFilter.value ? { brandId: brandLogsFilter.value } : {}),
+        },
+      },
+    );
+    brandLogs.value = reset ? res.logs : [...brandLogs.value, ...res.logs];
+    brandLogsTotal.value = res.total;
+    brandLogsHasMore.value = res.hasMore;
+  } catch {
+    error.value = "Не удалось загрузить историю изменений брендов.";
+  } finally {
+    brandLogsLoading.value = false;
+  }
+}
+
+function fmtLogVal(v: unknown): string {
+  if (v === null || v === undefined || v === "") return "—";
+  if (Array.isArray(v)) return v.length ? v.join(", ") : "—";
+  if (typeof v === "boolean") return v ? "да" : "нет";
+  const s = String(v);
+  return s.length > 300 ? `${s.slice(0, 300)}…` : s;
+}
+
+const LOG_FIELD_LABELS: Record<string, string> = {
+  name: "Название",
+  categoryIds: "Категории",
+  personPrompt: "Промпт (PERSON)",
+  stylePrompt: "Стиль",
+  referenceImages: "Референсы",
+  forcedAspectRatio: "Формат",
+  imageModel: "Модель",
+  isActive: "Активен",
+};
+
+/** Only the fields whose value actually changed, ready for the table cell. */
+function logDiff(l: BrandLogEntry): { field: string; from: string; to: string }[] {
+  const keys = new Set([...Object.keys(l.before ?? {}), ...Object.keys(l.after ?? {})]);
+  const out: { field: string; from: string; to: string }[] = [];
+  for (const k of keys) {
+    if (JSON.stringify(l.before?.[k] ?? null) === JSON.stringify(l.after?.[k] ?? null)) continue;
+    out.push({
+      field: LOG_FIELD_LABELS[k] ?? k,
+      from: fmtLogVal(l.before?.[k]),
+      to: fmtLogVal(l.after?.[k]),
+    });
+  }
+  return out;
+}
+
+function fmtLogDate(iso: string): string {
+  return new Date(iso).toLocaleString("ru-RU");
+}
+
 onMounted(() => {
   // MANAGER only reaches the Tournaments section — the ADMIN-only loads would
   // just 403 on /api/admin, so they are skipped entirely.
@@ -700,6 +993,9 @@ onMounted(() => {
     void loadCatalog();
     void loadSmarticoBrands();
     void loadBundleTypes();
+    void loadLayoutSpecs();
+    void loadDecor();
+    void loadBrandLogs();
   }
   void loadTournaments();
 });
@@ -942,6 +1238,56 @@ onMounted(() => {
       </div>
     </section>
 
+    <!-- Brand change log (Edit current style audit trail) -->
+    <section v-if="auth.isAdmin" class="panel">
+      <h2>История изменений брендов</h2>
+      <p class="muted small">
+        Правки через «Edit current style» (супер-дизайнеры): кто, когда и что
+        поменял — до → после. Откаты тоже логируются.
+      </p>
+
+      <div class="log-filter">
+        <select v-model="brandLogsFilter" class="field__input" @change="loadBrandLogs()">
+          <option value="">Все бренды</option>
+          <option v-for="b in brands" :key="b.id" :value="b.id">{{ b.name }}</option>
+        </select>
+        <span class="muted small">Всего записей: {{ brandLogsTotal }}</span>
+      </div>
+
+      <table class="table">
+        <thead>
+          <tr><th>Когда</th><th>Кто</th><th>Бренд</th><th>Действие</th><th>Изменения (до → после)</th></tr>
+        </thead>
+        <tbody>
+          <tr v-for="l in brandLogs" :key="l.id">
+            <td class="log-when">{{ fmtLogDate(l.createdAt) }}</td>
+            <td>{{ l.userEmail }}</td>
+            <td>{{ l.brandName }}</td>
+            <td>{{ l.action === "ROLLBACK" ? "Откат" : "Правка" }}</td>
+            <td class="log-cell">
+              <div v-for="d in logDiff(l)" :key="d.field" class="log-diff">
+                <b>{{ d.field }}:</b>
+                <span class="log-old">{{ d.from }}</span> →
+                <span class="log-new">{{ d.to }}</span>
+              </div>
+              <span v-if="!logDiff(l).length" class="muted">—</span>
+            </td>
+          </tr>
+          <tr v-if="!brandLogs.length && !brandLogsLoading">
+            <td colspan="5" class="muted">Изменений пока нет.</td>
+          </tr>
+        </tbody>
+      </table>
+      <button
+        v-if="brandLogsHasMore"
+        class="btn-primary"
+        :disabled="brandLogsLoading"
+        @click="loadBrandLogs(false)"
+      >
+        {{ brandLogsLoading ? "Загрузка…" : "Показать ещё" }}
+      </button>
+    </section>
+
     <!-- Item style prompts -->
     <section v-if="auth.isAdmin" class="panel">
       <h2>Промпты Item-стилей</h2>
@@ -1047,7 +1393,19 @@ onMounted(() => {
           <input
             v-model="newElementName[cat.id]"
             type="text"
-            :placeholder="cat.key === 'provider' ? 'Новый провайдер…' : 'Новый элемент…'"
+            :placeholder="
+              cat.hasModes
+                ? 'Название для Base…'
+                : cat.key === 'provider'
+                  ? 'Новый провайдер…'
+                  : 'Новый элемент…'
+            "
+          />
+          <input
+            v-if="cat.hasModes"
+            v-model="newElementNameVip[cat.id]"
+            type="text"
+            placeholder="Название для VIP…"
           />
           <button type="submit" class="btn-primary">Добавить</button>
         </form>
@@ -1059,7 +1417,22 @@ onMounted(() => {
             :class="['brand-card', { 'tour-el--off': !el.isActive }]"
           >
             <div class="brand-card__head">
-              <input v-model="el.name" class="field__input tour-el__name" type="text" />
+              <template v-if="cat.hasModes">
+                <label class="tour-el__namefield">
+                  <span class="badge badge--ok">Base</span>
+                  <input v-model="el.name" class="field__input tour-el__name" type="text" />
+                </label>
+                <label class="tour-el__namefield">
+                  <span class="badge badge--warn">VIP</span>
+                  <input
+                    v-model="el.nameVip"
+                    class="field__input tour-el__name"
+                    type="text"
+                    placeholder="Название для VIP"
+                  />
+                </label>
+              </template>
+              <input v-else v-model="el.name" class="field__input tour-el__name" type="text" />
               <span v-if="!el.isActive" class="badge badge--warn">выключен</span>
               <span v-if="tourMsg[el.id]" class="brand-card__msg">{{ tourMsg[el.id] }}</span>
             </div>
@@ -1176,9 +1549,12 @@ onMounted(() => {
     <section v-if="auth.isAdmin" class="panel">
       <h2>Image Bundles — шаблоны типов</h2>
       <p class="muted">
-        Фон-шаблон подаётся генерации первым референсом: модель копирует его композицию
-        (email — персонаж справа, объекты слева, центр пустой под текст). Загружайте чистые
-        макеты <b>без текста и логотипов</b> — надписи с шаблона просочатся в креативы.
+        Загружайте чистые макеты <b>без текста и логотипов</b> — надписи просочатся в креативы.
+        Смысл картинки зависит от режима сборки: в <b>AI-сборке</b> она подаётся генерации первым
+        референсом (модель копирует композицию), а в режиме <b>Слои</b> это <b>реальный фон</b>
+        готового баннера — нейтральная студия в пропорциях холста, поверх неё движок кладёт
+        декор, item и персонажа. Для layered-ассета фон <b>обязателен</b>: без него рендер
+        падает с «static template … is not uploaded».
       </p>
       <div v-for="t in bundleTypes" :key="t.id" class="bt">
         <h3 class="bt__title">{{ t.title }} <span class="muted">({{ t.key }})</span></h3>
@@ -1190,6 +1566,9 @@ onMounted(() => {
             </div>
             <div class="bt__preview" :style="{ aspectRatio: `${a.width} / ${a.height}` }">
               <img v-if="a.templateUrl" :src="a.templateUrl" :alt="`Шаблон ${a.label}`" />
+              <span v-else-if="a.composeMode === 'layered'" class="muted">
+                нет фона — рендер этого ассета упадёт
+              </span>
               <span v-else class="muted">нет шаблона — генерация по промпту</span>
             </div>
             <div class="bt__actions">
@@ -1215,6 +1594,145 @@ onMounted(() => {
         <p v-if="btMsg[t.id]" class="muted">{{ btMsg[t.id] }}</p>
       </div>
       <p v-if="!bundleTypes.length" class="muted">Типы бандлов не найдены (нужен сид).</p>
+    </section>
+
+    <section v-if="auth.isAdmin" class="panel">
+      <h2>Композиция — layout-спеки</h2>
+      <p class="muted">
+        Геометрия детерминированной сборки (зоны item/person, базовая линия, safe-зона под текст,
+        декор-банды) — версии неизменяемы: «Сохранить» создаёт новую версию, рендер берёт последнюю
+        активную. Доли холста 0..1. Изменение спеки не требует деплоя.
+      </p>
+      <div v-for="key in lsKeys" :key="key" class="ls">
+        <h3 class="bt__title">
+          {{ key }}
+          <span class="muted">
+            активная: v{{ lsVersions(key).find((s) => s.isActive)?.version ?? "—" }}
+          </span>
+        </h3>
+        <div class="ls__versions">
+          <span v-for="s in lsVersions(key)" :key="s.id" class="ls__ver">
+            v{{ s.version }}
+            <button
+              class="btn-toggle"
+              :title="s.isActive ? 'Деактивировать (откат на предыдущую активную)' : 'Активировать'"
+              @click="toggleLayoutSpec(s)"
+            >
+              {{ s.isActive ? "вкл" : "выкл" }}
+            </button>
+          </span>
+        </div>
+        <textarea v-model="lsDraft[key]" class="ls__json" rows="14" spellcheck="false"></textarea>
+        <div class="bt__actions">
+          <button class="btn-primary" @click="saveLayoutSpecVersion(key)">
+            Сохранить как новую версию
+          </button>
+        </div>
+        <p v-if="lsMsg[key]" class="muted">{{ lsMsg[key] }}</p>
+      </div>
+      <p v-if="!lsKeys.length" class="muted">Спеки не найдены (нужен сид email.hero v1).</p>
+    </section>
+
+    <section v-if="auth.isAdmin" class="panel">
+      <h2>Композиция — библиотека декора</h2>
+      <p class="muted">
+        Мелкие объекты сцены: монеты, купюры, проценты, фишки, лепестки, символы. Движок
+        раскладывает их по кольцу вокруг центра — эталонам нужно 6–11 объектов в кадре.
+        Принимаются <b>PNG или WebP с прозрачным фоном</b>; файл без альфа-канала будет отклонён,
+        потому что встал бы на баннер прямоугольной плашкой. Обрезку по краям и чистку ореолов
+        делаем сами. Одинаковые файлы не дублируются.
+      </p>
+      <p class="muted">
+        Библиотеки двухуровневые (DV-C2′): у бренда может быть <b>своя</b> — тогда его баннеры
+        собираются только из неё; бренды без своей библиотеки берут <b>общую</b>. Цвет под палитру
+        кадра в обоих случаях приводит движок. Рекомендуемый минимум на библиотеку:
+        <b>12 объектов</b>, из них хотя бы один крупный (монета) — он уходит в размытый задний
+        план и подрезается верхним краем.
+      </p>
+
+      <label class="dec__brandpick">
+        Куда грузим:
+        <select v-model="decorBrandId">
+          <option value="">Общая библиотека (по слотам)</option>
+          <option v-for="b in decorBrands" :key="b.id" :value="b.id">
+            {{ b.name }} ({{ b.decorUrls.length }}/{{ decorLimits.perSlot }})
+          </option>
+        </select>
+      </label>
+
+      <div v-if="!decorBrandId" class="dec__slots">
+        <label v-for="s in decorSlots" :key="s.assetKey" class="dec__slot">
+          <input v-model="decorTargets" type="checkbox" :value="s.assetKey" />
+          {{ s.label || s.assetKey }}
+          <span class="muted">({{ s.decorUrls.length }}/{{ decorLimits.perSlot }})</span>
+        </label>
+      </div>
+      <p v-if="!decorBrandId" class="muted">
+        Слоты общей библиотеки. По умолчанию только email: push и pop-up собираются по
+        своим эталонам, и декор изменил бы их вид.
+      </p>
+
+      <div class="bt__actions">
+        <input
+          ref="decorInput"
+          class="dec__file"
+          type="file"
+          accept="image/png,image/webp"
+          multiple
+          @change="uploadDecor"
+        />
+        <button
+          class="btn-primary"
+          :disabled="decorBusy || (!decorBrandId && !decorTargets.length)"
+          @click="pickDecor"
+        >
+          {{ decorBusy ? "Загрузка…" : "Выбрать файлы" }}
+        </button>
+      </div>
+      <p v-if="decorMsg" class="muted">{{ decorMsg }}</p>
+      <ul v-if="decorErrors.length" class="dec__errors">
+        <li v-for="e in decorErrors" :key="e.name">{{ e.name }} — {{ e.reason }}</li>
+      </ul>
+
+      <div v-for="s in decorSlots" :key="`grid-${s.assetKey}`">
+        <h3 v-if="s.decorUrls.length" class="bt__title">Общая — {{ s.label || s.assetKey }}</h3>
+        <div v-if="s.decorUrls.length" class="dec__grid">
+          <figure v-for="url in s.decorUrls" :key="url" class="dec__item">
+            <img :src="url" :alt="s.assetKey" loading="lazy" />
+            <button
+              class="btn-toggle"
+              title="Убрать из слота"
+              @click="detachDecor({ assetKey: s.assetKey }, url)"
+            >
+              убрать
+            </button>
+          </figure>
+        </div>
+      </div>
+
+      <div v-for="b in decorBrands" :key="`brand-grid-${b.id}`">
+        <h3 v-if="b.decorUrls.length" class="bt__title">Бренд — {{ b.name }}</h3>
+        <div v-if="b.decorUrls.length" class="dec__grid">
+          <figure v-for="url in b.decorUrls" :key="url" class="dec__item">
+            <img :src="url" :alt="b.name" loading="lazy" />
+            <button
+              class="btn-toggle"
+              title="Убрать из библиотеки бренда"
+              @click="detachDecor({ brandId: b.id }, url)"
+            >
+              убрать
+            </button>
+          </figure>
+        </div>
+      </div>
+
+      <p
+        v-if="decorSlots.every((s) => !s.decorUrls.length) && decorBrands.every((b) => !b.decorUrls.length)"
+        class="muted"
+      >
+        Библиотеки пусты — сейчас декор берётся из кусков сгенерированного ITEM-слоя, и кадр
+        выходит разреженнее эталонов.
+      </p>
     </section>
   </div>
 </template>
@@ -1311,6 +1829,35 @@ select {
   border: 1px solid var(--color-border);
   border-radius: var(--radius-sm);
   background: var(--color-white);
+}
+
+/* ---- brand change log ---- */
+.log-filter {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin-bottom: 12px;
+}
+.log-filter select {
+  max-width: 320px;
+}
+.log-when {
+  white-space: nowrap;
+}
+.log-cell {
+  max-width: 560px;
+}
+.log-diff {
+  margin-bottom: 4px;
+  word-break: break-word;
+  font-size: 12.5px;
+}
+.log-old {
+  color: #c0392b;
+  text-decoration: line-through;
+}
+.log-new {
+  color: #1e8e3e;
 }
 
 /* ---- catalog management ---- */
@@ -1570,6 +2117,11 @@ select {
   max-width: 320px;
   font-weight: 600;
 }
+.tour-el__namefield {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
 .refs--two {
   grid-template-columns: repeat(2, minmax(0, 220px));
 }
@@ -1650,5 +2202,97 @@ select {
   border-radius: var(--radius-sm);
   background: var(--color-white);
   color: var(--color-text);
+}
+
+/* Layout-спеки композиции */
+.ls {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin-bottom: 18px;
+}
+.ls__versions {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+.ls__ver {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 13px;
+}
+.ls__json {
+  width: 100%;
+  font-family: ui-monospace, SFMono-Regular, Consolas, monospace;
+  font-size: 12px;
+  line-height: 1.45;
+  padding: 10px;
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-sm);
+  background: var(--color-white);
+  color: var(--color-text);
+  resize: vertical;
+}
+
+/* Библиотека декора */
+.dec__brandpick {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 13px;
+  margin-bottom: 8px;
+}
+.dec__slots {
+  display: flex;
+  gap: 16px;
+  flex-wrap: wrap;
+  margin-bottom: 6px;
+}
+.dec__slot {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 13px;
+}
+.dec__errors {
+  margin: 4px 0 0;
+  padding-left: 18px;
+  font-size: 13px;
+  color: var(--color-danger, #c0392b);
+}
+.dec__grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(96px, 1fr));
+  gap: 10px;
+  margin: 8px 0 16px;
+}
+.dec__item {
+  margin: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 4px;
+  padding: 6px;
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-sm);
+  /* Шахматка: декор прозрачный, на белом фоне его края не видно. */
+  background-image:
+    linear-gradient(45deg, #e9e9e9 25%, transparent 25%),
+    linear-gradient(-45deg, #e9e9e9 25%, transparent 25%),
+    linear-gradient(45deg, transparent 75%, #e9e9e9 75%),
+    linear-gradient(-45deg, transparent 75%, #e9e9e9 75%);
+  background-size: 12px 12px;
+  background-position: 0 0, 0 6px, 6px -6px, -6px 0;
+}
+.dec__item img {
+  width: 100%;
+  height: 72px;
+  object-fit: contain;
+}
+/* Нативный input прячем — файлы выбираются кнопкой в общем стиле панели. */
+.dec__file {
+  display: none;
 }
 </style>

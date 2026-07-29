@@ -32,6 +32,80 @@ const formMsg = ref("");
 const isEdit = computed(() => store.editing !== null);
 const created = computed(() => brandId.value !== null);
 
+// ---- «Edit current style» (TASK download-and-edit-style §2) ----
+// Any-brand edit mode: a dropdown picks the brand, extra admin fields appear
+// (model override, isActive), refs/prompts stay DRAFT until «Сохранить», and
+// the save applies globally (audited + rollback-able on the backend).
+const isEditAny = computed(() => store.editAnyMode);
+const editableLoading = ref(false);
+const canRollback = ref(false);
+const rollingBack = ref(false);
+const draftIsActive = ref(true);
+/** Serialized last-saved state — the dirty check for unsaved-changes guards. */
+const savedState = ref("");
+
+function currentPatch() {
+  return {
+    name: draft.value.name.trim(),
+    categoryIds: [...draft.value.categoryIds],
+    personPrompt: draft.value.personPrompt,
+    stylePrompt: draft.value.stylePrompt,
+    referenceImages: draft.value.referenceImages.map((s) => s.trim()).filter(Boolean),
+    forcedAspectRatio: draft.value.force916 ? "9:16" : null,
+    isActive: draftIsActive.value,
+  };
+}
+const dirty = computed(
+  () => isEditAny.value && brandId.value !== null && JSON.stringify(currentPatch()) !== savedState.value,
+);
+
+async function selectEditable(id: string) {
+  if (!id || id === brandId.value) return;
+  if (dirty.value && !confirm("Несохранённые изменения будут потеряны. Продолжить?")) return;
+  editableLoading.value = true;
+  formMsg.value = "";
+  resetTest();
+  try {
+    const b = await store.loadEditableBrand(id);
+    draft.value = {
+      name: b.name,
+      categoryIds: [...b.categoryIds],
+      personPrompt: b.personPrompt,
+      stylePrompt: b.stylePrompt,
+      referenceImages: padTo3(b.referenceImages),
+      force916: b.forcedAspectRatio === "9:16",
+    };
+    draftIsActive.value = b.isActive;
+    canRollback.value = b.canRollback;
+    brandId.value = id;
+    savedState.value = JSON.stringify(currentPatch());
+  } catch {
+    formMsg.value = "Не удалось загрузить бренд.";
+  } finally {
+    editableLoading.value = false;
+  }
+}
+
+async function rollback() {
+  if (!brandId.value || rollingBack.value) return;
+  if (!confirm("Вернуть предыдущую версию бренда? Это применится глобально для всех пользователей.")) return;
+  rollingBack.value = true;
+  formMsg.value = "";
+  try {
+    await store.rollbackEditable(brandId.value);
+    const id = brandId.value;
+    brandId.value = null; // force selectEditable to re-fetch the restored state
+    await selectEditable(id);
+    formMsg.value = "Предыдущая версия восстановлена ✓";
+  } catch (e: unknown) {
+    const code = (e as { data?: { error?: string } })?.data?.error;
+    formMsg.value =
+      code === "nothing_to_rollback" ? "Нет версий для отката." : "Не удалось выполнить откат.";
+  } finally {
+    rollingBack.value = false;
+  }
+}
+
 function padTo3(arr: string[]): string[] {
   const a = [...arr];
   while (a.length < 3) a.push("");
@@ -56,6 +130,19 @@ watch(
     if (!open) return;
     formMsg.value = "";
     resetTest();
+    canRollback.value = false;
+    draftIsActive.value = true;
+    savedState.value = "";
+    if (store.editAnyMode) {
+      draft.value = emptyDraft();
+      brandId.value = null;
+      editableLoading.value = true;
+      store
+        .loadEditable()
+        .catch(() => (formMsg.value = "Не удалось загрузить список брендов."))
+        .finally(() => (editableLoading.value = false));
+      return;
+    }
     if (store.editing) {
       draft.value = fromBrand(store.editing);
       brandId.value = store.editing.id;
@@ -78,6 +165,29 @@ function toggleCategory(id: string) {
 async function submitForm() {
   const name = draft.value.name.trim();
   if (!name || saving.value) return;
+
+  if (isEditAny.value) {
+    if (!brandId.value) return;
+    if (!confirm("Изменения применятся глобально для всех пользователей. Сохранить?")) return;
+    saving.value = true;
+    formMsg.value = "";
+    try {
+      await store.updateEditable(brandId.value, currentPatch());
+      savedState.value = JSON.stringify(currentPatch());
+      canRollback.value = true;
+      formMsg.value = "Сохранено — изменения применены для всех ✓";
+    } catch (e: unknown) {
+      const code = (e as { data?: { error?: string } })?.data?.error;
+      formMsg.value =
+        code === "already_exists"
+          ? "Бренд с таким именем уже существует."
+          : "Не удалось сохранить изменения.";
+    } finally {
+      saving.value = false;
+    }
+    return;
+  }
+
   saving.value = true;
   formMsg.value = "";
   try {
@@ -115,7 +225,9 @@ function fileToDataUrl(file: File): Promise<string> {
 }
 
 async function persistRefs() {
-  if (!brandId.value) return;
+  // In edit-any mode the refs are part of the DRAFT — they are only written on
+  // an explicit «Сохранить» (global, audited), never auto-persisted.
+  if (!brandId.value || isEditAny.value) return;
   try {
     await store.updateBrand(brandId.value, draft.value);
   } catch {
@@ -179,11 +291,16 @@ async function runTest() {
   testGenerationId.value = null;
   testSaved.value = false;
   try {
-    const { batchId, generationId } = await store.runTest(
-      brandId.value,
-      testPrompt.value.trim(),
-      testAspect.value,
-    );
+    // Edit-any mode tests the DRAFT (unsaved) state — prompts/refs/model ride
+    // as overrides and nothing is written to the brand until «Сохранить».
+    const { batchId, generationId } = isEditAny.value
+      ? await store.runDraftTest(brandId.value, {
+          prompt: testPrompt.value.trim(),
+          aspectRatio: testAspect.value,
+          personPrompt: draft.value.personPrompt,
+          referenceImages: draft.value.referenceImages.map((s) => s.trim()).filter(Boolean),
+        })
+      : await store.runTest(brandId.value, testPrompt.value.trim(), testAspect.value);
     testGenerationId.value = generationId;
     pollTest(batchId);
   } catch {
@@ -224,6 +341,7 @@ async function saveTestResult() {
 }
 
 function close() {
+  if (dirty.value && !confirm("Несохранённые изменения будут потеряны. Закрыть?")) return;
   if (pollTimer) clearTimeout(pollTimer);
   pollTimer = null;
   store.close();
@@ -246,13 +364,41 @@ onBeforeUnmount(() => {
 
         <!-- ==== Left: create / edit ==== -->
         <section class="col">
-          <h2 class="col__title">{{ isEdit ? "Редактировать бренд" : "Создать бренд" }}</h2>
+          <h2 class="col__title">
+            {{ isEditAny ? "Редактировать стиль" : isEdit ? "Редактировать бренд" : "Создать бренд" }}
+          </h2>
           <p class="col__sub">
-            Имя бренда, категории, базовый промт (PERSON) и специфичный стиль.
-            Реф-картинки можно загрузить ниже после создания.
+            <template v-if="isEditAny">
+              Выберите бренд — промпты, референсы и настройки. Сохранение применяется
+              глобально для всех пользователей; каждое изменение логируется.
+            </template>
+            <template v-else>
+              Имя бренда, категории, базовый промт (PERSON) и специфичный стиль.
+              Реф-картинки можно загрузить ниже после создания.
+            </template>
           </p>
 
-          <form class="form" @submit.prevent="submitForm">
+          <label v-if="isEditAny" class="field">
+            <span class="field__label">Бренд</span>
+            <select
+              class="input"
+              :value="brandId ?? ''"
+              :disabled="editableLoading"
+              @change="selectEditable(($event.target as HTMLSelectElement).value)"
+            >
+              <option value="" disabled>
+                {{ editableLoading ? "Загрузка…" : "Выберите бренд" }}
+              </option>
+              <option v-for="b in store.editableBrands" :key="b.id" :value="b.id">
+                {{ b.name }}{{ b.isActive ? "" : " (выключен)" }}
+              </option>
+            </select>
+          </label>
+
+          <form
+            :class="['form', { 'form--off': isEditAny && !created }]"
+            @submit.prevent="submitForm"
+          >
             <label class="field">
               <span class="field__label">Название бренда</span>
               <input
@@ -304,6 +450,14 @@ onBeforeUnmount(() => {
               </label>
             </div>
 
+            <div v-if="isEditAny" class="field">
+              <span class="field__label">Статус</span>
+              <label class="check">
+                <input v-model="draftIsActive" type="checkbox" />
+                <span>Бренд активен (виден в пикере на Home)</span>
+              </label>
+            </div>
+
             <div class="field">
               <span class="field__label">Референсы (до 3)</span>
               <div class="refs">
@@ -342,8 +496,25 @@ onBeforeUnmount(() => {
 
             <div class="form__foot">
               <span v-if="formMsg" class="form__msg">{{ formMsg }}</span>
+              <button
+                v-if="isEditAny && canRollback"
+                class="btn btn--ghost"
+                type="button"
+                :disabled="rollingBack || saving"
+                @click="rollback"
+              >
+                {{ rollingBack ? "Откат…" : "Вернуть предыдущую версию" }}
+              </button>
               <button class="btn btn--primary" type="submit" :disabled="saving || !draft.name.trim()">
-                {{ saving ? "Сохранение…" : created ? "Сохранить изменения" : "Создать бренд" }}
+                {{
+                  saving
+                    ? "Сохранение…"
+                    : isEditAny
+                      ? "Сохранить (для всех)"
+                      : created
+                        ? "Сохранить изменения"
+                        : "Создать бренд"
+                }}
               </button>
             </div>
           </form>
@@ -353,8 +524,14 @@ onBeforeUnmount(() => {
         <section :class="['col', 'col--test', { 'col--off': !created }]">
           <h2 class="col__title">Протестировать бренд</h2>
           <p class="col__sub">
-            Сгенерируйте тестовое изображение с текущими настройками бренда,
-            чтобы оценить качество и соответствие стиля.
+            <template v-if="isEditAny">
+              Тест использует НЕсохранённые изменения — можно проверить новый
+              промпт до того, как он применится для всех.
+            </template>
+            <template v-else>
+              Сгенерируйте тестовое изображение с текущими настройками бренда,
+              чтобы оценить качество и соответствие стиля.
+            </template>
           </p>
 
           <label class="field">
@@ -520,21 +697,30 @@ onBeforeUnmount(() => {
   display: flex;
   flex-direction: column;
   gap: 10px;
-  overflow: hidden;
+  /* edit-any mode adds fields (brand dropdown, status) — when the fixed frame
+     runs out of height the form scrolls instead of collapsing the fields. */
+  overflow-y: auto;
+  overflow-x: hidden;
+}
+/* edit-any mode before a brand is picked: the form waits for the dropdown */
+.form--off {
+  opacity: 0.5;
+  pointer-events: none;
 }
 .field {
   display: flex;
   flex-direction: column;
   gap: 6px;
 }
-/* the two prompt fields absorb the leftover height (no column scroll) */
+/* the two prompt fields absorb the leftover height, but never collapse below
+   label + a usable textarea (bug-edit.PNG: fields overlapped at min-height 0) */
 .field--grow {
   flex: 1 1 0;
-  min-height: 0;
+  min-height: 84px;
 }
 .field--grow .input--area {
   flex: 1;
-  min-height: 40px;
+  min-height: 52px;
   height: auto;
 }
 .field__label {

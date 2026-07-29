@@ -28,6 +28,7 @@ export interface TourOverrideInfo {
 export interface TourElement {
   id: string;
   name: string;
+  nameVip: string | null;
   order: number;
   referenceImages: string[];
   prompts: Partial<Record<TourMode, TourPromptInfo>>;
@@ -62,6 +63,11 @@ const ERROR_MESSAGES: Record<string, string> = {
 /** The effective mode of an element's category given the page toggles. */
 export function effectiveMode(cat: TourCategory, modeByCategory: Record<string, TourMode>): TourMode {
   return cat.hasModes ? (modeByCategory[cat.key] ?? "BASE") : (cat.fixedMode ?? "BASE");
+}
+
+/** Per-mode card label: VIP shows nameVip when set, falling back to the Base name. */
+export function elementDisplayName(el: Pick<TourElement, "name" | "nameVip">, mode: TourMode): string {
+  return mode === "VIP" ? el.nameVip?.trim() || el.name : el.name;
 }
 
 /** Selection unit: an element under a specific mode (cuids never contain ":"). */

@@ -4,12 +4,15 @@
 // editing saves the user's local override on blur (DB-backed, Phase 0), the ↺
 // button resets to the global default. When an admin changed the default under
 // an existing override, a banner offers "оставить мой / взять новый дефолт".
+import { elementDisplayName } from "~/stores/tournament";
 import type { TourCategory, TourElement, TourMode } from "~/stores/tournament";
 
 const props = defineProps<{ element: TourElement; category: TourCategory }>();
 const tour = useTournamentStore();
 
 const mode = computed<TourMode>(() => tour.modeOf(props.category));
+// The card label follows the Base/VIP toggle (separate admin-set names).
+const displayName = computed(() => elementDisplayName(props.element, mode.value));
 // Checked state is per element:MODE — the Base tick does not select VIP.
 const checked = computed(() => tour.isChecked(props.element.id, mode.value));
 const overridden = computed(() => tour.isOverridden(props.element, mode.value));
@@ -50,14 +53,14 @@ watch(draft, () => void nextTick(autosize));
         type="button"
         role="checkbox"
         :aria-checked="checked"
-        :aria-label="element.name"
+        :aria-label="displayName"
         @click="tour.toggleElement(element.id, mode)"
       >
         <svg v-if="checked" viewBox="0 0 12 12" width="10" height="10" fill="none" aria-hidden="true">
           <path d="M2 6.2l2.6 2.6L10 3.6" stroke="#fff" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" />
         </svg>
       </button>
-      <span class="el__name">{{ element.name }}</span>
+      <span class="el__name">{{ displayName }}</span>
       <span v-if="overridden" class="el__badge" title="Промпт изменён локально (виден только вам)">изменено</span>
       <button
         v-if="overridden"

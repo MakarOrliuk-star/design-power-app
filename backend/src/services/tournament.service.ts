@@ -33,6 +33,18 @@ export function sanitizeName(s: string): string {
 }
 
 /**
+ * Per-mode display name: hasModes elements carry a separate VIP name
+ * (TournamentElement.nameVip); an unset one falls back to the BASE name so
+ * generation never breaks while the admin hasn't filled it in yet.
+ */
+export function displayNameOf(
+  element: { name: string; nameVip: string | null },
+  mode: TournamentMode,
+): string {
+  return mode === "VIP" ? (element.nameVip?.trim() || element.name) : element.name;
+}
+
+/**
  * Wrap the (resolved) element prompt with the TOURNAMENT system template — the
  * existing {{prompt}} mechanism — then append the brand's style prompt.
  */
@@ -121,6 +133,7 @@ export async function createTournamentBatches(
     select: {
       id: true,
       name: true,
+      nameVip: true,
       referenceImages: true,
       category: { select: { key: true, hasModes: true, fixedMode: true } },
       prompts: { select: { mode: true, content: true } },
@@ -199,7 +212,8 @@ export async function createTournamentBatches(
         // Brand stylePrompt is NOT baked in here — the worker appends it after
         // the PERSON prompt-writer pass, so it reaches fal verbatim.
         const prompt = buildTournamentPrompt(systemWrapper, sel.elementPrompt, "");
-        const baseName = `${sanitizeName(brand.name)}_${sanitizeName(sel.element.name)}`;
+        const elementName = displayNameOf(sel.element, sel.mode);
+        const baseName = `${sanitizeName(brand.name)}_${sanitizeName(elementName)}`;
 
         for (let i = 1; i <= count; i++) {
           const gen = await prisma.generation.create({
@@ -213,7 +227,7 @@ export async function createTournamentBatches(
               status: "QUEUED",
               statusMessage: "⏳ Queued",
               tourCategoryKey: categoryKey,
-              tourElementName: sel.element.name,
+              tourElementName: elementName,
               tourMode: sel.mode,
               tourFileName: `${baseName}_${i}`,
               job: {

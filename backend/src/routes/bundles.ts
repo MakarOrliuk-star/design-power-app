@@ -156,6 +156,55 @@ bundlesRouter.post("/", async (req: Request, res: Response) => {
   res.status(201).json({ bundle: { ...bundle, status: bundle.status.toLowerCase() } });
 });
 
+/** Composition metadata the CRM preview needs (TASK email-composition, Фаза 5).
+ *  `BundleAsset.metadata` is free-form Json written by the engine, so the route
+ *  projects a narrow, checked shape instead of forwarding raw rows; legacy
+ *  assets (no engine render) simply get `null`. */
+interface AssetPreviewMeta {
+  specKey: string;
+  specVersion: number;
+  safeZonePct: { x: number; y: number; w: number; h: number };
+  recommendedTextColor: string | null;
+  luminance: number | null;
+  textContrast: { white: number; dark: number } | null;
+  retinaUrl: string | null;
+  validator: { passed: boolean; attempts: number } | null;
+}
+
+function isPctBox(v: unknown): v is AssetPreviewMeta["safeZonePct"] {
+  if (typeof v !== "object" || v === null) return false;
+  const b = v as Record<string, unknown>;
+  return ["x", "y", "w", "h"].every((k) => typeof b[k] === "number" && Number.isFinite(b[k]));
+}
+
+export function assetPreviewMeta(raw: unknown): AssetPreviewMeta | null {
+  if (typeof raw !== "object" || raw === null) return null;
+  const m = raw as Record<string, unknown>;
+  if (!isPctBox(m.safeZonePct)) return null;
+  const contrast = m.textContrast as Record<string, unknown> | null | undefined;
+  const validator = m.validator as Record<string, unknown> | null | undefined;
+  return {
+    specKey: typeof m.specKey === "string" ? m.specKey : "",
+    specVersion: typeof m.specVersion === "number" ? m.specVersion : 0,
+    safeZonePct: m.safeZonePct,
+    recommendedTextColor:
+      typeof m.recommendedTextColor === "string" ? m.recommendedTextColor : null,
+    luminance: typeof m.luminance === "number" ? m.luminance : null,
+    textContrast:
+      contrast && typeof contrast.white === "number" && typeof contrast.dark === "number"
+        ? { white: contrast.white, dark: contrast.dark }
+        : null,
+    retinaUrl: typeof m.retinaUrl === "string" ? m.retinaUrl : null,
+    validator:
+      validator && typeof validator.passed === "boolean"
+        ? {
+            passed: validator.passed,
+            attempts: typeof validator.attempts === "number" ? validator.attempts : 1,
+          }
+        : null,
+  };
+}
+
 /** Bundle details for the Result screen (variants + assets + summary). */
 bundlesRouter.get("/:id", async (req: Request, res: Response) => {
   const id = paramId(req, res);
@@ -199,12 +248,18 @@ bundlesRouter.get("/:id", async (req: Request, res: Response) => {
           status: a.status.toLowerCase(),
           approved: a.approved,
           errorMessage: a.errorMessage,
+          // Engine renders carry the safe-zone/luminance metadata the CRM
+          // preview overlays; ai-mode and pre-engine assets carry null.
+          meta: assetPreviewMeta(a.metadata),
         };
       });
     return {
       id: v.id,
       brandName: v.brandName,
       displayName: v.displayName,
+      // Style-profile «казино-дизайнера» (DV-E1) — данные стиля, не координаты.
+      // Отдаётся как есть: редактор в CRM (админ) показывает и правит его же.
+      styleProfile: v.styleProfile ?? null,
       assets,
       approvedCount: assets.filter((a) => a.approved).length,
     };

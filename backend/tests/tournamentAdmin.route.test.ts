@@ -192,10 +192,13 @@ describe("POST /api/tournament-admin/elements", () => {
   it("creates the element with placeholder prompts for every category mode", async () => {
     db.categoryFindUnique.mockResolvedValue({ id: "c1", hasModes: true, fixedMode: null });
     db.elementFindUnique.mockResolvedValue(null); // no name clash
-    db.elementFindFirst.mockResolvedValue({ order: 6 });
+    db.elementFindFirst
+      .mockResolvedValueOnce(null) // no VIP-name clash
+      .mockResolvedValueOnce({ order: 6 }); // order lookup
     db.elementCreate.mockResolvedValue({
       id: "e9",
-      name: "Tournament_4",
+      name: "Tournament_4_BASE",
+      nameVip: "Tournament_4_VIP",
       order: 7,
       isActive: true,
       referenceImages: [],
@@ -203,13 +206,37 @@ describe("POST /api/tournament-admin/elements", () => {
 
     const res = await request(makeApp())
       .post("/api/tournament-admin/elements")
-      .send({ categoryId: "c1", name: "Tournament_4" });
+      .send({ categoryId: "c1", name: "Tournament_4_BASE", nameVip: "Tournament_4_VIP" });
 
     expect(res.status).toBe(201);
     const data = db.elementCreate.mock.calls[0]![0].data;
     expect(data.order).toBe(7); // appended after the last element
+    expect(data.nameVip).toBe("Tournament_4_VIP");
     // hasModes category -> BASE + VIP placeholder prompts are born with it.
     expect(data.prompts.create.map((p: { mode: string }) => p.mode)).toEqual(["BASE", "VIP"]);
+  });
+
+  it("400s a hasModes category without a VIP name (both names are required)", async () => {
+    db.categoryFindUnique.mockResolvedValue({ id: "c1", hasModes: true, fixedMode: null });
+
+    const res = await request(makeApp())
+      .post("/api/tournament-admin/elements")
+      .send({ categoryId: "c1", name: "Tournament_4" });
+    expect(res.status).toBe(400);
+    expect(db.elementCreate).not.toHaveBeenCalled();
+  });
+
+  it("a fixed-mode category never stores nameVip, even if the client sends one", async () => {
+    db.categoryFindUnique.mockResolvedValue({ id: "c2", hasModes: false, fixedMode: "BASE" });
+    db.elementFindUnique.mockResolvedValue(null);
+    db.elementFindFirst.mockResolvedValue({ order: 0 });
+    db.elementCreate.mockResolvedValue({ id: "e9" });
+
+    const res = await request(makeApp())
+      .post("/api/tournament-admin/elements")
+      .send({ categoryId: "c2", name: "Playson", nameVip: "Playson_VIP" });
+    expect(res.status).toBe(201);
+    expect(db.elementCreate.mock.calls[0]![0].data.nameVip).toBeNull();
   });
 
   it("409s on a duplicate name within the category", async () => {
@@ -218,7 +245,19 @@ describe("POST /api/tournament-admin/elements", () => {
 
     const res = await request(makeApp())
       .post("/api/tournament-admin/elements")
-      .send({ categoryId: "c1", name: "Tournament_1" });
+      .send({ categoryId: "c1", name: "Tournament_1", nameVip: "Tournament_1_VIP" });
+    expect(res.status).toBe(409);
+    expect(db.elementCreate).not.toHaveBeenCalled();
+  });
+
+  it("409s on a duplicate VIP name within the category", async () => {
+    db.categoryFindUnique.mockResolvedValue({ id: "c1", hasModes: true, fixedMode: null });
+    db.elementFindUnique.mockResolvedValue(null); // base name free
+    db.elementFindFirst.mockResolvedValueOnce({ id: "other" }); // VIP name taken
+
+    const res = await request(makeApp())
+      .post("/api/tournament-admin/elements")
+      .send({ categoryId: "c1", name: "Tournament_9", nameVip: "Tournament_1_VIP" });
     expect(res.status).toBe(409);
     expect(db.elementCreate).not.toHaveBeenCalled();
   });
@@ -243,6 +282,45 @@ describe("PATCH /api/tournament-admin/elements/:id", () => {
       .patch("/api/tournament-admin/elements/e1")
       .send({ referenceImages: ["a", "b", "c"] });
     expect(res.status).toBe(400);
+  });
+
+  it("saves nameVip on a hasModes element", async () => {
+    db.elementFindUnique.mockResolvedValue({
+      categoryId: "c1",
+      category: { hasModes: true },
+    });
+    db.elementFindFirst.mockResolvedValue(null); // no VIP clash
+    db.elementUpdate.mockResolvedValue({ id: "e1", name: "Tournament_1", nameVip: "Tournament_1_VIP" });
+
+    const res = await request(makeApp())
+      .patch("/api/tournament-admin/elements/e1")
+      .send({ nameVip: "Tournament_1_VIP" });
+    expect(res.status).toBe(200);
+    expect(db.elementUpdate.mock.calls[0]![0].data).toEqual({ nameVip: "Tournament_1_VIP" });
+  });
+
+  it("400s nameVip on a fixed-mode element and 409s a VIP-name collision", async () => {
+    // fixed-mode category -> nameVip is not applicable
+    db.elementFindUnique.mockResolvedValue({
+      categoryId: "c2",
+      category: { hasModes: false },
+    });
+    let res = await request(makeApp())
+      .patch("/api/tournament-admin/elements/e2")
+      .send({ nameVip: "Nope_VIP" });
+    expect(res.status).toBe(400);
+
+    // hasModes, but another element already uses that VIP name
+    db.elementFindUnique.mockResolvedValue({
+      categoryId: "c1",
+      category: { hasModes: true },
+    });
+    db.elementFindFirst.mockResolvedValue({ id: "other" });
+    res = await request(makeApp())
+      .patch("/api/tournament-admin/elements/e1")
+      .send({ nameVip: "Tournament_2_VIP" });
+    expect(res.status).toBe(409);
+    expect(db.elementUpdate).not.toHaveBeenCalled();
   });
 });
 

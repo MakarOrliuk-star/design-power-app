@@ -1,42 +1,55 @@
+import os
 import json
 import re
-import time         
-import streamlit as st
-import streamlit.components.v1 as components
+import time
 import threading
 import requests
-import extra_streamlit_components as stx
 from datetime import datetime
-from core import GeneralCore
 from dotenv import load_dotenv
-import os
-import streamlit as st
 
+import asyncio
+from fastapi import APIRouter, HTTPException
+from fastapi.responses import StreamingResponse
+from pydantic import BaseModel
+from typing import Optional
+
+from playwright.sync_api import sync_playwright
+from core import GeneralCore
+
+# 1. ЗАГРУЖАЕМ ПЕРЕМЕННЫЕ ОКРУЖЕНИЯ
 load_dotenv()
-
 SYSTEM_DOMAIN = os.getenv("SYSTEM_DOMAIN")
 
 if not SYSTEM_DOMAIN:
-    st.error("❌ Критическая ошибка: переменная SYSTEM_DOMAIN не найдена в файле .env!")
-    st.stop()
+    raise RuntimeError("❌ Критическая ошибка: переменная SYSTEM_DOMAIN не найдена в файле .env!")
 
-@st.cache_resource
-def get_browser_lock():
-    return threading.Semaphore(4)
+# 2. ГЛОБАЛЬНЫЕ СОСТОЯНИЯ И БЛОКИРОВКИ (Замена st.cache_resource)
+global_lock = threading.Semaphore(4)
+global_state = {
+    "online_users": {},
+    "audit_logs": []   
+}
 
-@st.cache_resource
-def get_global_state():
-    return {
-        "online_users": {},
-        "audit_logs": []   
-    }
+# 3. ИНИЦИАЛИЗАЦИЯ РОУТЕРА FASTAPI
+router = APIRouter(tags=["Single Report"])
 
-global_lock = get_browser_lock()
-global_state = get_global_state()
+# =====================================================================
+# 📦 PYDANTIC СХЕМЫ (Входящие данные и ответы)
+# =====================================================================
+class SingleReportRequest(BaseModel):
+    main_url: Optional[str] = None
+    pop_url: Optional[str] = None
+    token: str
+    template_choice: Optional[str] = "Без сверки"
+    raw_table_data: Optional[str] = ""
 
-from playwright.sync_api import sync_playwright
+class SingleReportResponse(BaseModel):
+    filename: str
+    html_content: str
 
-
+# =====================================================================
+# 🧠 БИЗНЕС-ЛОГИКА (Без изменений, кроме замены st.stop на HTTPException)
+# =====================================================================
 def test_general_info(MAIN_URL, POP_URL, auth_token, expected_data=None, progress_cb=None):
     step_timer = [time.time()]
 
@@ -68,32 +81,26 @@ def test_general_info(MAIN_URL, POP_URL, auth_token, expected_data=None, progres
     try:
         ping_check = requests.get(f"https://{BOAPI_HOST}/api/users/me", headers={"authorization": auth_token}, timeout=5)
         
-        # 1. Проверяем HTTP статус (если это явная ошибка 400+, но не 291)
         if not ping_check.ok and ping_check.status_code != 291:
             token_invalid = True
             error_reason = f"HTTP {ping_check.status_code}"
         else:
-            # 2. Проверяем, прислал ли сервер JSON-данные, а не HTML-страницу входа
             try:
                 resp_json = ping_check.json()
-                # 3. Иногда API пишет "status: error" прямо внутри успешного ответа 200
                 if isinstance(resp_json, dict) and str(resp_json.get("status", "")).lower() in ["error", "unauthorized"]:
                     token_invalid = True
                     error_reason = "JSON Error (Unauthorized)"
             except Exception:
-                # Если JSON не распарсился — значит нам прислали страницу заглушки
                 token_invalid = True
                 error_reason = "HTML/Cloudflare Redirect"
                 
     except requests.exceptions.RequestException as e:
-        # При сетевой ошибке (таймауте) даем шанс, не блокируем жестко
         log(f"⚠️ Предупреждение сети: не удалось проверить токен ({e})", 2)
 
-    # Вызываем остановку СНАРУЖИ блока try/except, чтобы Питон её не проигнорировал
     if token_invalid:
         log(f"❌ КРИТИЧЕСКАЯ ОШИБКА: Токен недействителен! ({error_reason})", 0)
-        st.error(f"🔑 Ошибка авторизации ({error_reason})! Ваш токен невалидный. Обновите его в левом боковом меню.")
-        st.stop()
+        # ЗАМЕНА СТРИМЛИТА НА ВЫБРОС ОШИБКИ FASTAPI
+        raise HTTPException(status_code=401, detail=f"Ошибка авторизации ({error_reason})! Ваш токен невалидный.")
 
     report_data = {
         "general_main": {}, "general_pop": {},
@@ -114,14 +121,12 @@ def test_general_info(MAIN_URL, POP_URL, auth_token, expected_data=None, progres
 
     with sync_playwright() as p:
         browser = p.chromium.launch()
-        # Маскируем сервер под обычного пользователя iPhone, чтобы Cloudflare отдавал картинки
         context = browser.new_context(
             user_agent="Mozilla/5.0 (iPhone; CPU iPhone OS 16_6 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/16.6 Mobile/15E148 Safari/604.1",
             viewport={"width": 414, "height": 896},
-            bypass_csp=True # Критично: отключает блокировки (Content Security Policy) для картинок
+            bypass_csp=True
         )
         
-        # Обрабатываем обе ссылки по очереди
         for target_url in [MAIN_URL, POP_URL]:
             if not target_url: continue
             
@@ -134,10 +139,8 @@ def test_general_info(MAIN_URL, POP_URL, auth_token, expected_data=None, progres
             camp_id = camp_match.group(1)
             report_data["brand_id"] = brand_id
             
-            # Создаем наше мощное ядро!
             api = GeneralCore(context, auth_token, brand_id, BOAPI_HOST, DRIVE_HOST)
             
-            # Получаем тестовые профили (теперь они мгновенно берутся из памяти сервера/.env)
             log("🕵️‍♂️ Загрузка тестовых профилей...", 8)
             qa_personas = api.get_qa_personas()
             
@@ -158,7 +161,6 @@ def test_general_info(MAIN_URL, POP_URL, auth_token, expected_data=None, progres
             else:
                 report_data["general_main"], report_data["segment_main"] = gen, seg
                 
-            # 🔥 ТЕПЕРЬ ПРОВЕРЯЕМ КОНТЕКСТ ДЛЯ ВСЕХ ТИПОВ КАМПАНИЙ
             log(f"🔎 Проверяем Context для кампании #{camp_id}...", 15)
             tag_status = api.check_context_campaign_tag(camp_id, target_url)
             
@@ -170,15 +172,12 @@ def test_general_info(MAIN_URL, POP_URL, auth_token, expected_data=None, progres
             log(f"🗺️ Генерация интерактивной карты (Flow Map)...", 20)
             f_nodes, f_trans, audit_period = api.get_flow_data_live(camp_id, log)
             
-            # Инициализируем список для карт, если его еще нет
             if "interactive_flow" not in report_data:
                 report_data["interactive_flow"] = []
                 
-            # Добавляем красивый заголовок над каждой картой
             camp_label = "🗺️ Journey (Поп-ап)" if "head" in target_url else "📅 Scheduled (Основная)"
             map_title = f"<div style='margin: 15px 20px -5px 20px; font-weight: bold; color: #334155; font-size: 15px; text-transform: uppercase;'>{camp_label} (ID: {camp_id})</div>"
             
-            # Добавляем карту в список
             report_data["interactive_flow"].append(map_title + api.build_flow_html(f_nodes, f_trans))
             report_data["audit_period"] = audit_period
 
@@ -189,15 +188,12 @@ def test_general_info(MAIN_URL, POP_URL, auth_token, expected_data=None, progres
             log(f"🔗 Извлекаем связи между нодами #{camp_id}...", 35)
             transitions_data = api.get_campaign_transitions(camp_id)
             
-            # 🔥 ЗАЩИТА ОТ СТРОК-УБИЙЦ (Добавь эти две строчки!)
             if not isinstance(transitions_data, list):
                 transitions_data = []
                 
-            # 🔥 ЗАЩИТА ОТ СТРОК И ПУСТОТЫ В НОДАХ
             nodes_by_id = {str(n["id"]): n for n in nodes if isinstance(n, dict) and "id" in n}
             
             for aud in transitions_data:
-                # 🔥 ЗАЩИТА ВНУТРИ ЦИКЛА: Если элемент списка — не словарь, пропускаем его
                 if not isinstance(aud, dict):
                     continue
                     
@@ -205,19 +201,17 @@ def test_general_info(MAIN_URL, POP_URL, auth_token, expected_data=None, progres
                 target_audience_id = str(aud.get("id", ""))
                 if not source_id or source_id == "None": continue
                 
-                # Ищем таргет только среди настоящих словарей
                 target_node = next((n for n in nodes if isinstance(n, dict) and str(n.get("audience_id", "")) == target_audience_id), None)
                 source_node = nodes_by_id.get(source_id)
                 
                 if source_node and target_node:
                     t_val = ""
                     
-                    # 🚨 ИСКАЛИ ОШИБКУ ЗДЕСЬ: conditions может быть строкой, None или словарем
                     raw_conds = aud.get("conditions", [])
                     if isinstance(raw_conds, dict):
-                        raw_conds = [raw_conds] # Оборачиваем словарь в список
+                        raw_conds = [raw_conds]
                     elif not isinstance(raw_conds, list):
-                        raw_conds = [] # Превращаем любой другой мусор в пустой список
+                        raw_conds = []
                         
                     for c in raw_conds:
                         if isinstance(c, dict) and c.get("p") == "event.action":
@@ -256,12 +250,11 @@ def test_general_info(MAIN_URL, POP_URL, auth_token, expected_data=None, progres
                         "label": t_val
                     })
         
-        # 👇 НОВЫЙ БЛОК: ЗАЩИТА ОТ ФАНТОМНОГО УСПЕХА 👇
+        # ЗАЩИТА ОТ ФАНТОМНОГО УСПЕХА
         if not report_data.get("general_main") and not report_data.get("general_pop"):
             log("<span style='color: #ef4444;'>❌ ОШИБКА: Токен недействителен или нет доступа к кампании!</span>", 0)
-            st.error("🔑 Ошибка авторизации! Вставьте актуальный Token в левом боковом меню.")
-            st.stop()
-        # 👆 ======================================== 👆
+            # ЗАМЕНА СТРИМЛИТА НА ВЫБРОС ОШИБКИ FASTAPI
+            raise HTTPException(status_code=403, detail="Ошибка авторизации! Токен недействителен или нет доступа к кампании.")
 
         report_data["flow_links"] = all_flow_links
 
@@ -278,9 +271,8 @@ def test_general_info(MAIN_URL, POP_URL, auth_token, expected_data=None, progres
         log("📸 Извлечение контента узлов...", 45)
 
         for idx, node in enumerate(all_nodes):
-            if not isinstance(node, dict): continue # 🛡️ Броня: пропускаем любой мусор
+            if not isinstance(node, dict): continue
             type_id = node.get("type_id")
-            print(f"👉 НОДА: {node.get('name', 'Unknown')} | ТИП (type_id): {type_id}")
             if type_id not in TARGET_NODES:
                 continue
                 
@@ -294,16 +286,13 @@ def test_general_info(MAIN_URL, POP_URL, auth_token, expected_data=None, progres
                     branch_name = check.get("name", "Unknown")
                     c_dict = check.get("conditions_n_readable") or {}
                     
-                    # Берем строго ту строку, которую прислало API
                     cond_str = c_dict.get("conditions_readable", "")
                     raw_conds = c_dict.get("conditions", [])
                     
-                    # 1. Если условия вообще нет - дергаем API переводчик
                     if (not cond_str or cond_str == "Not set" or cond_str == "Пусто" or cond_str == "Значения удалены") and raw_conds:
                         translated = api.resolve_conditions_async(raw_conds)
                         if translated: cond_str = translated
                     
-                    # 2. Если в строке есть сломанные скобки () - чиним их локально
                     if cond_str and "()" in cond_str and raw_conds:
                         cond_str = api.fix_empty_brackets_locally(cond_str, raw_conds)
                         
@@ -350,12 +339,10 @@ def test_general_info(MAIN_URL, POP_URL, auth_token, expected_data=None, progres
                 if not cond_str or cond_str.lower() in ["all users", "not set", "пусто", "значения удалены"]:
                     cond_str = ""
                     
-                # Пытаемся перевести, если пусто, но есть сырые данные
                 if not cond_str and raw_conds:
                     translated = api.resolve_conditions_async(raw_conds)
                     if translated: cond_str = translated
                     
-                # Чиним пустые скобки, если они есть
                 if cond_str and "()" in cond_str and raw_conds:
                     cond_str = api.fix_empty_brackets_locally(cond_str, raw_conds)
                     
@@ -366,7 +353,7 @@ def test_general_info(MAIN_URL, POP_URL, auth_token, expected_data=None, progres
                     "condition": cond_str
                 })
 
-            elif node_type in ["Email", "Push", "SMS", "Pop-up", "Inbox"]:  # 🚨 ФИКС: Разрешаем парсеру заходить в Inbox
+            elif node_type in ["Email", "Push", "SMS", "Pop-up", "Inbox"]: 
                 resources = details.get("resources", [])
                 
                 caps_map = {1: "Respect user and global caps", 2: "Ignore user and global caps", 3: "Respect user caps, ignore global", 4: "Respect global caps, ignore user"}
@@ -392,7 +379,6 @@ def test_general_info(MAIN_URL, POP_URL, auth_token, expected_data=None, progres
 
                 period_map = {1: "Send only in activity period", 2: "Send always, disregarding activity period", 3: "Send if possible and if not - in next available activity period", 4: "Send in specific hour (User TZ)", 5: "Send in specific hour (UTC)", 260: "BEST TIME: Deposit+SB+CASINO Bet", 261: "BEST TIME: Online", 262: "BEST TIME: Clicks"}
                 
-                # Достаем имя системы из .env
                 sys_name = os.getenv("SYSTEM_NAME")
                 optout_map = {
                     1: f"Respect Platform and {sys_name} opt-out flags", 
@@ -432,7 +418,6 @@ def test_general_info(MAIN_URL, POP_URL, auth_token, expected_data=None, progres
                     "delivery_timeout": timeout_str
                 })
 
-                # 🚨 ФИКС ДЛЯ INBOX: У Inbox нет массива resources, берем ID прямо из корня деталей
                 res = resources[0] if resources else details
                 content = res.get("resource_content", {}) if resources else details
                 
@@ -492,7 +477,7 @@ def test_general_info(MAIN_URL, POP_URL, auth_token, expected_data=None, progres
                                 button1 = ext_details.get("button_text", button1)
                                 link_text = ext_details.get("button_url", link_text)
                                 
-                    elif node_type == "Inbox": # 🚨 ДОБАВЛЕН ПАРСЕР ДЛЯ INBOX
+                    elif node_type == "Inbox":
                         title_text = content.get('title', '')
                         body_text = content.get('body', '')
                         image_url = content.get('image', '')
@@ -574,18 +559,15 @@ def test_general_info(MAIN_URL, POP_URL, auth_token, expected_data=None, progres
                     })
 
             elif node_type == "WebHook":
-
                 url_val = str(details.get("url") or details.get("endpoint") or details.get("webhook_url") or "")
                 body_raw = details.get("body") or details.get("payload") or details.get("data")
                 
-
                 if "request" in details and isinstance(details["request"], dict):
                     url_val = url_val or str(details["request"].get("url", ""))
                     body_raw = body_raw or details["request"].get("body")
                 
                 body_val = json.dumps(body_raw, ensure_ascii=False) if isinstance(body_raw, (dict, list)) else str(body_raw or "")
                 
-                # ЗАЩИТА: Если всё равно пусто, дампим всю ноду, чтобы они не склеивались в один пустой ком!
                 if not url_val and not body_val:
                     body_val = json.dumps(details, ensure_ascii=False)
                     
@@ -602,7 +584,6 @@ def test_general_info(MAIN_URL, POP_URL, auth_token, expected_data=None, progres
                     "icon_url": "",
                     "image_url": "",
                     "button1": "",
-                    # 🚨 ФИКС: Добавляем ignore_formatting_tags=True для WebHook
                     "syntax_errors": api.validate_label_syntax(f"{url_val} {body_val}", ignore_formatting_tags=True),
                     "previews": []
                 })
@@ -644,10 +625,8 @@ def test_general_info(MAIN_URL, POP_URL, auth_token, expected_data=None, progres
             clean_name = lbl.replace("{{label.", "").replace("}}", "")
             normalized_name = api.normalize_label_name(clean_name)
             
-            # 🚨 ПИШЕМ СТРОГО В UI-ТЕРМИНАЛ
             log(f"🔎 Ищем: {clean_name} (Вложенность: {current_depth})", 75)
             
-            # Передаем функцию log внутрь парсера, чтобы он тоже мог писать в интерфейс
             audit_data = api.get_label_data_with_variations(normalized_name, log)
             
             if audit_data:
@@ -675,7 +654,6 @@ def test_general_info(MAIN_URL, POP_URL, auth_token, expected_data=None, progres
                 if isinstance(obj, list):
                     for i in obj: deep_replace_id_refs(i)
                 elif isinstance(obj, dict):
-                    # 🚨 ФИКС: Оборачиваем в list(), чтобы заморозить словарь перед итерацией
                     for k, v in list(obj.items()):
                         if isinstance(v, str) and "ID_REF:" in v:
                             def sub_name(match):
@@ -694,7 +672,6 @@ def test_general_info(MAIN_URL, POP_URL, auth_token, expected_data=None, progres
         
         browser.close()
         
-        # 🚨 Извлекаем чистое имя для файла
         camp_main = report_data.get("general_main", {}).get("Name")
         camp_pop = report_data.get("general_pop", {}).get("Name")
         camp_name = camp_main or camp_pop or "Audit"
@@ -705,14 +682,9 @@ def test_general_info(MAIN_URL, POP_URL, auth_token, expected_data=None, progres
         return final_html, safe_name
 
 # =====================================================================
-# 🖥️ ИНТЕРФЕЙС МОДУЛЯ (ОДИНОЧНЫЙ АУДИТ)
+# 🛠️ ПАРСЕРЫ ШАБЛОНОВ (Без изменений)
 # =====================================================================
 def parse_table_regex(raw_text):
-    """
-    Классический Regex-парсер. Ищет жесткие шаблоны в тексте из Excel.
-    Не использует ИИ. Работает мгновенно.
-    """
-    # Очищаем текст от экселевских кавычек и разбиваем на блоки (по табуляции или двойным переносам)
     clean_text = raw_text.replace('"', ' ').replace('\t', '\n\n')
     blocks = re.split(r'\n\s*\n', clean_text)
     
@@ -723,12 +695,11 @@ def parse_table_regex(raw_text):
         if not block or len(block) < 10:
             continue
             
-        # Пропускаем блоки, в которых нет валюты (скорее всего это просто заголовки)
         if not re.search(r'min dep', block, re.IGNORECASE):
             continue
 
         offer_data = {
-            "tier_name": "Unknown", # Пока ставим заглушку, будем улучшать
+            "tier_name": "Unknown",
             "currency": None,
             "min_dep": None,
             "wager": None,
@@ -737,28 +708,23 @@ def parse_table_regex(raw_text):
             "notes": []
         }
 
-        # 1. Ищем минимальный депозит и валюту: "min dep 20 EUR"
         dep_match = re.search(r'min dep\s+(\d+)\s+([A-Z]{3})', block, re.IGNORECASE)
         if dep_match:
             offer_data["min_dep"] = int(dep_match.group(1))
             offer_data["currency"] = dep_match.group(2).upper()
 
-        # 2. Ищем вейджер: "wager x35" или "wager 30"
         wager_match = re.search(r'wager\s*x?(\d+)', block, re.IGNORECASE)
         if wager_match:
             offer_data["wager"] = int(wager_match.group(1))
 
-        # 3. Ищем фриспины: "200 FS" или "20 HB FS"
         fs_match = re.search(r'(\d+)\s*(?:FS|HB FS|Free Spins)', block, re.IGNORECASE)
         if fs_match:
             offer_data["free_spins"] = int(fs_match.group(1))
 
-        # 4. Ищем Match Bonus: "100% up to 500"
         match_bonus = re.search(r'(\d+)%\s*up to\s*([\d,]+)', block, re.IGNORECASE)
         if match_bonus:
             offer_data["match_bonus"] = f"{match_bonus.group(1)}% (max {match_bonus.group(2)})"
             
-        # 5. Ищем пометки про Reactivation
         if re.search(r'Reactivation', block, re.IGNORECASE):
             offer_data["notes"].append("Reactivation 14+ days")
 
@@ -770,14 +736,12 @@ def parse_table_regex(raw_text):
     return {"offers_found": len(parsed_offers), "data": parsed_offers}
 
 def parse_template_dep_bonus(raw_text):
-    """Парсер для шаблона №1: Dep bonus up to 3x times"""
     result = {
         "template_name": "Dep bonus up to 3x times",
         "general_settings": {},
         "offers": []
     }
     
-    # 1. Извлекаем глобальные настройки
     act_dur = re.search(r'Activation duration\s*-\s*(\d+)', raw_text, re.IGNORECASE)
     dur_hr = re.search(r'Duration hour\s*-\s*(\d+)', raw_text, re.IGNORECASE)
     seg = re.search(r'Сегменты с названием\s*-\s*([^\n\t]+)', raw_text, re.IGNORECASE)
@@ -786,7 +750,6 @@ def parse_template_dep_bonus(raw_text):
     if dur_hr: result["general_settings"]["duration_hours"] = int(dur_hr.group(1))
     if seg: result["general_settings"]["segments"] = seg.group(1).strip()
 
-    # ⏳ НОВОЕ: Поиск дат и расчет количества дней
     date_match = re.search(r'(\d{2}\.\d{2})\s*-\s*(\d{2}\.\d{2})', raw_text)
     if date_match:
         from datetime import datetime
@@ -794,11 +757,9 @@ def parse_template_dep_bonus(raw_text):
             start_date = datetime.strptime(date_match.group(1), "%d.%m")
             end_date = datetime.strptime(date_match.group(2), "%d.%m")
             
-            # Если акция переходит на следующий год (например, с 25.12 по 05.01)
             if end_date < start_date:
                 end_date = end_date.replace(year=start_date.year + 1)
                 
-            # Разница в днях (+1 день, чтобы Пт-Вс считалось как 3 дня, а не 2)
             duration_days = (end_date - start_date).days + 1
             
             result["general_settings"]["date_range"] = f"{date_match.group(1)} - {date_match.group(2)}"
@@ -806,7 +767,6 @@ def parse_template_dep_bonus(raw_text):
         except Exception:
             pass
 
-    # 2. Разбиваем текст на блоки по названиям тиров
     tier_pattern = r'(Tier 3.*?Tier 2.*?\)|Tier 1\s*\(.*?\)|VIP Tier\s*\(.*?\))'
     parts = re.split(tier_pattern, raw_text, flags=re.DOTALL)
     
@@ -815,7 +775,6 @@ def parse_template_dep_bonus(raw_text):
             tier_name = parts[i].replace('\n', ' ').strip()
             tier_content = parts[i+1].replace('\n', ' ')
             
-            # 3. Ищем офферы внутри тира
             offer_regex = r'Dep\s+([\d,]+)\s+([A-Z]{3})\s*-\s*get\s+(\d+)%\s*up to\s+([\d,]+)\s*[A-Z]{3}.*?can be used\s+(\d+)\s+times.*?promocode:\s*([A-Z0-9]+).*?Wager\s*x(\d+)'
             matches = re.finditer(offer_regex, tier_content, re.IGNORECASE)
             
@@ -837,14 +796,12 @@ def parse_template_dep_bonus(raw_text):
     return result
 
 def parse_template_deposit_ladder(raw_text):
-    """Парсер для шаблона №2: Deposit bonus ladder"""
     result = {
         "template_name": "Deposit bonus ladder",
         "general_settings": {},
         "offers": []
     }
     
-    # 1. Извлекаем глобальные настройки (включая даты и лимит использований)
     date_match = re.search(r'(\d{2}\.\d{2})\s*-\s*(\d{2}\.\d{2})', raw_text)
     if date_match:
         from datetime import datetime
@@ -868,7 +825,6 @@ def parse_template_deposit_ladder(raw_text):
     if seg: result["general_settings"]["segments"] = seg.group(1).strip()
     if usage: result["general_settings"]["usage_limit"] = int(usage.group(1))
 
-    # 2. Разбиваем текст на блоки по названиям тиров
     tier_pattern = r'(Tier 3.*?Tier 2.*?\)|Tier 1\s*\(.*?\)|VIP Tier\s*\(.*?\))'
     parts = re.split(tier_pattern, raw_text, flags=re.DOTALL)
     
@@ -877,14 +833,12 @@ def parse_template_deposit_ladder(raw_text):
             tier_name = parts[i].replace('\n', ' ').strip()
             tier_content = parts[i+1].replace('\n', ' ')
             
-            # 3. Хак: разбиваем контент тира по слову Wager, чтобы разделить "слепленные" колонки EUR и BRL
             currency_blocks = re.split(r'(Wager\s*x\d+)', tier_content, flags=re.IGNORECASE)
             
             for j in range(0, len(currency_blocks) - 1, 2):
                 block_text = currency_blocks[j] + currency_blocks[j+1]
                 if not block_text.strip(): continue
                 
-                # Ищем общие данные для лесенки (промокод и вейджер)
                 promo_match = re.search(r'promocode:\s*([A-Z0-9]+)', block_text, re.IGNORECASE)
                 wager_match = re.search(r'Wager\s*x(\d+)', block_text, re.IGNORECASE)
                 
@@ -893,13 +847,11 @@ def parse_template_deposit_ladder(raw_text):
                 promocode = promo_match.group(1)
                 wager = int(wager_match.group(1))
                 
-                # Ищем все ступени лесенки (учитываем, что бывает "- get 20%" и просто "- 20%")
                 step_regex = r'min dep\s+([\d,]+)\s+([A-Z]{3})\s*(?:-\s*get\s*|-\s*)?(\d+)%\s*up to\s+([\d,]+)'
                 step_matches = list(re.finditer(step_regex, block_text, re.IGNORECASE))
                 
                 if not step_matches: continue
                 
-                # Берем валюту из первой ступени
                 currency = step_matches[0].group(2).upper()
                 
                 ladder_steps = []
@@ -923,164 +875,98 @@ def parse_template_deposit_ladder(raw_text):
         
     return result
 
-def get_env_from_url(url):
-    """Определяет окружение по ссылке"""
-    if not url: return None
-    domain = os.getenv("SYSTEM_DOMAIN")
-    if "drive-7" in url: return "env7"
-    elif "drive-5" in url: return "env5"
-    elif domain in url: return "env2"
-    return None
+# =====================================================================
+# 🚀 ЭНДПОИНТ API (Streaming SSE)
+# =====================================================================
+@router.post("/generate")
+async def generate_single_report_stream(request: SingleReportRequest):
+    """
+    Запускает одиночный аудит кампании в фоновом потоке.
+    Возвращает SSE (Server-Sent Events) поток с логами прогресса.
+    Последним сообщением отдаёт готовый HTML напрямую без сохранения в кэш сервера.
+    """
+    if not request.main_url and not request.pop_url:
+        raise HTTPException(status_code=400, detail="Необходимо передать хотя бы одну ссылку (main_url или pop_url).")
 
-def run_module(cookie_manager):
-    # Initialize variables to prevent UnboundLocalError
-    final_report_html = None
-    final_file_name = None
-    
-    st.header("🗺️ Одиночный аудит (Scheduled + Journey)")
-    st.markdown("Сканирование кампании, сбор Flow Map и автоматическая сверка с промо-планом.")
-    
-    # 1. Ввод ссылок
-    col1, col2 = st.columns(2)
-    with col1: 
-        main_url = st.text_input("📅 Scheduled кампания:", placeholder="https://.../scheduled/")
-    with col2: 
-        pop_url = st.text_input("🎯 Journey кампания:", placeholder="https://.../head/")
+    expected_data = None 
+    queue = asyncio.Queue()
+    loop = asyncio.get_running_loop()
 
-    # 2. Ввод ожидаемых данных
-    st.markdown("### 📋 Ожидаемые настройки (из промо-плана)")
-    template_choice = st.selectbox(
-        "🗂️ Выберите шаблон промо-акции (оставьте 'Без сверки', если нужен просто отчет):",
-        ["Без сверки", "Шаблон 1: Dep bonus up to 3x times", "Шаблон 2: Deposit bonus ladder"]
-    )
-    
-    raw_table_data = ""
-    if template_choice != "Без сверки":
-        raw_table_data = st.text_area(
-            "Вставьте скопированный текст из таблицы:", 
-            height=150,
-            placeholder="Вставьте данные оффера сюда..."
-        )
-
-    st.write("")
-    start_audit = st.button("🚀 Запустить проверку", type="primary", use_container_width=True)
-
-    if start_audit:
-        # 1. ПРОВЕРКА НАЛИЧИЯ ХОТЯ БЫ ОДНОЙ ССЫЛКИ
-        if not main_url and not pop_url:
-            st.error("❌ Пожалуйста, вставьте хотя бы одну ссылку (Scheduled или Journey).")
-            st.stop()
-
-        # 2. ОПРЕДЕЛЯЕМ ОКРУЖЕНИЕ ПО ССЫЛКЕ
-        test_url = main_url if main_url else pop_url
-        env = get_env_from_url(test_url)
-        
-        if not env:
-            st.error("❌ Не удалось распознать ссылку. Убедитесь, что она корректная")
-            st.stop()
-            
-        # 3. ДОСТАЕМ ТОКЕН ИЗ ПАМЯТИ (положенный туда боковым меню)
-        current_token = st.session_state.get(f"token_{env}", "")
-        
-        if not current_token:
-            st.error(f"❌ Нет авторизации для {env.upper()}. Введите актуальный Token в левом боковом меню.")
-            st.stop()
-
-        # 4. 🔐 ЖЕСТКИЙ СТРАЖ АВТОРИЗАЦИИ (Тройной фильтр, как в массовом аудите)
-        host_map = {
-            "env2": f"boapi.{SYSTEM_DOMAIN}", 
-            "env5": f"boapi5.{SYSTEM_DOMAIN}", 
-            "env7": f"boapi7.{SYSTEM_DOMAIN}"
-        }
-        check_host = host_map.get(env, f"boapi.{SYSTEM_DOMAIN}")
-        token_invalid = False
-        error_reason = ""
-
-        try:
-            ping_check = requests.get(f"https://{check_host}/api/users/me", headers={"authorization": current_token}, timeout=5)
-            
-            if not ping_check.ok and ping_check.status_code != 291:
-                token_invalid = True
-                error_reason = f"HTTP {ping_check.status_code}"
-            else:
-                try:
-                    resp_json = ping_check.json()
-                    if isinstance(resp_json, dict) and str(resp_json.get("status", "")).lower() in ["error", "unauthorized"]:
-                        token_invalid = True
-                        error_reason = "JSON Error (Unauthorized)"
-                except Exception:
-                    token_invalid = True
-                    error_reason = "HTML/Cloudflare Redirect"
-                    
-        except requests.exceptions.RequestException as e:
-            st.warning(f"⚠️ Сетевая задержка при проверке токена: {e}")
-
-        if token_invalid:
-            st.error(f"🔑 Ошибка авторизации ({error_reason})! Ваш токен невалидный. Обновите его в левом боковом меню.")
-            st.stop()
-        # 👆 ========================================================= 👆
-
-        # 5. ПАРСИНГ ТАБЛИЦЫ ДО ЗАПУСКА АУДИТА
-        expected_data = None
-
-        # 4. ЗАПУСК ОСНОВНОГО ПРОЦЕССА
-        log_container = st.empty()
-        progress_bar = st.progress(0)
-        log_history = []
-        
-        if "audit_start_time" not in st.session_state:
-            st.session_state.audit_start_time = time.time()
-            st.session_state.last_step_time = time.time()
-        
-        def update_progress(msg, percent=None):
-            now = time.time()
-            total_elapsed = now - st.session_state.audit_start_time
-            step_elapsed = now - st.session_state.last_step_time
-            st.session_state.last_step_time = now
-            
-            timestamp = f"[{total_elapsed:02.0f}s] [+{step_elapsed:.1f}s]"
-            print(f"{timestamp} ➜ {msg}", flush=True)
-            
-            log_entry = f"<span style='color: #64748b;'>{timestamp}</span> ➜ {msg}"
-            log_history.append(log_entry)
-            logs_html = "<br>".join(log_history)
-            
-            terminal_html = f"""
-            <div style="background-color: #0f172a; color: #38bdf8; padding: 15px; border-radius: 8px; font-family: monospace; font-size: 13px; height: 280px; overflow-y: auto; border: 1px solid #1e293b; box-shadow: inset 0 2px 4px rgba(0,0,0,0.5); display: flex; flex-direction: column-reverse; margin-bottom: 15px; line-height: 1.5;">
-                <div style="margin-top: auto;">{logs_html}</div>
-            </div>
-            """
-            log_container.markdown(terminal_html, unsafe_allow_html=True)
+    # Внутренняя функция, которая будет работать в параллельном потоке ОС
+    def sync_worker():
+        def stream_logger(msg, percent=None):
+            # 1. Формируем событие
+            event_data = {"type": "progress", "msg": msg}
             if percent is not None:
-                progress_bar.progress(percent)
+                event_data["percent"] = percent
+            
+            # 2. Пробрасываем его из синхронного потока в асинхронную очередь FastAPI
+            asyncio.run_coroutine_threadsafe(
+                queue.put(f"data: {json.dumps(event_data)}\n\n"), 
+                loop
+            )
+            # Оставляем вывод в консоль для дебага
+            print(f"➜ [{percent if percent else '*'}] {msg}", flush=True)
 
         try:
-            st.session_state.audit_start_time = time.time()
-            st.session_state.last_step_time = time.time()
-            update_progress("⏳ Добавлен в очередь. Ждем освобождения ресурсов сервера...", 2)
+            stream_logger("Добавлен в очередь. Ждем ресурсов сервера...", 2)
             
             with global_lock:
-                update_progress("🚀 Ресурсы получены! Запускаю процесс...", 5)
+                stream_logger("Ресурсы получены! Запускаю процесс...", 5)
                 
-                # 🚨 ОБРАТИ ВНИМАНИЕ: МЫ ПЕРЕДАЕМ EXPECTED_DATA ВНУТРЬ ФУНКЦИИ
-                result = test_general_info(main_url, pop_url, current_token, expected_data=expected_data, progress_cb=update_progress)
+                # Запускаем твою оригинальную, нетронутую бизнес-логику
+                result = test_general_info(
+                    MAIN_URL=request.main_url,
+                    POP_URL=request.pop_url,
+                    auth_token=request.token,
+                    expected_data=expected_data,
+                    progress_cb=stream_logger
+                )
                 
                 if result and result[0]:
                     final_report_html, camp_name = result
-                    progress_bar.progress(100)
-                    update_progress("✅ АУДИТ УСПЕШНО ЗАВЕРШЕН!", 100)
-                    st.balloons()
+                    stream_logger("✅ АУДИТ УСПЕШНО ЗАВЕРШЕН!", 100)
+                    
                     final_file_name = f"{camp_name}_{datetime.now().strftime('%Y%m%d_%H%M%S')}.html"
+                    
+                    # 🔥 ГЛАВНОЕ ОТЛИЧИЕ ОТ КОЛЛЕГИ:
+                    # Мы не сохраняем тяжелый HTML в память сервера (REPORTS_CACHE). 
+                    # Мы отправляем его прямо в стрим финальным аккордом!
+                    done_event = {
+                        "type": "done",
+                        "filename": final_file_name,
+                        "html_content": final_report_html
+                    }
+                    asyncio.run_coroutine_threadsafe(
+                        queue.put(f"data: {json.dumps(done_event)}\n\n"), 
+                        loop
+                    )
                 else:
-                    update_progress("❌ Скрипт не смог собрать данные.", 0)
+                    error_event = {"type": "error", "msg": "Скрипт не смог собрать данные."}
+                    asyncio.run_coroutine_threadsafe(queue.put(f"data: {json.dumps(error_event)}\n\n"), loop)
+                    
         except Exception as e:
-            update_progress(f"❌ Критическая ошибка: {e}", 0)
+            error_event = {"type": "error", "msg": f"Критическая ошибка: {str(e)}"}
+            asyncio.run_coroutine_threadsafe(queue.put(f"data: {json.dumps(error_event)}\n\n"), loop)
+        finally:
+            # Отправляем None, чтобы закрыть стрим
+            asyncio.run_coroutine_threadsafe(queue.put(None), loop)
 
-    if final_report_html:
-        st.write("---")
-        st.download_button(label="📥 СКАЧАТЬ HTML ОТЧЕТ", data=final_report_html, file_name=final_file_name, mime="text/html", use_container_width=True)
-        st.divider()
-        components.html(final_report_html, height=1200, scrolling=True)
+    # 3. Запускаем воркер в отдельном потоке (защита от зависаний)
+    threading.Thread(target=sync_worker, daemon=True).start()
 
-if __name__ == "__main__":
-    run_module(None)
+    # 4. Генератор, который отправляет события фронтенду
+    async def async_event_generator():
+        while True:
+            try:
+                # Ждем события от воркера. Если тишина 15 сек - кидаем пинг
+                data = await asyncio.wait_for(queue.get(), timeout=15.0)
+                if data is None: 
+                    break # Сигнал закрытия потока
+                yield data
+            except asyncio.TimeoutError:
+                # Тот самый анти-таймаут пинг для Railway
+                yield ": keepalive\n\n"
+
+    # Возвращаем поток
+    return StreamingResponse(async_event_generator(), media_type="text/event-stream")

@@ -6,6 +6,7 @@ import { env, assertApiProductionConfig } from "./env.js";
 import { healthRouter } from "./routes/health.js";
 import { authRouter } from "./routes/auth.js";
 import { adminRouter } from "./routes/admin.js";
+import { decorRouter } from "./routes/decor.js";
 import { catalogRouter } from "./routes/catalog.js";
 import { generateRouter } from "./routes/generate.js";
 import { tournamentRouter } from "./routes/tournament.js";
@@ -26,6 +27,7 @@ import { auditorRouter } from "./routes/auditor.js";
 import { crmRouter } from "./routes/crm.js";
 import { smarticoRouter } from "./routes/smartico.js";
 import { startSmarticoWorker, stopSmarticoWorker } from "./queues/smartico.worker.js";
+import { qatoolsRouter } from "./routes/qatools.js";
 
 import { calculatorService } from "./services/calculator.service.js";
 
@@ -50,12 +52,16 @@ app.get("/", (_req, res) => {
 
 app.use("/health", healthRouter);
 app.use("/auth", authRouter);
+// Библиотека декора (Задание 2, Фаза 2). Монтируется ДО `/api/admin`: префикс
+// у adminRouter более общий, и он перехватил бы запрос первым.
+app.use("/api/admin/decor", loadUser, requireAdmin, decorRouter);
 app.use("/api/admin", loadUser, requireAdmin, adminRouter);
 // Zone guards: Design (DESIGNER) vs CRM (CRM); ADMIN passes both (see requireZone).
 app.use("/api/catalog", loadUser, requireAuth, requireZone("DESIGNER"), catalogRouter);
 app.use("/api/calculator", loadUser, requireAuth, requireZone("CRM"), calculatorRouter);
 app.use("/api/auditor", loadUser, requireAuth, requireZone("CRM"), auditorRouter);
 app.use("/api/smartico", loadUser, requireAuth, requireZone("CRM"), smarticoRouter);
+app.use("/api/qa-tools", loadUser, requireAuth, requireZone("CRM"), qatoolsRouter);
 app.use("/api/crm", loadUser, requireAuth, requireZone("CRM"), crmRouter);
 // Image Bundles (TASK crm-bundle): CRM_SUPER / ADMIN / MANAGER only (D4).
 app.use("/api/bundles", loadUser, requireAuth, requireCrmSuper, bundlesRouter);

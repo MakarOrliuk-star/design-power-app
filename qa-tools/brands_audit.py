@@ -1,9 +1,40 @@
-import streamlit as st
 import requests
 import json
 import re
 import html
+from fastapi import APIRouter, HTTPException
+from pydantic import BaseModel
+from typing import List
 
+router = APIRouter(tags=["Brands Audit"])
+
+# =====================================================================
+# 📦 PYDANTIC СХЕМЫ (Входящие данные)
+# =====================================================================
+class CampaignSearchRequest(BaseModel):
+    urls: List[str]
+    keyword: str
+    token: str
+
+class BulkLabelsRequest(BaseModel):
+    env: str  # "env2", "env5", "env7"
+    keyword: str
+    labels: List[str]
+    token: str
+
+class ResolveLinksRequest(BaseModel):
+    env: str
+    keyword: str
+    items: List[str]
+    token: str
+
+# Константы окружений
+DEFAULT_BRANDS = {"env2": "2828", "env5": "20115", "env7": "28111"}
+HOST_MAP = {"env2": "boapi.smartico.ai", "env5": "boapi5.smartico.ai", "env7": "boapi7.smartico.ai"}
+
+# =====================================================================
+# 🧠 БИЗНЕС-ЛОГИКА (Очищено от Streamlit)
+# =====================================================================
 class BrandAuditorEngine:
     def __init__(self, brand_id, boapi_host, auth_token):
         self.brand_id = str(brand_id)
@@ -14,7 +45,6 @@ class BrandAuditorEngine:
             "authorization": self.auth_token,
             "active_label_id": self.brand_id,
             "content-type": "application/json",
-            # 👇 МАСКИРУЕМ СЕРВЕР ПОД ОБЫЧНЫЙ БРАУЗЕР
             "user-agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
         }
 
@@ -31,10 +61,9 @@ class BrandAuditorEngine:
                 meta = data[0] if isinstance(data, list) and len(data) > 0 else data
                 return meta if isinstance(meta, dict) else {}
             else:
-                st.error(f"Ошибка API (ID {campaign_id}): {res.status_code} - {res.text[:200]}")
+                raise ValueError(f"Ошибка API: {res.status_code}")
         except Exception as e:
-            st.error(f"Критическая ошибка запроса: {e}")
-        return {}
+            raise ValueError(f"Критическая ошибка запроса: {e}")
 
     def normalize_label_name(self, raw_label):
         if not raw_label: 
@@ -154,7 +183,7 @@ class BrandAuditorEngine:
                     if matched_val is not None:
                         results[original_name] = matched_val
                     elif fallback_all_users_val is not None:
-                        results[original_name] = fallback_all_users_val + " <br><span style='color:#94a3b8; font-size:10px;'>(Default / All Users)</span>"
+                        results[original_name] = fallback_all_users_val + " (Default / All Users)"
                     else:
                         results[original_name] = "⚠️ Вариация не найдена"
                         
@@ -164,26 +193,13 @@ class BrandAuditorEngine:
         return results
 
 def resolve_short_url(raw_val):
-    """
-    Раскручивает шорт-линк до финального URL (проходя все редиректы)
-    """
-    # Очищаем от HTML заглушек (на случай дефолтного All Users)
-    url = str(raw_val).split(" <br>")[0].strip()
-    
-    if not url: 
-        return "⚠️ Пусто"
-        
-    # Если в строке нет точки (домена), это точно не ссылка
-    if "." not in url:
-        return "⚠️ Не похоже на ссылку"
-        
-    if not url.startswith('http'):
-        url = 'https://' + url
+    url = str(raw_val).split(" (Default")[0].strip()
+    if not url: return "⚠️ Пусто"
+    if "." not in url: return "⚠️ Не похоже на ссылку"
+    if not url.startswith('http'): url = 'https://' + url
         
     try:
-        # Притворяемся обычным браузером, чтобы Rebrandly не заблокировал
         headers = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)'}
-        # Используем stream=True, чтобы не скачивать весь HTML-код тяжелой страницы (экономит время)
         res = requests.get(url, allow_redirects=True, headers=headers, timeout=10, stream=True)
         return res.url
     except Exception as e:
@@ -240,247 +256,110 @@ def search_keyword_in_dict(obj, keyword, path=""):
                 pass
         
         if kw_lower in val_str.lower():
-            matches.append((path, val_str))
+            matches.append({"path": path, "value": val_str})
     return matches
 
-def highlight_text(text, keyword):
-    escaped_text = html.escape(str(text))
-    pattern = re.compile(f"({re.escape(keyword)})", re.IGNORECASE)
-    return pattern.sub(r"<mark style='background:#fef08a; color:#000; padding:2px; border-radius:3px; font-weight:bold;'>\1</mark>", escaped_text)
+# =====================================================================
+# 🚀 ЭНДПОИНТЫ API
+# =====================================================================
 
-def run_module(cookie_manager):
-    st.header("🏷️ Brands")
+@router.post("/search-campaigns")
+def search_campaigns(request: CampaignSearchRequest):
+    """(Вкладка 1) Ищет ключевое слово (название бренда) в настройках кампаний"""
+    raw_text = "\n".join(request.urls)
+    campaigns = parse_input_to_campaigns(raw_text)
     
-    tab1, tab2, tab3 = st.tabs(["🗺️ Проверка кампаний", "🔠 Парсер лейблов", "🔗 Парсер шорт-линков"])
-    
-    default_brands = {"env2": "2828", "env5": "20115", "env7": "28111"}
-    host_map = {"env2": "boapi.smartico.ai", "env5": "boapi5.smartico.ai", "env7": "boapi7.smartico.ai"}
+    if not campaigns:
+        raise HTTPException(status_code=400, detail="Ссылки Smartico не обнаружены.")
 
-    # ==========================================
-    # ВКАЛДКА 1: ПОИСК ПО НАСТРОЙКАМ КАМПАНИЙ
-    # ==========================================
-    with tab1:
-        col1, col2 = st.columns([0.7, 0.3])
-        with col1:
-            raw_data = st.text_area("📋 Список ссылок на кампании (каждая с новой строки):", height=150, key="camp_input")
-        with col2:
-            keyword = st.text_input("🔍 Название бренда:", placeholder="Например: Spinstein", key="camp_kw")
-            start_btn = st.button("🚀 Начать поиск", use_container_width=True, key="camp_btn")
-
-        if start_btn and raw_data and keyword:
-            campaigns = parse_input_to_campaigns(raw_data)
+    results = []
+    for camp in campaigns:
+        engine = BrandAuditorEngine(camp["brand_id"], camp["host"], request.token)
+        meta = engine.get_campaign_metadata(camp["camp_id"], camp["is_pop"])
+        
+        if meta == "UNAUTHORIZED":
+            raise HTTPException(status_code=401, detail=f"Токен для {camp['env']} протух или недействителен.")
             
-            if not campaigns:
-                st.error("❌ Ссылки Smartico не обнаружены.")
+        if meta:
+            matches = search_keyword_in_dict(meta, request.keyword)
+            unique_matches = []
+            seen_values = set()
+            
+            for m in matches:
+                norm_val = " ".join(str(m["value"]).split())
+                if norm_val not in seen_values:
+                    seen_values.add(norm_val)
+                    unique_matches.append(m)
+                    
+            camp_name = meta.get('audience_name', meta.get('name', 'Unnamed'))
+            results.append({
+                "campaign_id": camp["camp_id"],
+                "url": camp["url"],
+                "name": camp_name,
+                "matches": unique_matches
+            })
+            
+    return {"status": "success", "results": results}
+
+
+@router.post("/bulk-labels")
+def bulk_labels(request: BulkLabelsRequest):
+    """(Вкладка 2) Массово вытаскивает значения лейблов для конкретного бренда"""
+    parsed_labels = parse_labels_input("\n".join(request.labels))
+    if not parsed_labels:
+        raise HTTPException(status_code=400, detail="Лейблы не распознаны.")
+        
+    brand_id = DEFAULT_BRANDS.get(request.env)
+    host = HOST_MAP.get(request.env)
+    if not brand_id or not host:
+        raise HTTPException(status_code=400, detail="Неверное окружение.")
+        
+    engine = BrandAuditorEngine(brand_id, host, request.token)
+    results = engine.get_bulk_label_values(parsed_labels, request.keyword)
+    
+    if results == "UNAUTHORIZED":
+        raise HTTPException(status_code=401, detail="Токен авторизации протух.")
+        
+    return {"status": "success", "results": results}
+
+
+@router.post("/resolve-links")
+def resolve_links(request: ResolveLinksRequest):
+    """(Вкладка 3) Парсит лейблы и шортлинки, раскрывая их через редиректы"""
+    parsed_items = parse_labels_input("\n".join(request.items))
+    if not parsed_items:
+        raise HTTPException(status_code=400, detail="Данные не распознаны.")
+        
+    brand_id = DEFAULT_BRANDS.get(request.env)
+    host = HOST_MAP.get(request.env)
+    
+    labels_to_fetch = []
+    resolved_links = {}
+
+    for item in parsed_items:
+        if "." in item:
+            resolved_links[item] = {"short": item, "full": "", "status": "ok"}
+        else:
+            labels_to_fetch.append(item)
+            
+    if labels_to_fetch:
+        engine = BrandAuditorEngine(brand_id, host, request.token)
+        results = engine.get_bulk_label_values(labels_to_fetch, request.keyword)
+        
+        if results == "UNAUTHORIZED":
+            raise HTTPException(status_code=401, detail="Токен авторизации протух.")
+
+        for lbl_name, val in results.items():
+            if "❌" in val or "⚠️" in val:
+                resolved_links[lbl_name] = {"short": val, "full": "", "status": "error"}
             else:
-                st.info(f"🔎 Анализируем {len(campaigns)} объектов...")
-                progress = st.progress(0)
-                expired_envs = set()
+                resolved_links[lbl_name] = {"short": val, "full": "", "status": "ok"}
 
-                for idx, camp in enumerate(campaigns):
-                    env = camp['env']
-                    if env in expired_envs:
-                        progress.progress((idx + 1) / len(campaigns))
-                        continue
-
-                    token = st.session_state.get(f"token_{env}", "")
-                    if not token:
-                        st.warning(f"⚠️ Нет авторизации для {env.upper()} (пропущена кампания ID: {camp['camp_id']})")
-                        continue
-                        
-                    engine = BrandAuditorEngine(camp["brand_id"], camp["host"], token)
-                    meta = engine.get_campaign_metadata(camp["camp_id"], camp["is_pop"])
-                    
-                    if meta == "UNAUTHORIZED":
-                        st.error(f"❌ Токен авторизации для {env.upper()} протух. Пожалуйста, перезайдите в систему (крестик в левом меню).")
-                        expired_envs.add(env)
-                        progress.progress((idx + 1) / len(campaigns))
-                        continue
-                        
-                    if meta:
-                        matches = search_keyword_in_dict(meta, keyword)
-                        unique_matches = []
-                        seen_values = set()
-                        
-                        for path, val in matches:
-                            norm_val = " ".join(str(val).split())
-                            if norm_val not in seen_values:
-                                seen_values.add(norm_val)
-                                unique_matches.append((path, val))
-                        
-                        status_icon = "🎯" if unique_matches else "⚪"
-                        camp_name = meta.get('audience_name', meta.get('name', 'Unnamed'))
-                        
-                        st.markdown("---")
-                        st.markdown(f"#### {status_icon} {camp_name} <span style='color:#64748b; font-size:14px;'>(ID: {camp['camp_id']})</span>", unsafe_allow_html=True)
-                        st.markdown(f"**🔗 Ссылка:** <a href='{camp['url']}' target='_blank'>Открыть кампанию в Smartico ↗</a>", unsafe_allow_html=True)
-                        
-                        if unique_matches:
-                            for path, val in unique_matches:
-                                st.markdown(f"<div style='margin-top:10px; background:#f8fafc; padding:12px; border-radius:6px; border:1px solid #e2e8f0; border-left:4px solid #10b981; font-family:monospace; font-size:13px; color:#334155; line-height:1.6; word-break:break-word;'>{highlight_text(val, keyword)}</div>", unsafe_allow_html=True)
-                        else:
-                            st.markdown("<div style='margin-top:10px; color:#94a3b8; font-style:italic;'>Ключевое слово в настройках сегмента не найдено.</div>", unsafe_allow_html=True)
-                    
-                    progress.progress((idx + 1) / len(campaigns))
-                    
-                st.success("✅ Анализ завершен!")
-
-    # ==========================================
-    # ВКАЛДКА 2: МАССОВЫЙ ПАРСЕР ЛЕЙБЛОВ
-    # ==========================================
-    with tab2:
-        st.markdown("Извлечение значений лейблов по заданному условию вариации.")
-        c1, c2 = st.columns([0.3, 0.7])
-        with c1:
-            lbl_env = st.selectbox("Окружение:", ["env2", "env5", "env7"], key="lbl_env_tab2")
-        with c2:
-            lbl_keyword = st.text_input("🔍 Бренд (ключ вариации):", placeholder="Spinstein", key="lbl_kw_tab2")
-            
-        lbl_brand = default_brands[lbl_env]
-        lbl_raw_data = st.text_area("📋 Вставьте список лейблов:", height=200, key="lbl_text_tab2")
-        lbl_btn = st.button("🚀 Извлечь значения лейблов", use_container_width=True, key="lbl_btn_tab2")
-        
-        if lbl_btn and lbl_raw_data and lbl_keyword:
-            parsed_labels = parse_labels_input(lbl_raw_data)
-            if not parsed_labels:
-                st.error("❌ Лейблы не распознаны.")
-                st.stop()
+    for name, data in resolved_links.items():
+        if data["status"] == "ok":
+            full_url = resolve_short_url(data["short"])
+            data["full"] = full_url
+            if "❌" in full_url or "⚠️" in full_url:
+                data["status"] = "error"
                 
-            token = st.session_state.get(f"token_{lbl_env}", "")
-            if not token:
-                st.error(f"❌ Нет авторизации для {lbl_env.upper()}. Перезайдите в систему.")
-                st.stop()
-                
-            st.info(f"⏳ Скачиваем {len(parsed_labels)} лейблов...")
-            engine = BrandAuditorEngine(lbl_brand, host_map[lbl_env], token)
-            results = engine.get_bulk_label_values(parsed_labels, lbl_keyword)
-            
-            if results == "UNAUTHORIZED":
-                st.error("❌ Токен авторизации протух.")
-                st.stop()
-                
-            st.success("✅ Готово!")
-            
-            html_table = "<table style='width:100%; border-collapse: collapse; font-family: monospace; font-size: 13px; text-align: left;'><tr style='background: #f1f5f9;'><th style='padding: 10px; border: 1px solid #cbd5e1; width: 40%;'>Имя Лейбла</th><th style='padding: 10px; border: 1px solid #cbd5e1;'>Значение (для: " + html.escape(lbl_keyword) + ")</th></tr>"
-            
-            for lbl_name in parsed_labels:
-                val = results.get(lbl_name, "❌ Ошибка загрузки")
-                if "❌" in val or "⚠️" in val:
-                    val_display = f"<span style='color: #b91c1c; font-weight: bold;'>{val}</span>"
-                    bg_color = "#fef2f2"
-                else:
-                    val_display = html.escape(val).replace('\n', '<br>')
-                    bg_color = "#ffffff"
-                    
-                html_table += f"<tr style='background: {bg_color};'><td style='padding: 10px; border: 1px solid #cbd5e1;'><b>{html.escape(lbl_name)}</b></td><td style='padding: 10px; border: 1px solid #cbd5e1;'>{val_display}</td></tr>"
-            
-            html_table += "</table>"
-            st.markdown(html_table, unsafe_allow_html=True)
-
-    # ==========================================
-    # ВКАЛДКА 3: ПРОВЕРКА ШОРТ-ЛИНКОВ
-    # ==========================================
-    with tab3:
-        st.markdown("Парсит лейблы, достает шорт-линки и раскрывает их до финального URL.")
-        
-        c1, c2 = st.columns([0.3, 0.7])
-        with c1:
-            link_env = st.selectbox("Окружение:", ["env2", "env5", "env7"], key="link_env_tab3")
-        with c2:
-            link_keyword = st.text_input("🔍 Бренд (ключ вариации):", placeholder="Spinstein", key="link_kw_tab3")
-            
-        link_brand = default_brands[link_env]
-        link_raw_data = st.text_area(
-            "📋 Список лейблов, либо шорт-линков:", 
-            height=200, 
-            placeholder="crm2_brand_link\ncrm2_brand_link_sms",
-            key="link_text_tab3"
-        )
-        
-        link_btn = st.button("🚀 Проверить шорт-линки", use_container_width=True, key="link_btn_tab3")
-        
-        if link_btn and link_raw_data and link_keyword:
-            parsed_items = parse_labels_input(link_raw_data)
-            if not parsed_items:
-                st.error("❌ Данные не распознаны.")
-                st.stop()
-                
-            token = st.session_state.get(f"token_{link_env}", "")
-            if not token:
-                st.error(f"❌ Нет авторизации для {link_env.upper()}. Перезайдите в систему.")
-                st.stop()
-                
-            labels_to_fetch = []
-            resolved_links = {}
-
-            # Разделяем: что идем искать в Smartico, а что проверяем сразу
-            for item in parsed_items:
-                if "." in item:
-                    # Это прямая ссылка
-                    resolved_links[item] = {"short": item, "full": "", "status": "ok"}
-                else:
-                    # Это имя лейбла
-                    labels_to_fetch.append(item)
-                    
-            results = {}
-            if labels_to_fetch:
-                st.info(f"⏳ Шаг 1: Скачиваем настройки {len(labels_to_fetch)} лейблов...")
-                engine = BrandAuditorEngine(link_brand, host_map[link_env], token)
-                results = engine.get_bulk_label_values(labels_to_fetch, link_keyword)
-                
-                if results == "UNAUTHORIZED":
-                    st.error("❌ Токен авторизации протух.")
-                    st.stop()
-
-            # Добавляем результаты парсинга к общему пулу ссылок
-            for lbl_name, val in results.items():
-                if "❌" in val or "⚠️" in val:
-                    resolved_links[lbl_name] = {"short": val, "full": "", "status": "error"}
-                else:
-                    resolved_links[lbl_name] = {"short": val, "full": "", "status": "ok"}
-
-            st.info("🔗 Шаг 2: Раскручиваем все ссылки (проходим редиректы)...")
-            progress = st.progress(0)
-            
-            total_links = len(resolved_links)
-            for idx, (name, data) in enumerate(resolved_links.items()):
-                if data["status"] == "ok":
-                    full_url = resolve_short_url(data["short"])
-                    data["full"] = full_url
-                    if "❌" in full_url or "⚠️" in full_url:
-                        data["status"] = "error"
-                        
-                progress.progress((idx + 1) / total_links)
-                
-            st.success("✅ Проверка завершена!")
-            
-            # Отрисовка таблицы с результатами редиректов
-            html_table = "<table style='width:100%; border-collapse: collapse; font-family: monospace; font-size: 13px; text-align: left;'>"
-            html_table += "<tr style='background: #f1f5f9;'><th style='padding: 10px; border: 1px solid #cbd5e1; width: 25%;'>Имя Лейбла / Ссылка</th><th style='padding: 10px; border: 1px solid #cbd5e1; width: 25%;'>Short-link</th><th style='padding: 10px; border: 1px solid #cbd5e1; width: 50%;'>Финальный URL</th></tr>"
-            
-            for item_name in parsed_items:
-                data = resolved_links.get(item_name, {})
-                short_val = data.get("short", "")
-                full_val = data.get("full", "")
-                
-                if data.get("status") == "error":
-                    short_display = f"<span style='color: #b91c1c; font-weight: bold;'>{short_val}</span>"
-                    full_display = f"<span style='color: #b91c1c;'>{full_val}</span>"
-                    bg_color = "#fef2f2"
-                else:
-                    clean_short = str(short_val).split(" <br>")[0]
-                    short_display = f"<a href='{clean_short if clean_short.startswith('http') else 'https://'+clean_short}' target='_blank' style='color: #3b82f6;'>{html.escape(clean_short)}</a>"
-                    
-                    full_display = html.escape(full_val)
-                    if "?" in full_display:
-                        parts = full_display.split("?", 1)
-                        full_display = f"<a href='{html.escape(full_val)}' target='_blank' style='color: #059669; text-decoration: none;'>{parts[0]}<span style='color: #d97706; font-weight: bold;'>?{parts[1]}</span></a>"
-                    else:
-                        full_display = f"<a href='{html.escape(full_val)}' target='_blank' style='color: #059669; text-decoration: none;'>{full_display}</a>"
-                        
-                    bg_color = "#ffffff"
-                    
-                html_table += f"<tr style='background: {bg_color};'><td style='padding: 10px; border: 1px solid #cbd5e1;'><b>{html.escape(item_name)}</b></td><td style='padding: 10px; border: 1px solid #cbd5e1; word-break: break-all;'>{short_display}</td><td style='padding: 10px; border: 1px solid #cbd5e1; word-break: break-all;'>{full_display}</td></tr>"
-            
-            html_table += "</table>"
-            st.markdown(html_table, unsafe_allow_html=True)
+    return {"status": "success", "resolved_links": resolved_links}

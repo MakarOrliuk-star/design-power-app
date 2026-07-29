@@ -2,6 +2,16 @@ import { readFile } from "node:fs/promises";
 import { prisma } from "../src/lib/prisma.js";
 import { BRANDS, CATEGORIES, THEMES, BRAND_CATEGORIES } from "./seed-data/catalog.ts";
 import { BRAND_NANO_REFS } from "./seed-data/nano-refs.ts";
+import {
+  EMAIL_HERO_KEY,
+  EMAIL_HERO_V1,
+  EMAIL_HERO_V2,
+  EMAIL_HERO_V3,
+  PUSH_HERO_KEY,
+  PUSH_HERO_V1,
+  POPUP_HERO_KEY,
+  POPUP_HERO_V1,
+} from "../src/services/layoutSpec.ts";
 
 /**
  * Idempotent seed (upserts) — safe to re-run.
@@ -116,9 +126,28 @@ async function main() {
           // Слоёная сборка (D10 v2): фон-слой + прозрачные вырезки person/item
           // компонуются в секции по пикселям — структура гарантирована.
           composeMode: "layered",
+          // Версионируемая геометрия (Phase 1): рендер берёт последнюю
+          // активную версию LayoutSpec с этим ключом.
+          layoutSpecKey: EMAIL_HERO_KEY,
         },
-        { key: "popup", label: "Pop-up", width: 800, height: 600 },
-        { key: "push", label: "Push", width: 1024, height: 512 },
+        // push/pop-up идут тем же слоёным движком: прозрачная доставка и
+        // детерминированная раскладка вместо одной ai-генерации сцены.
+        {
+          key: "popup",
+          label: "Pop-up",
+          width: 800,
+          height: 600,
+          composeMode: "layered",
+          layoutSpecKey: POPUP_HERO_KEY,
+        },
+        {
+          key: "push",
+          label: "Push",
+          width: 1024,
+          height: 512,
+          composeMode: "layered",
+          layoutSpecKey: PUSH_HERO_KEY,
+        },
       ],
     },
     update: {},
@@ -135,6 +164,32 @@ async function main() {
     },
     update: {},
   });
+
+  // Layout specs (TASK email-composition). Create-only и версии неизменяемы:
+  // сид добавляет отсутствующие версии, правки живут в админке. Рендер берёт
+  // ПОСЛЕДНЮЮ активную версию ключа, поэтому email.hero v2 (прозрачный фон)
+  // вытесняет v1 автоматически, а v1 остаётся историей для старых бандлов.
+  const seededSpecs: Array<[string, number, object, boolean]> = [
+    [EMAIL_HERO_KEY, 1, EMAIL_HERO_V1, true],
+    [EMAIL_HERO_KEY, 2, EMAIL_HERO_V2, true],
+    // v3 — визуальный паттерн эталонов (Задание 2). Движок её блоки уже
+    // читает (Фазы 3–5), но сидируется она ВЫКЛЮЧЕННОЙ: коридоры декора
+    // (6–11 объектов, покрытие 5.6–10.2%) выполнимы только с библиотекой
+    // декора заказчика (DV-C1), которой ещё нет, — активная v3 без файлов
+    // роняла бы email-рендеры на валидаторе. Включение — релизный шаг после
+    // загрузки декора и шрифта: переключатель isActive в админке, без
+    // правки сида и деплоя. Это же и путь отката на v2.
+    [EMAIL_HERO_KEY, 3, EMAIL_HERO_V3, false],
+    [PUSH_HERO_KEY, 1, PUSH_HERO_V1, true],
+    [POPUP_HERO_KEY, 1, POPUP_HERO_V1, true],
+  ];
+  for (const [key, version, spec, isActive] of seededSpecs) {
+    await prisma.layoutSpec.upsert({
+      where: { key_version: { key, version } },
+      create: { key, version, spec, isActive },
+      update: {},
+    });
+  }
 
   const presetCount = await prisma.neuralPromptPreset.count();
   if (presetCount === 0) {
@@ -163,7 +218,7 @@ async function main() {
     `✅ Seeded: ${THEMES.length} themes, ${CATEGORIES.length} categories, ` +
       `${uniqueBrands.length} brands, ${linkCount} brand-category links, ` +
       `${nanoCount} brand nano-refs, ${styles.length} item-style prompts, ` +
-      `1 bundle type, ${presetCount === 0 ? 3 : 0} prompt presets`,
+      `1 bundle type, 1 layout spec, ${presetCount === 0 ? 3 : 0} prompt presets`,
   );
 }
 

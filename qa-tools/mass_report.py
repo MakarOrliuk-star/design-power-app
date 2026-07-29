@@ -4,9 +4,15 @@ import re
 import os
 import urllib.parse
 import random
-import streamlit as st
+import asyncio
+import threading 
+
 from datetime import timedelta
 from datetime import datetime
+from fastapi import APIRouter, HTTPException
+from fastapi.responses import StreamingResponse
+from pydantic import BaseModel
+from typing import List, Optional
 from playwright.sync_api import sync_playwright
 from core import GeneralCore
 from dotenv import load_dotenv
@@ -16,20 +22,30 @@ load_dotenv()
 SYSTEM_DOMAIN = os.getenv("SYSTEM_DOMAIN")
 
 if not SYSTEM_DOMAIN:
-    st.error("❌ Критическая ошибка: переменная SYSTEM_DOMAIN не найдена в файле .env!")
-    st.stop()
+    raise RuntimeError("❌ Критическая ошибка: переменная SYSTEM_DOMAIN не найдена в файле .env!")
+
+router = APIRouter(tags=["Mass Report"])
+
+# --- PYDANTIC СХЕМЫ ---
+class MassReportRequest(BaseModel):
+    urls: List[str]
+    token: str
+    use_stats: bool = True
+    days_back: int = 14
 
 # 📅 За какой период (в днях) собирать статистику для карты Flow Map
 LIVE_VIEW_DAYS = 14 
+
+# 🚨 ДОБАВИТЬ ЭТУ СТРОКУ:
+global_lock = threading.Semaphore(4)
 # =====================================================================
 
-def run_standalone_audit(url, token, use_live_view=True, days_back=14):
+def run_standalone_audit(url, token, use_live_view=True, days_back=14, log_cb=None):
     brand_match = re.search(rf"{re.escape(SYSTEM_DOMAIN)}/(\d+)", url)
     camp_match = re.search(r"(?:scheduled|head)/(\d+)", url)
     
     if not brand_match or not camp_match:
-        print("❌ Ошибка: Неверная ссылка")
-        return
+        raise ValueError(f"Неверный формат ссылки: {url}")
 
     brand_id = brand_match.group(1)
     camp_id = camp_match.group(1)
@@ -58,10 +74,10 @@ def run_standalone_audit(url, token, use_live_view=True, days_back=14):
 
         # 3. СБОР КАРТЫ ФЛОУ СО СТАТИСТИКОЙ
         # Увеличим визуальный контроль
-        st.toast(f"Запрашиваем Flow Map за {days_back} дн. Ожидайте...")
+        if log_cb: log_cb(f"Запрашиваем Flow Map за {days_back} дн. Ожидайте...", None)
         f_nodes, f_trans, audit_period = core.get_flow_data_live(
             camp_id, 
-            log_cb=lambda msg, pct: st.write(f"  `{msg}`"), # Пишем логи прямо в UI Streamlit
+            log_cb=lambda msg, pct: log_cb(f"  └─ {msg}", pct) if log_cb else None, # Пишем логи прямо в UI Streamlit
             use_live_view=use_live_view,
             days_back=days_back
         )
@@ -401,128 +417,110 @@ def run_standalone_audit(url, token, use_live_view=True, days_back=14):
         return campaign_block_html, camp_id
 
 # =====================================================================
-# 🖥️ СТРОИМ ПОЛЬЗОВАТЕЛЬСКИЙ ИНТЕРФЕЙС (STREAMLIT)
+# 🚀 ЭНДПОИНТ API (Streaming SSE)
 # =====================================================================
-def run_module(cookie_manager):
-    st.title("🕵️‍♂️ Массовый аудит (Monthly Report)")
+@router.post("/generate")
+async def generate_mass_report_stream(request: MassReportRequest):
+    """
+    Запускает массовый аудит списка кампаний в фоновом потоке.
+    Возвращает SSE поток с логами прогресса по каждой кампании.
+    Последним сообщением отдаёт склеенный HTML-отчет.
+    """
+    urls = [u.strip() for u in request.urls if u.strip()]
+    if not urls:
+        raise HTTPException(status_code=400, detail="Необходимо передать хотя бы одну ссылку.")
 
-    # Поле ввода URL (Многострочное)
-    urls_input = st.text_area("🔗 Список ссылок на кампании (каждая с новой строки)", placeholder="https://...\nhttps://...", height=150)
-    urls = [u.strip() for u in urls_input.split('\n') if u.strip()]
+    queue = asyncio.Queue()
+    loop = asyncio.get_running_loop()
 
-    st.markdown("---")
-    st.subheader("⚙️ Настройки статистики")
-    
-    # Чекбокс включен по умолчанию (value=True)
-    use_stats = st.checkbox("📈 Запросить статистику по юзерам", value=True, key="mass_audit_use_stats")
-    
-    days_input = 14 # Значение по умолчанию, если чекбокс выключен
-    if use_stats:
-        days_input = st.number_input("Количество дней для сбора данных", min_value=1, max_value=90, value=14, step=1, key="mass_audit_days_input")
-
-    st.markdown("---")
-    
-    # Проверяем, есть ли уже готовый отчет в памяти (чтобы кнопка скачивания не пропадала)
-    if 'final_mass_report' not in st.session_state:
-        st.session_state['final_mass_report'] = ""
-        st.session_state['processed_count'] = 0
-
-    if st.button("🚀 Запустить проверку", use_container_width=True, type="primary"):
-        if not urls:
-            st.error("❌ Пожалуйста, вставьте хотя бы одну ссылку.")
-            return
-
-        env_match = re.search(rf"drive(?:-(\d+))?\.{re.escape(SYSTEM_DOMAIN)}", urls[0])
-        env_suffix = env_match.group(1) if env_match and env_match.group(1) else "2"
-        env_key = f"env{env_suffix}"
-        
-        token_input = st.session_state.get(f"token_{env_key}", "")
-        
-        if not token_input:
-            st.error(f"❌ Нет авторизации для {env_key.upper()}. Введите актуальный Token в левом боковом меню.")
-            st.stop()
-
-        host_map = {
-            "env2": f"boapi.{SYSTEM_DOMAIN}", 
-            "env5": f"boapi5.{SYSTEM_DOMAIN}", 
-            "env7": f"boapi7.{SYSTEM_DOMAIN}"
-        }
-        check_host = host_map.get(env_key, f"boapi.{SYSTEM_DOMAIN}")
-        token_invalid = False
-        error_reason = ""
+    def sync_worker():
+        def stream_logger(msg, percent=None):
+            event_data = {"type": "progress", "msg": msg}
+            if percent is not None: event_data["percent"] = percent
+            asyncio.run_coroutine_threadsafe(queue.put(f"data: {json.dumps(event_data)}\n\n"), loop)
+            print(f"➜ [{percent if percent else '*'}] {msg}", flush=True)
 
         try:
-            ping_check = requests.get(f"https://{check_host}/api/users/me", headers={"authorization": token_input}, timeout=5)
+            stream_logger("Добавлен в очередь. Ждем ресурсов сервера...", 2)
             
-            if not ping_check.ok and ping_check.status_code != 291:
-                token_invalid = True
-                error_reason = f"HTTP {ping_check.status_code}"
-            else:
+            with global_lock:
+                stream_logger("Ресурсы получены! Запускаю процесс...", 5)
+                
+                # 1. Проверяем токен на живой базе первого URL (как было в старом коде)
+                env_match = re.search(rf"drive(?:-(\d+))?\.{re.escape(SYSTEM_DOMAIN)}", urls[0])
+                env_suffix = env_match.group(1) if env_match and env_match.group(1) else ""
+                check_host = f"boapi{env_suffix}.{SYSTEM_DOMAIN}" if env_suffix else f"boapi.{SYSTEM_DOMAIN}"
+                
                 try:
-                    resp_json = ping_check.json()
-                    if isinstance(resp_json, dict) and str(resp_json.get("status", "")).lower() in ["error", "unauthorized"]:
-                        token_invalid = True
-                        error_reason = "JSON Error (Unauthorized)"
-                except Exception:
-                    token_invalid = True
-                    error_reason = "HTML/Cloudflare Redirect"
-                    
-        except requests.exceptions.RequestException as e:
-            st.warning(f"⚠️ Сетевая задержка при проверке токена: {e}")
-
-        if token_invalid:
-            st.error(f"🔑 Ошибка авторизации ({error_reason})! Ваш токен невалидный неверен. Обновите его в левом боковом меню.")
-            st.stop()
-        # 👆 ========================================================= 👆
-
-        # Если скрипт дошел сюда, значит токен 100% живой. Начинаем аудит!
-        combined_html = '<div style="background: #f8fafc; padding: 20px; font-family: sans-serif;"><h1 style="text-align:center; color:#1e293b; margin-bottom: 30px;">Сводный отчет по аудиту</h1>'
-        progress_bar = st.progress(0)
-        
-        # Запускаем цикл по всем ссылкам
-        for i, current_url in enumerate(urls):
-            with st.spinner(f"⏳ Обработка {i+1} из {len(urls)}: {current_url}"):
-                try:
-                    report_html, campaign_id = run_standalone_audit(
-                        url=current_url, 
-                        token=token_input, 
-                        use_live_view=use_stats, 
-                        days_back=days_input if use_stats else 0
-                    )
-                    
-                    # Оборачиваем каждую кампанию в визуальный блок-разделитель
-                    combined_html += f'''
-                    <div style="border: 4px solid #cbd5e1; border-top: 8px solid #3b82f6; border-radius: 12px; margin-bottom: 40px; background: white; overflow: hidden; box-shadow: 0 4px 6px rgba(0,0,0,0.1);">
-                        <div style="background: #f1f5f9; padding: 15px 20px; border-bottom: 1px solid #cbd5e1;">
-                            <h2 style="margin: 0; color: #0f172a; font-size: 20px;">📌 Кампания #{campaign_id}</h2>
-                            <a href="{current_url}" target="_blank" style="color: #3b82f6; font-size: 13px;">{current_url}</a>
-                        </div>
-                        <div style="padding: 20px;">
-                            {report_html}
-                        </div>
-                    </div>
-                    '''
+                    ping = requests.get(f"https://{check_host}/api/users/me", headers={"authorization": request.token}, timeout=5)
+                    if not ping.ok and ping.status_code != 291:
+                        raise ValueError(f"HTTP {ping.status_code}")
                 except Exception as e:
-                    st.error(f"❌ Ошибка при обработке {current_url}: {e}")
-            
-            # Обновляем прогресс-бар
-            progress_bar.progress((i + 1) / len(urls))
-            
-        combined_html += '</div>'
-        
-        # Сохраняем итоговый склеенный HTML в сессию
-        st.session_state['final_mass_report'] = combined_html
-        st.session_state['processed_count'] = len(urls)
+                    # Если токен невалидный, сразу кидаем ошибку в стрим и закрываем его
+                    error_event = {"type": "error", "msg": f"Ошибка авторизации: Токен недействителен."}
+                    asyncio.run_coroutine_threadsafe(queue.put(f"data: {json.dumps(error_event)}\n\n"), loop)
+                    return
 
-    # ⚡️ ВЫВОД КНОПКИ СКАЧИВАНИЯ (Вне кнопки запуска) ⚡️
-    if st.session_state['final_mass_report']:
-        st.success(f"✅ Успешно сгенерирован сводный отчет ({st.session_state['processed_count']} камп.)!")
-        
-        st.download_button(
-            label=f"⬇️ Скачать сводный отчет",
-            data=st.session_state['final_mass_report'],
-            file_name=f"Mass_Audit_{datetime.now().strftime('%Y%m%d_%H%M')}.html",
-            mime="text/html",
-            type="primary",
-            use_container_width=True
-        )
+                # 2. Основной цикл по всем ссылкам
+                combined_html = '<div style="background: #f8fafc; padding: 20px; font-family: sans-serif;"><h1 style="text-align:center; color:#1e293b; margin-bottom: 30px;">Сводный отчет по аудиту</h1>'
+                total_urls = len(urls)
+
+                for i, current_url in enumerate(urls):
+                    base_percent = int(10 + (i / total_urls) * 80)
+                    stream_logger(f"⏳ Обработка {i+1} из {total_urls}: {current_url}", base_percent)
+                    
+                    try:
+                        # Запускаем оригинальную логику обработки одной ссылки
+                        report_html, campaign_id = run_standalone_audit(
+                            url=current_url, 
+                            token=request.token, 
+                            use_live_view=request.use_stats, 
+                            days_back=request.days_back if request.use_stats else 0,
+                            log_cb=stream_logger # Передаем логгер внутрь
+                        )
+                        
+                        combined_html += f'''
+                        <div style="border: 4px solid #cbd5e1; border-top: 8px solid #3b82f6; border-radius: 12px; margin-bottom: 40px; background: white; overflow: hidden; box-shadow: 0 4px 6px rgba(0,0,0,0.1);">
+                            <div style="background: #f1f5f9; padding: 15px 20px; border-bottom: 1px solid #cbd5e1;">
+                                <h2 style="margin: 0; color: #0f172a; font-size: 20px;">📌 Кампания #{campaign_id}</h2>
+                                <a href="{current_url}" target="_blank" style="color: #3b82f6; font-size: 13px;">{current_url}</a>
+                            </div>
+                            <div style="padding: 20px;">
+                                {report_html}
+                            </div>
+                        </div>
+                        '''
+                    except Exception as e:
+                        stream_logger(f"❌ Ошибка при обработке {current_url}: {e}", base_percent)
+                
+                combined_html += '</div>'
+                
+                # 3. Финальный аккорд - отдаем склеенный HTML
+                stream_logger("✅ МАССОВЫЙ АУДИТ ЗАВЕРШЕН!", 100)
+                final_file_name = f"Mass_Audit_{datetime.now().strftime('%Y%m%d_%H%M')}.html"
+                
+                done_event = {
+                    "type": "done",
+                    "filename": final_file_name,
+                    "html_content": combined_html
+                }
+                asyncio.run_coroutine_threadsafe(queue.put(f"data: {json.dumps(done_event)}\n\n"), loop)
+                    
+        except Exception as e:
+            error_event = {"type": "error", "msg": f"Критическая ошибка: {str(e)}"}
+            asyncio.run_coroutine_threadsafe(queue.put(f"data: {json.dumps(error_event)}\n\n"), loop)
+        finally:
+            asyncio.run_coroutine_threadsafe(queue.put(None), loop)
+
+    threading.Thread(target=sync_worker, daemon=True).start()
+
+    async def async_event_generator():
+        while True:
+            try:
+                data = await asyncio.wait_for(queue.get(), timeout=15.0)
+                if data is None: break
+                yield data
+            except asyncio.TimeoutError:
+                yield ": keepalive\n\n"
+
+    return StreamingResponse(async_event_generator(), media_type="text/event-stream")

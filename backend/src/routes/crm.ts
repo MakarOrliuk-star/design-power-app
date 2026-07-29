@@ -19,6 +19,7 @@ const VALID_SERVICE_KEYS = new Set([
   "smartico",
   "chrome_extensions",
   "prioritycalc",
+  "qatools",
   // Image Bundles (TASK crm-bundle). Favoriting is allowed for any CRM-zone
   // user, but the tile itself is role-gated on the FE and the /api/bundles
   // router by requireCrmSuper — a favorite alone grants nothing.

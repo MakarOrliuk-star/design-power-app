@@ -119,6 +119,18 @@ export function modeLabel(mode: PackMode | null): string {
   return mode === "VIP" ? "VIP" : "Base";
 }
 
+/**
+ * Subgroup title: element name + mode suffix — but admin-set names may already
+ * end with it ("Tournament_1_VIP"), so the suffix is only appended when missing
+ * (old batches keep their "Tournament_1_Base" look).
+ */
+export function subgroupTitle(elementName: string, mode: PackMode | null): string {
+  const label = modeLabel(mode);
+  return elementName.toLowerCase().endsWith(`_${label.toLowerCase()}`)
+    ? elementName
+    : `${elementName}_${label}`;
+}
+
 export interface PackSubgroup {
   key: string; // "Tournament_1:BASE"
   title: string; // "Tournament_1_Base" (mock: the subcategory line)
@@ -138,7 +150,7 @@ export function groupPackByElement(generations: PackGeneration[]): PackSubgroup[
     const key = `${el}:${g.tourMode ?? "BASE"}`;
     let group = map.get(key);
     if (!group) {
-      group = { key, title: `${el}_${modeLabel(g.tourMode)}`, images: [] };
+      group = { key, title: subgroupTitle(el, g.tourMode), images: [] };
       map.set(key, group);
     }
     group.images.push(g);

@@ -178,7 +178,9 @@ export function useArchive(deps: ArchiveDeps) {
     copy(img.generatedImageUrl);
   }
   function downloadOne(img: GalleryImage) {
-    download(img.generatedImageUrl);
+    // Proxied through the backend — a cross-origin <a download> to Cloudinary
+    // is ignored by the browser and just opened the image in a new tab.
+    download(`${apiBase}/api/generations/${img.id}/download`);
   }
   function copySelected() {
     if (!selectedImages.value.length) return;

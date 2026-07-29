@@ -113,6 +113,10 @@ function openCreateStyle() {
   userMenuOpen.value = false;
   superDesigner.openCreate();
 }
+function openEditStyle() {
+  userMenuOpen.value = false;
+  superDesigner.openEditCurrent();
+}
 function goLibrary() {
   userMenuOpen.value = false;
   void navigateTo("/library");
@@ -360,6 +364,9 @@ onBeforeUnmount(() => document.removeEventListener("click", onDocClick));
       <div v-if="userMenuOpen && auth.canCreateStyles" class="user-menu">
         <button class="user-menu__item" type="button" @click="openCreateStyle">
           Create a New Style
+        </button>
+        <button class="user-menu__item" type="button" @click="openEditStyle">
+          Edit current style
         </button>
         <button class="user-menu__item" type="button" @click="goLibrary">Library</button>
       </div>

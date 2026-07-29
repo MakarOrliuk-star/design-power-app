@@ -1,6 +1,7 @@
 import { describe, it, expect } from "vitest";
 import {
   effectiveMode,
+  elementDisplayName,
   categoryStateOf,
   toggleCategoryIds,
   resolvePromptValue,
@@ -29,6 +30,7 @@ function el(over: Partial<TourElement> = {}): TourElement {
   return {
     id: "e1",
     name: "Tournament_1",
+    nameVip: null,
     order: 0,
     referenceImages: [],
     prompts: { BASE: { content: "default base", updatedAt: "2026-07-01" } },
@@ -53,6 +55,19 @@ describe("effectiveMode", () => {
   it("fixed-mode category ignores the toggle map", () => {
     const c = cat({ key: "calendar_vip", hasModes: false, fixedMode: "VIP" });
     expect(effectiveMode(c, { calendar_vip: "BASE" } as never)).toBe("VIP");
+  });
+});
+
+describe("elementDisplayName — separate Base/VIP names on the card", () => {
+  it("VIP shows nameVip when set; BASE always shows name", () => {
+    const e = el({ name: "Tournament_1_BASE", nameVip: "Tournament_1_VIP" });
+    expect(elementDisplayName(e, "VIP")).toBe("Tournament_1_VIP");
+    expect(elementDisplayName(e, "BASE")).toBe("Tournament_1_BASE");
+  });
+
+  it("VIP falls back to the Base name while nameVip is empty", () => {
+    expect(elementDisplayName(el(), "VIP")).toBe("Tournament_1");
+    expect(elementDisplayName(el({ nameVip: "  " }), "VIP")).toBe("Tournament_1");
   });
 });
 

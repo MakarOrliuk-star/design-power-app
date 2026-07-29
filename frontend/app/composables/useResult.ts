@@ -348,6 +348,13 @@ export function useResult(deps: {
     setTimeout(() => (exporting.value = false), 800);
   }
 
+  // ---- Direct per-card download (TASK download-and-edit-style §1) ----
+  // Proxied through the backend: a cross-origin <a download> to Cloudinary is
+  // ignored by the browser, the same-origin endpoint attaches the real file.
+  function downloadOne(img: { id: string }) {
+    download?.(`${apiBase}/api/generations/${img.id}/download`);
+  }
+
   // ---- Edit flow (Phase 4) ----
   const editPrompt = ref(""); // ALL mode: one shared instruction
   const perEditPrompts = ref<Record<string, string>>({}); // EACH mode: per-image
@@ -597,6 +604,8 @@ export function useResult(deps: {
     // zip export
     exportZip,
     exporting,
+    // per-card download
+    downloadOne,
     // edit
     editPrompt,
     perEditPrompts,

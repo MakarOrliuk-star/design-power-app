@@ -1,7 +1,7 @@
 import { createHash } from "node:crypto";
 import { prisma } from "../lib/prisma.js";
 import { ensureRedis, redis } from "../lib/redis.js";
-import { getPersonSystemPrompt } from "../services/prompts.js";
+import { getPersonSystemPrompt, DEFAULT_PERSON_SYSTEM_PROMPT } from "../services/prompts.js";
 import { buildPersonPrompt } from "../lib/nanogpt.js";
 import { runPersonFal } from "../lib/fal.js";
 import { uploadFromUrl, withRetry } from "../lib/cloudinary.js";
@@ -22,7 +22,7 @@ export async function processPersonJob(generationId: string, aspectRatio = "1:1"
       description: true,
       referenceImages: true,
       batchId: true,
-      job: { select: { id: true, cloudinaryFolder: true } },
+      job: { select: { id: true, cloudinaryFolder: true, draftOverrides: true } },
     },
   });
   if (!gen || !gen.job) return; // row/job gone (cancelled) → no-op
@@ -36,19 +36,34 @@ export async function processPersonJob(generationId: string, aspectRatio = "1:1"
   });
 
   const userText = gen.description ?? "";
-  const builtPrompt = await buildPersonPromptMemoized(gen.batchId ?? "", gen.brandName, userText);
+  // Draft brand-test overrides (TASK download-and-edit-style §2): unsaved
+  // personPrompt/imageModel a super-designer is testing — they beat the DB rows.
+  const overrides = (gen.job.draftOverrides ?? null) as {
+    personPrompt?: string;
+    imageModel?: string | null;
+  } | null;
+  const builtPrompt =
+    overrides?.personPrompt !== undefined
+      ? await buildPersonPrompt(overrides.personPrompt || DEFAULT_PERSON_SYSTEM_PROMPT, userText)
+      : await buildPersonPromptMemoized(gen.batchId ?? "", gen.brandName, userText);
   // ADDENDUM §7: two refs are blended via the PROMPT (nano-banana-2/edit has no
   // strength/controlnet weights). First image = brand style ref; the rest = the
   // user-uploaded image.
   const prompt = withBlendingHint(builtPrompt, gen.referenceImages.length);
 
   // Per-brand fal model override (admin-managed); null → default nano-banana-2.
-  const brand = await prisma.brand.findUnique({
-    where: { name: gen.brandName },
-    select: { imageModel: true },
-  });
+  let imageModel: string | null;
+  if (overrides && "imageModel" in overrides) {
+    imageModel = overrides.imageModel ?? null;
+  } else {
+    const brand = await prisma.brand.findUnique({
+      where: { name: gen.brandName },
+      select: { imageModel: true },
+    });
+    imageModel = brand?.imageModel ?? null;
+  }
 
-  const fal = await runPersonFal(prompt, gen.referenceImages, aspectRatio, brand?.imageModel ?? null);
+  const fal = await runPersonFal(prompt, gen.referenceImages, aspectRatio, imageModel);
   if (!fal.success || !fal.imageUrl) {
     await prisma.job.update({ where: { id: jobId }, data: { status: "FAILED" } });
     await finalizeFailure(generationId, `fal: ${fal.error ?? "unknown"}`);
