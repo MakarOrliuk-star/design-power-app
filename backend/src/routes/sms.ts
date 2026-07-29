@@ -15,12 +15,12 @@ const DEFAULT_ALLOWED_COUNTRIES = [
   "united kingdom"
 ];
 
-// Инициализируем очередь для отправки задач воркеру
+// Initialize the order for worker to process
 const smsQueue = new Queue(SMS_QUEUE, { connection: getBullConnection() });
 
 export const smsRouter = Router();
 
-// Схема валидации входящего тела запроса от Vue-фронтенда
+// Validating request body from frontend
 const smsBatchSchema = z.object({
   provider: z.enum(["dm", "miatel", "fortytwo", "messagewhiz"]),
   dmTokenKey: z.string().optional(),

@@ -82,7 +82,7 @@ const loadingHistory = ref(false);
 const historyCampaigns = ref<SmsCampaign[]>([]);
 
 // ==========================================
-// COMPUTED (БЕЗ ИСПОЛЬЗОВАНИЯ ?.)
+// COMPUTED
 // ==========================================
 const availableCountries = computed(() => {
   const map = new Map<string, string>();
@@ -92,7 +92,9 @@ const availableCountries = computed(() => {
       map.set(cName, n.mcc);
     }
   });
-  return Array.from(map.entries()).map(([name, mcc]) => ({ name, mcc })).sort((a, b) => a.name.localeCompare(b.name));
+  return Array.from(map.entries())
+    .map(([name, mcc]) => ({ name, mcc }))
+    .sort((a, b) => a.name.localeCompare(b.name));
 });
 
 const filteredNetworks = computed(() => {
@@ -157,7 +159,7 @@ async function fetchNetworks() {
   try {
     const res = await fetch('/api/sms/networks', { credentials: 'include' });
     const json = await res.json();
-    if (json.success && Array.isArray(json.data)) {
+    if (json && json.success && Array.isArray(json.data)) {
       networks.value = json.data.map((n: SmsNetwork, idx: number) => ({
         ...n,
         _uid: idx,
@@ -210,6 +212,13 @@ function toggleAllNetworks(status: boolean) {
   selectedNetworkUids.value = newSet;
 }
 
+function handleToggleAllNetworks(e: Event) {
+  const target = e.target as HTMLInputElement | null;
+  if (target) {
+    toggleAllNetworks(target.checked);
+  }
+}
+
 function toggleNetworkUid(uid?: number) {
   if (uid === undefined) return;
   const newSet = new Set(selectedNetworkUids.value);
@@ -233,7 +242,7 @@ async function proceedToStep2() {
       body: JSON.stringify({ countries: uniqueSelectedCountries }),
     });
     const json = await res.json();
-    if (json.success && json.data) {
+    if (json && json.success && json.data) {
       templatesMapping.value = json.data;
 
       const newMap: Record<string, string> = {};
@@ -272,7 +281,7 @@ async function saveTemplateChanges() {
       body: JSON.stringify(editingTemplate.value),
     });
     const json = await res.json();
-    if (json.success) {
+    if (json && json.success) {
       editingTemplate.value = null;
       proceedToStep2();
     }
@@ -305,12 +314,12 @@ async function startBatchProcess() {
       }),
     });
     const json = await res.json();
-    if (json.success && json.campaignId) {
+    if (json && json.success && json.campaignId) {
       activeCampaignId.value = json.campaignId;
       currentStep.value = 3;
       startPolling();
     } else {
-      alert(json.error || 'Ошибка при создании кампании');
+      alert((json && json.error) ? json.error : 'Ошибка при создании кампании');
     }
   } catch (err) {
     console.error('Failed to start batch:', err);
@@ -337,7 +346,7 @@ async function pollCampaignStatus() {
   try {
     const res = await fetch(`/api/sms/campaign/${activeCampaignId.value}`, { credentials: 'include' });
     const json = await res.json();
-    if (json.success && json.campaign) {
+    if (json && json.success && json.campaign) {
       activeCampaign.value = json.campaign;
       if (['completed', 'failed'].includes(json.campaign.status)) {
         stopPolling();
@@ -353,7 +362,7 @@ async function fetchHistory() {
   try {
     const res = await fetch('/api/sms/history', { credentials: 'include' });
     const json = await res.json();
-    if (json.success) {
+    if (json && json.success) {
       historyCampaigns.value = json.campaigns || [];
     }
   } catch (err) {
@@ -506,8 +515,8 @@ onUnmounted(() => {
           <div class="card-header-flex">
             <h3 class="token-title">2. Выбор целевых стран и операторов</h3>
             <div class="btn-group-sm">
-              <button class="crm-btn-sec" @click="selectAllCountries(true)">Выбрать все</button>
-              <button class="crm-btn-sec" @click="selectAllCountries(false)">Очистить</button>
+              <button class="crm-btn-sec-sm" @click="selectAllCountries(true)">Выбрать все</button>
+              <button class="crm-btn-sec-sm" @click="selectAllCountries(false)">Очистить</button>
             </div>
           </div>
 
@@ -537,11 +546,11 @@ onUnmounted(() => {
             <table class="results-grid">
               <thead>
                 <tr>
-                  <th style="width: 40px">
+                  <th style="width: 36px">
                     <input 
                       type="checkbox" 
                       :checked="isAllFilteredSelected" 
-                      @change="toggleAllNetworks(($event.target as HTMLInputElement).checked)" 
+                      @change="handleToggleAllNetworks" 
                     />
                   </th>
                   <th>Страна</th>
@@ -652,7 +661,7 @@ onUnmounted(() => {
       <!-- STEP 3: LIVE MONITORING -->
       <div v-if="currentStep === 3" class="step-content">
         <!-- Stats Summary Grid -->
-        <div class="grid-4 mb-20">
+        <div class="grid-4 mb-10">
           <div class="sms-card stat-card">
             <span class="stat-label">Всего номеров</span>
             <span class="stat-val">{{ activeTotal }}</span>
@@ -688,7 +697,7 @@ onUnmounted(() => {
                 <th>Sender ID</th>
                 <th>Текст СМС</th>
                 <th>Статус</th>
-                <th>Задержка (сек)</th>
+                <th>Задержка</th>
               </tr>
             </thead>
             <tbody>
@@ -702,10 +711,10 @@ onUnmounted(() => {
                     {{ msg.status }}
                   </span>
                 </td>
-                <td>{{ msg.latency ? `${msg.latency}s` : '-' }}</td>
+                <td>{{ msg.latency ? msg.latency + 's' : '-' }}</td>
               </tr>
               <tr v-if="activeMessagesList.length === 0">
-                <td colspan="6" class="text-center py-20">Ожидание отправки сообщений воркером...</td>
+                <td colspan="6" class="text-center py-10">Ожидание отправки сообщений воркером...</td>
               </tr>
             </tbody>
           </table>
@@ -735,10 +744,10 @@ onUnmounted(() => {
           </thead>
           <tbody>
             <tr v-for="c in historyCampaigns" :key="c.id">
-              <td>{{ new Date(c.createdAt).toLocaleString('ru-RU') }}</td>
+              <td>{{ c.createdAt ? new Date(c.createdAt).toLocaleString('ru-RU') : '-' }}</td>
               <td><code class="uppercase">{{ c.provider }}</code></td>
-              <td>{{ c.stats.total }}</td>
-              <td>{{ c.stats.delivered }} / {{ c.stats.sent }}</td>
+              <td>{{ c.stats ? c.stats.total : 0 }}</td>
+              <td>{{ c.stats ? c.stats.delivered : 0 }} / {{ c.stats ? c.stats.sent : 0 }}</td>
               <td>
                 <span class="pill" :class="getStatusBadgeClass(c.status)">
                   {{ c.status.toUpperCase() }}
@@ -756,10 +765,10 @@ onUnmounted(() => {
         <h3 class="token-title">Редактирование шаблона ({{ editingTemplate.country }} - {{ editingTemplate.language }})</h3>
         <div class="input-group">
           <label>Текст маркетингового СМС</label>
-          <textarea v-model="editingTemplate.body" class="crm-textarea" rows="4"></textarea>
+          <textarea v-model="editingTemplate.body" class="crm-textarea" rows="3"></textarea>
         </div>
         <div class="actions-row right">
-          <button class="crm-btn-sec" @click="editingTemplate = null">Отмена</button>
+          <button class="crm-btn-sec-sm" @click="editingTemplate = null">Отмена</button>
           <button class="crm-btn-primary" @click="saveTemplateChanges">Сохранить</button>
         </div>
       </div>
@@ -771,16 +780,16 @@ onUnmounted(() => {
 .sms-panel {
   display: flex;
   flex-direction: column;
-  gap: 20px;
+  gap: 12px;
   font-family: inherit;
 }
 
 .sms-card {
   background: #ffffff;
   border: 1px solid #e4e4e7;
-  border-radius: 12px;
-  padding: 24px;
-  box-shadow: 0 1px 3px rgba(0,0,0,0.05);
+  border-radius: 8px;
+  padding: 14px 18px;
+  box-shadow: 0 1px 2px rgba(0,0,0,0.04);
 }
 
 .header-title-row {
@@ -792,50 +801,64 @@ onUnmounted(() => {
 .title-meta {
   display: flex;
   align-items: center;
-  gap: 16px;
+  gap: 12px;
 }
 
 .service-icon {
-  font-size: 32px;
+  font-size: 24px;
 }
 
 .card-title {
   margin: 0;
-  font-size: 20px;
+  font-size: 16px;
   font-weight: 700;
   color: #18181b;
 }
 
 .subtitle {
-  margin: 4px 0 0 0;
-  font-size: 13px;
+  margin: 2px 0 0 0;
+  font-size: 12px;
   color: #71717a;
+}
+
+.token-title {
+  margin: 0 0 8px 0;
+  font-size: 14px;
+  font-weight: 600;
+  color: #18181b;
+}
+
+.card-header-flex {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 8px;
 }
 
 .sub-tabs-nav {
   display: flex;
-  gap: 8px;
+  gap: 4px;
   background: #f4f4f5;
-  padding: 4px;
-  border-radius: 8px;
+  padding: 3px;
+  border-radius: 6px;
 }
 
 .sub-tab-btn {
   border: none;
   background: transparent;
-  padding: 8px 16px;
-  font-size: 13px;
+  padding: 5px 12px;
+  font-size: 12px;
   font-weight: 600;
   color: #71717a;
-  border-radius: 6px;
+  border-radius: 4px;
   cursor: pointer;
-  transition: all 0.2s;
+  transition: all 0.15s ease;
 }
 
 .sub-tab-btn.sub-active {
   background: #ffffff;
   color: #0284c7;
-  box-shadow: 0 1px 2px rgba(0,0,0,0.05);
+  box-shadow: 0 1px 2px rgba(0,0,0,0.04);
 }
 
 /* Stepper */
@@ -844,32 +867,32 @@ onUnmounted(() => {
   align-items: center;
   justify-content: space-between;
   background: #ffffff;
-  padding: 16px 32px;
-  border-radius: 12px;
+  padding: 8px 18px;
+  border-radius: 8px;
   border: 1px solid #e4e4e7;
 }
 
 .step-item {
   display: flex;
   align-items: center;
-  gap: 10px;
+  gap: 6px;
   color: #a1a1aa;
   font-weight: 600;
-  font-size: 14px;
+  font-size: 12px;
 }
 
 .step-item.active { color: #0284c7; }
 .step-item.completed { color: #10b981; }
 
 .step-num {
-  width: 28px;
-  height: 28px;
+  width: 22px;
+  height: 22px;
   border-radius: 50%;
   background: #f4f4f5;
   display: flex;
   align-items: center;
   justify-content: center;
-  font-size: 13px;
+  font-size: 11px;
 }
 
 .step-item.active .step-num { background: #0284c7; color: #fff; }
@@ -877,33 +900,46 @@ onUnmounted(() => {
 
 .step-line {
   flex: 1;
-  height: 2px;
+  height: 1px;
   background: #e4e4e7;
-  margin: 0 16px;
+  margin: 0 12px;
 }
 
 /* Forms & Inputs */
-.grid-3 { display: grid; grid-template-columns: repeat(3, 1fr); gap: 16px; }
-.grid-4 { display: grid; grid-template-columns: repeat(4, 1fr); gap: 16px; }
+.grid-3 { display: grid; grid-template-columns: repeat(3, 1fr); gap: 10px; }
+.grid-4 { display: grid; grid-template-columns: repeat(4, 1fr); gap: 10px; }
+.mb-10 { margin-bottom: 10px; }
 
 .input-group {
   display: flex;
   flex-direction: column;
-  gap: 6px;
+  gap: 3px;
 }
 
 .input-group label {
-  font-size: 13px;
+  font-size: 11px;
   font-weight: 600;
   color: #3f3f46;
 }
 
-.crm-input, .crm-textarea {
+.crm-input {
   width: 100%;
-  padding: 10px 14px;
+  height: 32px;
+  padding: 4px 10px;
   border: 1px solid #d4d4d8;
-  border-radius: 8px;
-  font-size: 14px;
+  border-radius: 6px;
+  font-size: 12px;
+  background: #fff;
+  color: #18181b;
+  outline: none;
+}
+
+.crm-textarea {
+  width: 100%;
+  padding: 6px 10px;
+  border: 1px solid #d4d4d8;
+  border-radius: 6px;
+  font-size: 12px;
   background: #fff;
   color: #18181b;
   outline: none;
@@ -913,28 +949,38 @@ onUnmounted(() => {
   border-color: #0284c7;
 }
 
-.hint { font-size: 11px; color: #a1a1aa; }
+.hint { font-size: 10px; color: #a1a1aa; }
 
-/* Tags & Table */
+/* Compact Country Tags Grid */
 .countries-tags-grid {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 8px;
-  margin-top: 12px;
-  max-height: 180px;
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(130px, 1fr));
+  gap: 6px;
+  margin-top: 6px;
+  max-height: 140px;
   overflow-y: auto;
+  padding-right: 4px;
 }
 
 .country-tag {
   display: flex;
   align-items: center;
   gap: 6px;
-  padding: 6px 12px;
+  padding: 3px 8px;
   border: 1px solid #e4e4e7;
-  border-radius: 20px;
-  font-size: 13px;
+  border-radius: 6px;
+  font-size: 12px;
   cursor: pointer;
   background: #fafafa;
+  height: 28px;
+  user-select: none;
+  transition: all 0.15s ease;
+}
+
+.country-tag span {
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
 .country-tag.selected {
@@ -944,20 +990,21 @@ onUnmounted(() => {
   font-weight: 600;
 }
 
+/* Tables */
 .networks-table-wrapper {
-  margin-top: 20px;
-  max-height: 350px;
+  margin-top: 12px;
+  max-height: 280px;
   overflow-y: auto;
 }
 
 .results-grid {
   width: 100%;
   border-collapse: collapse;
-  font-size: 13px;
+  font-size: 12px;
 }
 
 .results-grid th, .results-grid td {
-  padding: 10px 14px;
+  padding: 6px 10px;
   border-bottom: 1px solid #f4f4f5;
   text-align: left;
 }
@@ -966,25 +1013,48 @@ onUnmounted(() => {
   background: #fafafa;
   color: #71717a;
   font-weight: 600;
+  position: sticky;
+  top: 0;
+  z-index: 2;
+}
+
+.template-preview {
+  max-width: 280px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  color: #71717a;
+}
+
+.badge-count {
+  background: #e0f2fe;
+  color: #0369a1;
+  padding: 2px 8px;
+  border-radius: 10px;
+  font-size: 11px;
+  font-weight: 600;
 }
 
 /* Actions */
 .actions-row {
   display: flex;
   justify-content: flex-end;
-  gap: 12px;
-  margin-top: 20px;
+  gap: 8px;
+  margin-top: 12px;
 }
 
 .actions-row.space-between { justify-content: space-between; }
+.actions-row.right { justify-content: flex-end; }
 
 .crm-btn-primary {
   background: #0284c7;
   color: #fff;
   border: none;
-  padding: 10px 20px;
-  border-radius: 8px;
+  padding: 6px 14px;
+  border-radius: 6px;
   font-weight: 600;
+  font-size: 12px;
+  height: 32px;
   cursor: pointer;
 }
 
@@ -992,9 +1062,11 @@ onUnmounted(() => {
   background: #10b981;
   color: #fff;
   border: none;
-  padding: 10px 20px;
-  border-radius: 8px;
+  padding: 6px 14px;
+  border-radius: 6px;
   font-weight: 600;
+  font-size: 12px;
+  height: 32px;
   cursor: pointer;
 }
 
@@ -1002,26 +1074,31 @@ onUnmounted(() => {
   background: #f4f4f5;
   color: #3f3f46;
   border: 1px solid #d4d4d8;
-  padding: 10px 16px;
-  border-radius: 8px;
+  padding: 6px 14px;
+  border-radius: 6px;
   font-weight: 600;
+  font-size: 12px;
+  height: 32px;
   cursor: pointer;
 }
 
 .crm-btn-sec-sm {
   background: #f4f4f5;
   border: 1px solid #d4d4d8;
-  padding: 4px 8px;
-  border-radius: 6px;
-  font-size: 12px;
+  padding: 3px 8px;
+  border-radius: 4px;
+  font-size: 11px;
+  height: 26px;
   cursor: pointer;
 }
 
+.btn-group-sm { display: flex; gap: 4px; }
+
 /* Pills */
 .pill {
-  padding: 4px 10px;
-  border-radius: 12px;
-  font-size: 11px;
+  padding: 2px 8px;
+  border-radius: 10px;
+  font-size: 10px;
   font-weight: 700;
   display: inline-block;
 }
@@ -1032,12 +1109,22 @@ onUnmounted(() => {
 .pill-yellow { background: #fef3c7; color: #b45309; }
 
 /* Stat Cards */
-.stat-card { display: flex; flex-direction: column; gap: 4px; }
-.stat-label { font-size: 12px; color: #71717a; font-weight: 600; }
-.stat-val { font-size: 24px; font-weight: 800; color: #18181b; }
+.stat-card { display: flex; flex-direction: column; gap: 2px; padding: 10px 14px; }
+.stat-label { font-size: 11px; color: #71717a; font-weight: 600; }
+.stat-val { font-size: 18px; font-weight: 800; color: #18181b; }
 .text-blue { color: #0284c7; }
 .text-green { color: #10b981; }
 .text-emerald { color: #059669; }
+
+.loading-state {
+  font-size: 12px;
+  color: #71717a;
+  padding: 12px 0;
+  text-align: center;
+}
+
+.text-center { text-align: center; }
+.py-10 { padding-top: 10px; padding-bottom: 10px; }
 
 /* Modal */
 .modal-overlay {
@@ -1050,20 +1137,16 @@ onUnmounted(() => {
   z-index: 1000;
 }
 
-.modal-card { width: 500px; max-width: 90%; }
+.modal-card { width: 460px; max-width: 90%; }
 </style>
 
-<!-- 
-  =====================================================================
-  🌙 DARK MODE (Железобетонный метод) 
-  ===================================================================== 
--->
+<!-- 🌙 DARK MODE OVERRIDES -->
 <style>
 html[data-theme="dark"] .sms-panel .sms-card,
 html[data-theme="dark"] .sms-panel .stepper-nav {
   background: #18181b !important;
   border-color: #27272a !important;
-  box-shadow: 0 4px 6px rgba(0,0,0,0.3) !important;
+  box-shadow: 0 2px 4px rgba(0,0,0,0.3) !important;
 }
 
 html[data-theme="dark"] .sms-panel .card-title,
@@ -1074,7 +1157,8 @@ html[data-theme="dark"] .sms-panel .stat-val {
 
 html[data-theme="dark"] .sms-panel .subtitle,
 html[data-theme="dark"] .sms-panel .stat-label,
-html[data-theme="dark"] .sms-panel .hint {
+html[data-theme="dark"] .sms-panel .hint,
+html[data-theme="dark"] .sms-panel .template-preview {
   color: #a1a1aa !important;
 }
 
@@ -1136,22 +1220,22 @@ html[data-theme="dark"] .sms-panel .crm-btn-sec-sm {
 }
 
 html[data-theme="dark"] .sms-panel .pill-green {
-  background: rgba(16, 185, 129, 0.1) !important;
+  background: rgba(16, 185, 129, 0.15) !important;
   color: #34d399 !important;
 }
 
 html[data-theme="dark"] .sms-panel .pill-red {
-  background: rgba(239, 68, 68, 0.1) !important;
+  background: rgba(239, 68, 68, 0.15) !important;
   color: #f87171 !important;
 }
 
 html[data-theme="dark"] .sms-panel .pill-blue {
-  background: rgba(56, 189, 248, 0.1) !important;
+  background: rgba(56, 189, 248, 0.15) !important;
   color: #38bdf8 !important;
 }
 
 html[data-theme="dark"] .sms-panel .pill-yellow {
-  background: rgba(245, 158, 11, 0.1) !important;
+  background: rgba(245, 158, 11, 0.15) !important;
   color: #fbbf24 !important;
 }
 </style>
