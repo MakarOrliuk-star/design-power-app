@@ -12,7 +12,7 @@ const { theme, toggle: toggleTheme } = useTheme();
 
 // Only services with real logic are openable (and favoritable). The "soon"
 // tiles are disabled placeholders — see SERVICES below.
-type ServiceKey = "calculator" | "bonuscalc" | "auditor" | "smartico" | "prioritycalc" | "bundles";
+type ServiceKey = "calculator" | "bonuscalc" | "auditor" | "smartico" | "prioritycalc" | "bundles" | "sms";
 const activeService = ref<null | ServiceKey>(null);
 
 const route = useRoute();
@@ -27,6 +27,7 @@ const OPENABLE = new Set<ServiceKey>([
   "smartico",
   "prioritycalc",
   "bundles",
+  "sms",
 ]);
 
 // How we arrived: captured once so a Drive OAuth return (/crm?drive=...) can be
@@ -132,6 +133,15 @@ const SERVICES: Service[] = [
     footer: "Запустить сервис →",
     soon: false,
     roles: ["CRM_SUPER", "ADMIN", "MANAGER"],
+  },
+  {
+    key: "sms",
+    title: "СМС-Плейсмент Тестер",
+    desc: "Массовая проверка доставки маркетинговых СМС по каналам операторов связи через TelQ.",
+    icon: "📱",
+    iconBg: "#e0f2fe",
+    footer: "Запустить сервис →",
+    soon: false,
   }
 ];
 
@@ -142,6 +152,7 @@ const SERVICE_TITLES: Record<ServiceKey, string> = {
   smartico: "Unique Image Smartico",
   prioritycalc: "Калькулятор Приоритетов",
   bundles: "Image Bundles",
+  sms: "СМС-Плейсмент Тестер",
 };
 
 const displayName = computed(() => auth.user?.name || auth.user?.email || "");
@@ -347,6 +358,7 @@ onMounted(() => {
           <CrmSmartico v-else-if="activeService === 'smartico'" :drive-return="driveReturn" />
           <PriorityCalculator v-else-if="activeService === 'prioritycalc'" />
           <CrmBundles v-else-if="activeService === 'bundles'" />
+          <SmsRouteTester v-else-if="activeService === 'sms'" />
         </div>
       </div>
     </div>
