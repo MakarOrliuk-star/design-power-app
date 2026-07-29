@@ -5,6 +5,16 @@ import { Queue } from "bullmq";
 import { SMS_QUEUE, getBullConnection } from "../queues/index.js";
 import { env } from "../env.js";
 
+const DEFAULT_ALLOWED_COUNTRIES = [
+  "albania", "australia", "austria", "belgium", "bosnia and herzegovina",
+  "brazil", "bulgaria", "canada", "croatia", "czech republic", "denmark",
+  "estonia", "finland", "france", "germany", "greece", "hungary", "ireland",
+  "italy", "luxembourg", "montenegro", "netherlands", "new zealand",
+  "north macedonia", "norway", "poland", "portugal", "romania", "serbia",
+  "slovakia", "slovenia", "south korea", "spain", "sweden", "switzerland",
+  "united kingdom"
+];
+
 // Инициализируем очередь для отправки задач воркеру
 const smsQueue = new Queue(SMS_QUEUE, { connection: getBullConnection() });
 
@@ -132,10 +142,38 @@ smsRouter.get("/campaign/:id", async (req: Request, res: Response) => {
 
 /**
  * GET /api/sms/networks
- * Получение доступных сетей из TelQ для выбора в интерфейсе
+ * Получение сетей из TelQ с ФИЛЬТРАЦИЕЙ по 36 странам (+ динамические страны из БД)
  */
-smsRouter.get("/networks", async (_req: Request, res: Response) => {
+smsRouter.get("/networks", async (req: Request, res: Response) => {
   try {
+    const userId = (req as any).user?.id;
+
+    // 1. Собираем уникальные страны из базы данных Prisma (если они там заведены)
+    let userTemplates = userId
+      ? await prisma.smsTemplate.findMany({
+          where: { userId },
+          select: { country: true },
+          distinct: ["country"],
+        })
+      : [];
+
+    let dbCountries = userTemplates.map((t) => t.country.trim().toLowerCase());
+
+    if (dbCountries.length === 0) {
+      const allTemplates = await prisma.smsTemplate.findMany({
+        select: { country: true },
+        distinct: ["country"],
+      });
+      dbCountries = allTemplates.map((t) => t.country.trim().toLowerCase());
+    }
+
+    // Объединяем базовые 36 стран и всё, что уже сохранено в БД
+    const allowedSet = new Set([
+      ...DEFAULT_ALLOWED_COUNTRIES,
+      ...dbCountries,
+    ]);
+
+    // 2. Авторизация в TelQ
     const appId = env.TELQ_APP_ID || "";
     const appKey = env.TELQ_APP_KEY || "";
     const numericAppId = /^\d+$/.test(appId) ? parseInt(appId, 10) : appId;
@@ -154,14 +192,21 @@ smsRouter.get("/networks", async (_req: Request, res: Response) => {
     const tokenData: any = await tokenRes.json();
     const token = tokenData.value || tokenData.token;
 
+    // 3. Загрузка сетей из TelQ
     const netRes = await fetch(`${env.TELQ_API_URL}/networks`, {
       headers: { Authorization: `Bearer ${token}` },
     });
 
     const netData: any = await netRes.json();
-    const networks = Array.isArray(netData) ? netData : netData.data || [];
+    const networks: any[] = Array.isArray(netData) ? netData : netData.data || [];
 
-    res.json({ success: true, data: networks });
+    // 4. Оставляем только те операторы, страны которых входят в allowedSet
+    const filteredNetworks = networks.filter((net: any) => {
+      const countryName = (net.countryName || net.country || "").trim().toLowerCase();
+      return countryName && allowedSet.has(countryName);
+    });
+
+    res.json({ success: true, data: filteredNetworks });
   } catch (error: any) {
     console.error("❌ Networks Route Error:", error);
     res.status(500).json({ success: false, error: error.message });
@@ -231,7 +276,7 @@ smsRouter.get("/templates", async (req: Request, res: Response) => {
 
 /**
  * POST /api/sms/templates/mapping
- * Получение шаблонов, сгруппированных по выбранным странам (для Шага 2 во Vue)
+ * Получение шаблонов, сгруппированных по выбранным странам (для Шага 2)
  */
 smsRouter.post("/templates/mapping", async (req: Request, res: Response) => {
   try {
