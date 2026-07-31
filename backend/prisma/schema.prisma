@@ -646,6 +646,30 @@ model LayoutSpec {
   @@index([key, isActive])
 }
 
+/// Pattern spec — числовые коридоры паттерна, ДОБЫТЫЕ из корпуса эталонов
+/// (Задание 3, Фаза 1; `D-C1`). Отличие от LayoutSpec принципиальное: layout
+/// описывает, ЧТО мы хотим построить, а pattern — что ИЗМЕРЕНО у дизайнеров.
+/// Строки неизменяемы: добавили эталон — перезапустили майнер, получили новую
+/// версию. Правка порогов из админки создаёт следующую версию, без деплоя.
+///
+/// `corpusHash` — sha256 по отсортированным хэшам файлов корпуса. По нему
+/// видно, что спека действительно соответствует тому набору эталонов, из
+/// которого её добыли. Даты внутри `spec` НЕТ намеренно: TASK §4.1 требует
+/// побайтовой воспроизводимости, и `createdAt` живёт здесь, а не в JSON.
+model PatternSpec {
+  id         String   @id @default(cuid())
+  key        String // "pattern.email" | "pattern.push" | "pattern.popup"
+  version    Int
+  spec       Json // PatternSpec из lib/patternMiner.ts
+  corpusHash String
+  isActive   Boolean  @default(true)
+  createdAt  DateTime @default(now())
+  createdBy  String? // admin email snapshot, informational
+
+  @@unique([key, version])
+  @@index([key, isActive])
+}
+
 /// Global admin-editable Neural prompt suggestions shown on textarea focus (D8).
 model NeuralPromptPreset {
   id        String   @id @default(cuid())
