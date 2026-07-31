@@ -40,6 +40,7 @@ import {
   lightLayerHasObjects,
 } from "../src/lib/lightLayer.js";
 import { generateDecorSheetPieces } from "../src/services/decorIngest.js";
+import { splitHeroLayer } from "../src/services/scenePipeline.js";
 import {
   measure,
   checkAgainstSpec,
@@ -229,10 +230,20 @@ async function main() {
     }
   }
 
+  // Нарезка героев (D-N27-сопутствующее): монетки у персонажа и побочные
+  // предметы ITEM-слоя раздувают bbox в ширину и давят высоту героя.
+  const personSplit = await splitHeroLayer(heroes.person, "person");
+  const itemSplit = await splitHeroLayer(heroes.item, "item");
+  heroes = { ...heroes, person: personSplit.hero, item: itemSplit.hero };
+
   console.log("── 4/6 fal: лист декора");
   const sheet = await generateDecorSheetPieces(brief.decorConcepts, "try-composition");
   if (!sheet.ok) throw new Error(`лист декора: ${sheet.reason}`);
-  const decor: RenderLayer[] = sheet.pieces.map((p) => ({ png: p.png, width: p.width, height: p.height }));
+  const decor: RenderLayer[] = [
+    ...sheet.pieces.map((p) => ({ png: p.png, width: p.width, height: p.height })),
+    ...itemSplit.props,
+    ...personSplit.props,
+  ];
 
   await mkdir(OUT_DIR, { recursive: true });
 
@@ -298,6 +309,9 @@ async function main() {
       heroRetries--;
       console.log("провал по кластеру героя — перегенерация person/item");
       heroes = await generateHeroLayers(campaignPrompt);
+      const ps = await splitHeroLayer(heroes.person, "person(retry)");
+      const is = await splitHeroLayer(heroes.item, "item(retry)");
+      heroes = { ...heroes, person: ps.hero, item: is.hero };
       attempt--; // попытка рендера не потрачена: слой другой, seed тот же
       continue;
     }

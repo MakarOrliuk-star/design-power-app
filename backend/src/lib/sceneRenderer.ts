@@ -362,16 +362,18 @@ export async function renderScene(
   const focalSlot = slotById(plan, "focal-blur");
   let focalIndex = 0;
   if (focalSlot && decorTinted.length > 0) {
-    // Focal — самый КОМПАКТНЫЙ из трёх крупнейших кусков: у куска с
-    // рисованными хвостами-бликами bbox сильно больше тела, его площадь в
-    // кадре не совпадёт с планом, а коридор V9 задан именно по площади.
-    const candidates = decorTinted.slice(0, 3);
+    // Focal — кусок с максимальной ПЛОТНОСТЬЮ ВИДИМОСТИ (видимые маске
+    // пиксели на bbox) среди крупнейших. Компактность отсеивает куски с
+    // хвостами-бликами (bbox больше тела), видимость — тёмные куски, которые
+    // маска яркости почти не видит: их площадь в кадре не дотянет до коридора
+    // V9 никаким масштабом (прод-прогон: 0.08 % при поле 0.69).
+    const candidates = decorTinted.slice(0, 5);
     let best = 0;
-    let bestCompact = -1;
+    let bestScore = -1;
     for (const [i, c] of candidates.entries()) {
-      const compact = (await opaqueArea(c.png)) / (c.width * c.height);
-      if (compact > bestCompact) {
-        bestCompact = compact;
+      const score = (await maskVisibleArea(c.png)) / (c.width * c.height);
+      if (score > bestScore) {
+        bestScore = score;
         best = i;
       }
     }
