@@ -184,6 +184,11 @@ export const colorKeySchema = z.object({
 });
 
 export const layoutSpecSchema = z.object({
+  // Задание 3, Фаза 6: активная версия с этим флагом уводит рендер в новый
+  // пайплайн «промпт → композиция» (services/scenePipeline.ts): бриф → план
+  // из коридоров PatternSpec → слой света → цепочка декора → renderScene →
+  // валидация майнером. Откат — активировать версию без флага, деплой не нужен.
+  scenePipeline: z.boolean().optional(),
   canvas: z.object({
     w: z.number().int().min(64).max(4096),
     h: z.number().int().min(64).max(4096),
@@ -407,7 +412,7 @@ export const EMAIL_HERO_V2: LayoutSpecData = {
  * канонического размера (D-E7), safe-зона 46% (DI-Q7), текст в вёрстке (D-E1).
  *
  * Числа сняты со сканов, а не подобраны на глаз:
- *   - `scripts/measure-visual-pattern.ts` — коридоры субъектов и полос;
+ *   - `scripts/mine-pattern.ts` — коридоры субъектов и полос;
  *   - `scripts/calibrate-scatter.ts` — кольцо, веса секторов, размеры слоёв
  *     (134 объекта декора из эталонов 1–5);
  *   - радиальный профиль альфы `эталон email.png` — плашка.

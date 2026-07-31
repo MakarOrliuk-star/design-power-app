@@ -8,6 +8,7 @@ import { MODEL_KEYS, MODEL_OPTIONS } from "../lib/falModels.js";
 import { createBrand } from "../services/brand.service.js";
 import { layoutSpecSchema, createLayoutSpecVersion } from "../services/layoutSpec.js";
 import { clampStyleProfile } from "../lib/styleProfile.js";
+import { parseDecorEntries, decorEntryUrls } from "../lib/decorLibrary.js";
 import { Prisma } from "../../generated/prisma/client.js";
 
 // All routes here are mounted behind loadUser + requireAdmin (see index.ts).
@@ -641,9 +642,9 @@ adminRouter.patch("/bundle-variants/:id/style-profile", async (req: Request, res
       where: { name: variant.brandName },
       select: { decorUrls: true },
     });
-    const brandUrls = Array.isArray(brand?.decorUrls)
-      ? brand.decorUrls.filter((u): u is string => typeof u === "string")
-      : [];
+    // D-N9': библиотека бренда хранит и строки, и тегированные записи —
+    // фильтр «только строки» терял бы автосохранённую нарезку листа.
+    const brandUrls = decorEntryUrls(parseDecorEntries(brand?.decorUrls));
     const typeAssets = variant.bundle.bundleType.assets as unknown as Array<{
       composeMode?: string;
       decorUrls?: string[];

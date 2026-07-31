@@ -22,7 +22,7 @@
 import { readFileSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
-import { connectedComponents, loadRaster, MIN_DECOR_AREA } from "./measure-visual-pattern.js";
+import { connectedComponents, loadRaster, METHOD } from "../src/lib/patternMiner.js";
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const EXAMPLES = path.resolve(HERE, "../../figma/crm-bundle/examples");
@@ -57,7 +57,7 @@ export async function sampleDecor(file: string): Promise<DecorSample[]> {
   const out: DecorSample[] = [];
   for (const c of comps) {
     const h = c.y1 - c.y0 + 1;
-    if (c.area <= MIN_DECOR_AREA) continue;
+    if (c.area <= METHOD.minComponentArea) continue;
     if (h >= SUBJECT_MIN_HEIGHT * H) continue; // это субъект, не декор
     const cx = (c.x0 + c.x1 + 1) / 2;
     const cy = (c.y0 + c.y1 + 1) / 2;
@@ -70,7 +70,10 @@ export async function sampleDecor(file: string): Promise<DecorSample[]> {
       r: round(Math.hypot(u, v)),
       thetaDeg: Math.round((Math.atan2(v, u) * 180) / Math.PI),
       sizePct: round((h / H) * 100),
-      cropped: c.edge.left + c.edge.right + c.edge.top + c.edge.bottom > 0,
+      // У майнера кромка — булев признак «bbox дошёл до края с допуском
+      // 0.4 % холста» (§3.1), а не счётчик пикселей на самой кромке, как было
+      // в прежнем patternMetrics. Смысл тот же: объект подрезан краем.
+      cropped: c.cropped.left || c.cropped.right || c.cropped.top || c.cropped.bottom,
     });
   }
   return out;
