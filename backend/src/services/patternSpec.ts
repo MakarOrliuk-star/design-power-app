@@ -1,5 +1,6 @@
+import { createHash } from "node:crypto";
 import { prisma } from "../lib/prisma.js";
-import type { PatternSpec } from "../lib/patternMiner.js";
+import { measure, aggregate, type PatternSpec } from "../lib/patternMiner.js";
 
 /**
  * Доступ к добытым коридорам паттерна (Задание 3, Фаза 1).
@@ -15,6 +16,33 @@ export const PATTERN_SPEC_KEYS = {
   push: "pattern.push",
   popup: "pattern.popup",
 } as const;
+
+/** Версия методики замера — меняется только вместе с METHOD майнера. */
+export const MINER_SPEC_VERSION = "pattern.email.v1";
+
+/**
+ * Корпус эталонов (байты файлов из админки) → спека коридоров. Тот же код,
+ * что у CLI `mine-pattern`: файлы сортируются по имени (вклад каждого эталона
+ * в коридор подписан именем), спека детерминирована — тот же корпус даёт
+ * побайтово тот же JSON и тот же `corpusHash`.
+ */
+export async function minePatternFromBuffers(
+  files: Array<{ name: string; bytes: Buffer }>,
+  specVersion: string = MINER_SPEC_VERSION,
+): Promise<PatternSpec> {
+  if (files.length === 0) throw new Error("minePatternFromBuffers: пустой корпус");
+  const sorted = [...files].sort((a, b) => a.name.localeCompare(b.name));
+  const samples = [];
+  for (const f of sorted) {
+    const { metrics } = await measure(f.bytes);
+    samples.push({
+      name: f.name,
+      hash: createHash("sha256").update(f.bytes).digest("hex"),
+      metrics,
+    });
+  }
+  return aggregate(specVersion, samples);
+}
 
 export interface PatternSpecRow {
   id: string;
