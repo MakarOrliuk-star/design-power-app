@@ -317,12 +317,18 @@ export async function renderScene(
   let personW = Math.round(person.width * personScale);
   // Ширина ограничена так, чтобы персонаж не лез в защищённую среднюю треть
   // центральной полосы: левый край не левее её правой границы (x = 0.72).
-  // Потеря высоты при этом логируется — её увидит валидатор кластера.
+  // Каскад для ШИРОКОГО слоя (поза руки-в-стороны, склейка BR): сначала
+  // ужать, но не ниже ПОЛА коридора кластера; дальше высота — инвариант
+  // каркаса, и лишняя ширина срезается ПРАВОЙ кромкой холста — приём
+  // эталонов (их объект, подрезанный справа, — это и есть персонаж).
+  // Прод-прогон без каскада: кластер 41 % при коридоре 74+.
   const personMaxW = W - Math.round(z.central.x1 * W);
   if (personW > personMaxW) {
-    personScale = personMaxW / person.width;
-    personW = personMaxW;
-    personTargetH = Math.round(person.height * personScale);
+    const minH = Math.round(((personSlot?.minClusterHeightPct ?? 78) / 100) * H);
+    const cappedH = Math.round(person.height * (personMaxW / person.width));
+    personTargetH = Math.max(minH, cappedH);
+    personScale = personTargetH / person.height;
+    personW = Math.round(person.width * personScale);
   }
   // П8 — цветовой ключ кадра (V14 «2–3 доминирующих оттенка»): персонаж, item
   // и куски листа приходят из разных генераций, каждая со своей палитрой, и
@@ -346,7 +352,10 @@ export async function renderScene(
 
   const personBox: PlacedBox = {
     id: "hero-person",
-    x: W - personW, // правый край вплотную к кромке — эталонные 1–2 объекта, подрезанных справа
+    // Правый край вплотную к кромке (эталонные объекты, подрезанные справа);
+    // при spill-режиме левый край прижат к границе text-core, а излишек
+    // ширины уходит ЗА правую кромку и срезается холстом.
+    x: Math.max(Math.round(z.central.x1 * W), W - personW),
     // Якорь — МАКУШКА по плану, не низ: если ширинный кап урезал высоту, низ
     // персонажа всплывает над baseline — ровно как ex5 корпуса (высота 77.7 %,
     // макушка 11.1 %, низ на 88.8 % при contentBottom 91.8 %). Прибивать низ
