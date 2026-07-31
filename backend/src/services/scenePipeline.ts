@@ -145,6 +145,32 @@ async function loadLayerByHash(hash: string, label: string): Promise<RenderLayer
 }
 
 /**
+ * Слой героя → сам герой + побочные куски (то же лекарство, что в действующем
+ * движке). Контракт слоя требует «single character», но генератор регулярно
+ * добавляет летающие монетки/фишки; ITEM-слой по контракту вообще несёт 4–6
+ * объектов. Побочные куски раздувают bbox слоя В ШИРИНУ, ширинный кап давит
+ * высоту героя (прод-прогон: персонаж 59.5 % при коридоре 74+). Крупнейший
+ * связный компонент — герой; остальное уходит в реквизит сцены: в эталонах
+ * предметы вокруг персонажа и есть декор.
+ */
+export async function splitHeroLayer(
+  layer: RenderLayer,
+  label: string,
+): Promise<{ hero: RenderLayer; props: RenderLayer[] }> {
+  const pieces = await splitLayerPieces(layer.png, {});
+  if (pieces.length <= 1) return { hero: layer, props: [] };
+  const [main, ...extras] = pieces;
+  console.log(
+    `✂️ ${label}: ${pieces.length} компонент(а) — герой ${main!.width}×${main!.height}, ` +
+      `${extras.length} шт. в реквизит`,
+  );
+  return {
+    hero: { png: main!.png, width: main!.width, height: main!.height },
+    props: extras.map((p) => ({ png: p.png, width: p.width, height: p.height })),
+  };
+}
+
+/**
  * Декор по цепочке `D-N7'`: библиотека (бренд ⊃ общая) → лист декора с
  * автосохранением в библиотеку бренда (`D-N8'`, кэш не роняет рендер) →
  * куски слоя ITEM как последний рубеж. Отбор из библиотеки сидирован.
@@ -153,7 +179,8 @@ async function resolveDecorLayers(
   job: ScenePipelineJob,
   brief: CreativeBrief,
   seed: string,
-  itemLayer: RenderLayer,
+  /** Побочные куски слоёв героев — постоянный участник пула (шаг 4 цепочки). */
+  heroProps: RenderLayer[],
 ): Promise<{ layers: RenderLayer[]; steps: string[]; generatedConcepts: string[] }> {
   const brandEntries = parseDecorEntries(job.brandDecorRaw);
   const commonEntries = parseDecorEntries(job.commonDecorRaw);
@@ -216,14 +243,11 @@ async function resolveDecorLayers(
     }
   }
 
-  // Последний рубеж — куски ITEM (текущее поведение движка). Если сработал он,
-  // недобор по площади и медиане валидатор покажет как причину, а не загадку.
-  if (layers.length === 0) {
-    const pieces = await splitLayerPieces(itemLayer.png, {});
-    layers.push(
-      ...pieces.slice(1).map((p) => ({ png: p.png, width: p.width, height: p.height })),
-    );
-  }
+  // Шаг 4 цепочки — куски слоёв героев (текущее поведение движка): 3–5
+  // предметов ITEM-слоя и монетки, отрезанные от персонажа. В КОНЕЦ пула:
+  // тематическая нарезка листа/библиотеки предпочтительнее, но у эталонов
+  // предметы вокруг персонажа — тоже декор, и пустой зоне они лучше пустоты.
+  layers.push(...heroProps);
 
   return { layers, steps: chain.steps, generatedConcepts };
 }
@@ -259,13 +283,22 @@ export async function renderSceneAsset(job: ScenePipelineJob): Promise<ScenePipe
       ],
     })) ?? NEUTRAL_BRIEF;
 
-  // 3) Слои героев — из кэша нормализованных слоёв варианта.
+  // 3) Слои героев — из кэша нормализованных слоёв варианта. Каждый режется:
+  //    крупнейший компонент — герой, побочные куски — в реквизит сцены.
   let person: RenderLayer;
   let item: RenderLayer;
+  const heroProps: RenderLayer[] = [];
   try {
-    person = await loadLayerByHash(job.personLayerHash, "person");
+    const personLayer = await loadLayerByHash(job.personLayerHash, "person");
     if (!job.itemLayerHash) return { ok: false, reason: "scene pipeline: item layer hash missing" };
-    item = await loadLayerByHash(job.itemLayerHash, "item");
+    const itemLayer = await loadLayerByHash(job.itemLayerHash, "item");
+    const personSplit = await splitHeroLayer(personLayer, `person#${job.assetId}`);
+    const itemSplit = await splitHeroLayer(itemLayer, `item#${job.assetId}`);
+    person = personSplit.hero;
+    item = itemSplit.hero;
+    // Куски ITEM первыми: кандидат в focal — предмет, а не случайная монетка
+    // от персонажа.
+    heroProps.push(...itemSplit.props, ...personSplit.props);
   } catch (err) {
     return { ok: false, reason: String(err instanceof Error ? err.message : err) };
   }
@@ -275,7 +308,7 @@ export async function renderSceneAsset(job: ScenePipelineJob): Promise<ScenePipe
   const baseSeed = `${job.bundleId}:${job.variantId}:${job.assetKey}:pv${patternRow.version}`;
 
   // 5) Декор по цепочке — не зависит от seed рендера (кэш и лист общие).
-  const decor = await resolveDecorLayers(job, brief, baseSeed, item);
+  const decor = await resolveDecorLayers(job, brief, baseSeed, heroProps);
 
   // 6) Свет: один слой на все пересевы — метрики света от seed не зависят.
   const basePlan = buildScenePlan({
