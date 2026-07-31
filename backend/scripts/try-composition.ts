@@ -26,7 +26,12 @@ import { fetchBuffer } from "../src/services/layerCache.js";
 import { nearestFalAspect } from "../src/lib/imageSize.js";
 import { clampCreativeBrief, type CreativeBrief } from "../src/lib/creativeBrief.js";
 import { buildScenePlan } from "../src/services/scenePlan.js";
-import { renderScene, STRUCTURAL_CHECK_KEYS, type RenderLayer } from "../src/lib/sceneRenderer.js";
+import {
+  renderScene,
+  mergeSceneMetrics,
+  STRUCTURAL_CHECK_KEYS,
+  type RenderLayer,
+} from "../src/lib/sceneRenderer.js";
 import {
   keyLightLayer,
   normalizeLightLayer,
@@ -253,12 +258,12 @@ async function main() {
       console.log(`  light prompt: ${plan.background.lightPrompt.slice(0, 120)}…`);
       light = await makeLightLayer(plan);
     }
-    const rendered = await renderScene(plan, {
+    const renderInputs = {
       ...heroes,
-      light,
       decor,
       personCropTopFraction: EMAIL_HERO_V3.subjects.person.cropTopFraction,
-    });
+    };
+    const rendered = await renderScene(plan, { ...renderInputs, light });
 
     console.log("── 6/6 валидация тем же майнером");
     // Ответ β на вопрос 0 (`D-N6`, следствие): ассет с альфой меряется по
@@ -269,7 +274,12 @@ async function main() {
       .flatten({ background: { r: 0, g: 0, b: 0 } })
       .png()
       .toBuffer();
-    const { metrics } = await measure(composite);
+    const lumMeasure = await measure(composite);
+    // `D-N27`: кластеры героев — по альфе (рендер без света): маска яркости
+    // не видит тёмного брендового персонажа.
+    const alphaPass = await renderScene(plan, { ...renderInputs, light: null });
+    const alphaMeasure = await measure(alphaPass.png);
+    const metrics = mergeSceneMetrics(lumMeasure.metrics, alphaMeasure.metrics);
     const keys = light ? [...STRUCTURAL_CHECK_KEYS, "cornerLum", "centerBgLum"] : STRUCTURAL_CHECK_KEYS;
     const report = checkAgainstSpec(metrics, spec, keys);
 
