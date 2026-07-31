@@ -8,7 +8,12 @@ import { splitLayerPieces } from "../lib/layerSplit.js";
 import { fetchBuffer, getOrCreateNormalizedLayer } from "./layerCache.js";
 import { requestCreativeBrief, type CreativeBrief } from "../lib/creativeBrief.js";
 import { buildScenePlan, type ScenePlan } from "./scenePlan.js";
-import { renderScene, STRUCTURAL_CHECK_KEYS, type RenderLayer } from "../lib/sceneRenderer.js";
+import {
+  renderScene,
+  mergeSceneMetrics,
+  STRUCTURAL_CHECK_KEYS,
+  type RenderLayer,
+} from "../lib/sceneRenderer.js";
 import {
   keyLightLayer,
   normalizeLightLayer,
@@ -301,15 +306,15 @@ export async function renderSceneAsset(job: ScenePipelineJob): Promise<ScenePipe
             commonDecor: parseDecorEntries(job.commonDecorRaw),
           });
 
-    const rendered = await renderScene(plan, {
+    const renderInputs = {
       person,
       item,
-      light,
       decor: decor.layers,
       ...(job.personCropTopFraction !== undefined
         ? { personCropTopFraction: job.personCropTopFraction }
         : {}),
-    });
+    };
+    const rendered = await renderScene(plan, { ...renderInputs, light });
     attempts = attempt + 1;
 
     // `D-N20`: ассет с альфой меряется по композиту «на чёрном» — той же
@@ -319,7 +324,13 @@ export async function renderSceneAsset(job: ScenePipelineJob): Promise<ScenePipe
       .flatten({ background: { r: 0, g: 0, b: 0 } })
       .png()
       .toBuffer();
-    const { metrics } = await measure(composite);
+    const lumMeasure = await measure(composite);
+    // `D-N27`: кластеры героев — по АЛЬФЕ (тот же рендер, но без света):
+    // маска яркости не видит тёмного брендового персонажа, и его кластер
+    // «съёживался» до лица и рук (живой прогон: 49 % при коридоре 74–97).
+    const alphaPass = await renderScene(plan, { ...renderInputs, light: null });
+    const alphaMeasure = await measure(alphaPass.png);
+    const metrics = mergeSceneMetrics(lumMeasure.metrics, alphaMeasure.metrics);
     const keys = light
       ? [...STRUCTURAL_CHECK_KEYS, "cornerLum", "centerBgLum"]
       : STRUCTURAL_CHECK_KEYS;

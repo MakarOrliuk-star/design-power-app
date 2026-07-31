@@ -3,7 +3,7 @@ import type { OverlayOptions } from "sharp";
 import { mulberry32, seedToInt, dominantColor, tintToKey } from "./composeEngine.js";
 import { cropLayerTop } from "./layerNormalize.js";
 import { lightCornerLuminance } from "./lightLayer.js";
-import { METHOD } from "./patternMiner.js";
+import { METHOD, type Metrics } from "./patternMiner.js";
 import type { ScenePlan, SlotPlan } from "../services/scenePlan.js";
 
 /**
@@ -91,6 +91,44 @@ export const STRUCTURAL_CHECK_KEYS = [
   "personClusterHeightPct",
   "personTopPct",
 ];
+
+/**
+ * Метрики, которые для ассета с альфой берутся из АЛЬФА-замера (рендер без
+ * слоя света), а не из маски яркости композита (`D-N27`).
+ *
+ * Почему: кластер героя — это протяжённость СОДЕРЖИМОГО. Маска яркости
+ * (`L > 70`, методика эталонов) не видит тёмного персонажа — чёрный костюм
+ * брендового героя «исчезает», кластер съёживается до лица и рук, и валидатор
+ * браковал бы любой тёмный бренд навсегда (живой прогон: 49 % при коридоре
+ * 74–97). Для доставки с альфой содержимое определяет альфа: на светлом фоне
+ * письма тёмный герой прекрасно виден. Эталоны запечены без альфы — у них
+ * яркость и есть единственная мера содержимого; у нас есть лучше.
+ *
+ * Свет в альфа-замере отключается, иначе его полупрозрачная альфа склеила бы
+ * холст в один компонент — ровно причина, по которой остальные метрики
+ * меряются по композиту (`D-N20`).
+ */
+export const ALPHA_METRIC_KEYS = [
+  "itemClusterHeightPct",
+  "personClusterHeightPct",
+  "personTopPct",
+  "contentBottomPct",
+  "croppedBottom",
+  // Подрезка боковыми кромками — это герои (item слева, person справа), и она
+  // тоже про протяжённость СОДЕРЖИМОГО: тёмный бок персонажа у кромки маска
+  // яркости не видит. Подрезка верхом остаётся яркостной — это focal-объект.
+  "croppedLeft",
+  "croppedRight",
+] as const;
+
+/** Слить замер композита (яркостная маска) с альфа-замером героев. */
+export function mergeSceneMetrics(luminance: Metrics, alpha: Metrics): Metrics {
+  const merged = { ...luminance };
+  for (const key of ALPHA_METRIC_KEYS) {
+    merged[key] = alpha[key];
+  }
+  return merged;
+}
 
 /**
  * Зазор между декор-объектами, px @1x. Склеивает не только `MORPH_CLOSE` 5×5:
@@ -413,8 +451,11 @@ export async function renderScene(
       const pieceOpaque = await opaqueArea(piece.png);
       // Разброс размеров вокруг среднего — сцена из одинаковых штампов не
       // бывает у дизайнеров; множитель сидирован. Нижняя граница размера —
-      // из плана (низ коридора медианы корпуса): кусок-пылинка топит V-серию.
-      const minPiecePx = ((plan.decorMinPieceAreaPct ?? 0) / 100) * W * H;
+      // из плана (центр коридора медианы корпуса): кусок-пылинка топит
+      // V-серию. К text-core пол НЕ применяется — там потолок покрытия, и
+      // ambience-куску положено быть маленьким.
+      const minPiecePx =
+        slot.zone === "text-core" ? 0 : ((plan.decorMinPieceAreaPct ?? 0) / 100) * W * H;
       const target = Math.max(
         METHOD.minComponentArea * 2,
         minPiecePx,
@@ -422,13 +463,15 @@ export async function renderScene(
       );
       const blurPx = slot.blurPx ?? BLUR_CYCLE[i % BLUR_CYCLE.length]!;
       let prep = await prepPiece(piece, pieceOpaque, target, blurPx);
-      // Поправка на «таяние»: блюр и прозрачность уводят периферию куска ниже
-      // порога маски. Один корректирующий проход по фактически видимым
-      // пикселям; множитель ограничен — тёмный кусок бесконечно не раздуть.
-      // В text-core поправки НЕТ: у защищённой зоны дефект только сверху
-      // (ceiling) — недобор ambience безопасен, раздутый кусок пробьёт потолок.
+      // Поправка на «таяние»: блюр, прозрачность И перекраска под тёмный ключ
+      // бренда уводят пиксели куска ниже порога маски — резкий кусок после
+      // tintToKey «гаснет» так же, как размытый. Один корректирующий проход по
+      // фактически видимым пикселям; множитель ограничен — тёмный кусок
+      // бесконечно не раздуть. В text-core поправки НЕТ: у защищённой зоны
+      // дефект только сверху (ceiling) — недобор ambience безопасен, раздутый
+      // кусок пробьёт потолок.
       const opacity = slot.opacity ?? 1;
-      if (slot.zone !== "text-core" && (blurPx > 0 || opacity < 1)) {
+      if (slot.zone !== "text-core") {
         const visible = await maskVisibleArea(prep.png, opacity);
         if (visible < target * 0.75) {
           const boost = Math.min(4, target / Math.max(1, visible));

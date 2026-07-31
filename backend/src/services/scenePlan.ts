@@ -175,7 +175,16 @@ export function buildScenePlan(input: ScenePlanInput): ScenePlan {
   const personCorr = corridorOf(spec, "personClusterHeightPct");
   const personHeight = Math.min(personCorr.max, Math.max(personCorr.min, baseline - personTop));
   const personTopFinal = baseline - personHeight;
-  const focalArea = sampleCorridor(corridorOf(spec, "croppedTopLargestAreaPct"), rand);
+  // Band-метрика focal-объекта: замер шумит на ореолах и кропе, и сэмпл
+  // вплотную к границе коридора вылетает за неё на измерении (живой прогон:
+  // 2.51 при потолке 2.46). Целимся в СРЕДНЮЮ половину коридора — та же
+  // логика D-N21, применённая к двустороннему коридору.
+  const focalCorr = corridorOf(spec, "croppedTopLargestAreaPct");
+  const focalQuarter = (focalCorr.max - focalCorr.min) / 4;
+  const focalArea = sampleCorridor(
+    { ...focalCorr, min: focalCorr.min + focalQuarter, max: focalCorr.max - focalQuarter },
+    rand,
+  );
   const focalCx = sampleCorridor(corridorOf(spec, "croppedTopLargestCx"), rand);
   // Floor-метрики — зеркало правила ceiling: дефект у заполненности только
   // СНИЗУ, и целиться в нижнюю границу значит целиться в дефект. Сэмпл из
@@ -200,9 +209,13 @@ export function buildScenePlan(input: ScenePlanInput): ScenePlan {
   const cornerLum = corridorOf(spec, "cornerLum");
   const centerLum = corridorOf(spec, "centerBgLum");
   const hues = corridorOf(spec, "dominantHues");
-  // Нижняя граница размера куска декора — из коридора медианы корпуса:
-  // кусок мельче эталонной медианы-минимума топит V-серию «медианный размер».
-  const decorMinPieceAreaPct = corridorOf(spec, "decorMedianAreaPct").min;
+  // Нижняя граница размера куска декора — СЕРЕДИНА коридора медианы корпуса,
+  // а не его нижняя граница: медиана меряется по всем компонентам маски, и у
+  // живого арта часть кусков рассыпается на фрагменты — они и тянут медиану
+  // вниз. Куски, целящиеся в центр коридора, оставляют фрагментам запас
+  // (живой прогон: медиана 0.06–0.08 при поле 0.14 и цели на min).
+  const medianCorr = corridorOf(spec, "decorMedianAreaPct");
+  const decorMinPieceAreaPct = (medianCorr.min + medianCorr.max) / 2;
 
   // Из общего числа объектов один уходит на размытый объект, подрезанный
   // верхом (приём 5/5), один — на расфокусированную ambience в text-core.
