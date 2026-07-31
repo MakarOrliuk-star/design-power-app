@@ -130,6 +130,21 @@ describe("renderScene — кадр попадает в структурные к
     }
   }, 60_000);
 
+  it("широкий персонаж срезается правой кромкой, а не ужимается ниже коридора", async () => {
+    // Поза «руки в стороны»: аспект слоя 1.3 — ширинный кап без каскада давил
+    // бы высоту до ~40 % (прод-прогон: 41 % при коридоре 74+).
+    const l = await layers();
+    const wide = await renderScene(plan("wide-person"), {
+      ...l,
+      person: await blob(390, 300, [180, 60, 60], "ellipse"),
+    });
+    const { metrics } = await measure(wide.png);
+    expect(metrics.personClusterHeightPct).toBeGreaterThanOrEqual(73);
+    expect(metrics.croppedRight).toBeGreaterThanOrEqual(1);
+    // Защита text-core не проломлена прижатым левым краем.
+    expect(metrics.bandMidThird).toBeLessThan(3);
+  }, 60_000);
+
   it("глубина честная: разброс резкости декора ≥ 10×, как требует V8", async () => {
     const rendered = await renderScene(plan(), await layers());
     const { metrics } = await measure(rendered.png);

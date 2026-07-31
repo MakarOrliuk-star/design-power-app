@@ -31,6 +31,7 @@ export interface SlotPlan {
   count?: number;
   targetCoveragePct?: number;
   clusterHeightPct?: number;
+  minClusterHeightPct?: number;
   headTopPct?: number;
   areaPct?: number;
   cx?: number;
@@ -280,6 +281,9 @@ export function buildScenePlan(input: ScenePlanInput): ScenePlan {
     source: "pipeline:person",
     optional: false,
     clusterHeightPct: round2(personHeight),
+    // Пол коридора — предел, до которого рендерер вправе ужать широкого
+    // персонажа, прежде чем перейти к подрезке правой кромкой (приём эталонов).
+    minClusterHeightPct: round2(personCorr.min),
     headTopPct: round2(personTopFinal),
   });
 
