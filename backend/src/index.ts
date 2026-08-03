@@ -63,6 +63,7 @@ app.use("/api/auditor", loadUser, requireAuth, requireZone("CRM"), auditorRouter
 app.use("/api/smartico", loadUser, requireAuth, requireZone("CRM"), smarticoRouter);
 app.use("/api/qa-tools", loadUser, requireAuth, requireZone("CRM"), qatoolsRouter);
 app.use("/api/crm", loadUser, requireAuth, requireZone("CRM"), crmRouter);
+app.use("/api/sms", loadUser, requireAuth, requireZone("CRM"), smsRouter);
 // Image Bundles (TASK crm-bundle): CRM_SUPER / ADMIN / MANAGER only (D4).
 app.use("/api/bundles", loadUser, requireAuth, requireCrmSuper, bundlesRouter);
 app.use("/api/tournament-admin", loadUser, requireAuth, requireAdminOrManager, tournamentAdminRouter);
@@ -72,9 +73,6 @@ app.use("/api/my-brands", loadUser, requireAuth, requireSuperDesigner, myBrandsR
 // Generic /api (generate) is a Design-zone route — keep it last so the more
 // specific prefixes above match first.
 app.use("/api", loadUser, requireAuth, requireZone("DESIGNER"), generateRouter);
-
-app.use("/api/sms", loadUser, requireAuth, requireZone("CRM"), smsRouter);
-
 
 const server = app.listen(env.PORT, "0.0.0.0", () => {
   console.log(`Backend listening on http://0.0.0.0:${env.PORT} (${env.NODE_ENV})`);

@@ -82,7 +82,7 @@ const loadingHistory = ref(false);
 const historyCampaigns = ref<SmsCampaign[]>([]);
 
 // ==========================================
-// COMPUTED
+// COMPUTED (БЕЗ ?.)
 // ==========================================
 const availableCountries = computed(() => {
   const map = new Map<string, string>();
@@ -148,10 +148,10 @@ const deliveryRate = computed(() => {
 
 function getTemplateBody(country: string, language?: string): string {
   const list = templatesMapping.value[country];
-  if (!list || !Array.isArray(list)) return 'Marketing SMS Text';
+  if (!list || !Array.isArray(list)) return 'Code: [[TOKEN]]';
   const targetLang = language || countryLanguageMap.value[country] || 'English';
   const item = list.find(t => t.language === targetLang);
-  return item ? item.body : 'Marketing SMS Text';
+  return item ? item.body : 'Code: [[TOKEN]]';
 }
 
 async function fetchNetworks() {
@@ -283,7 +283,9 @@ async function saveTemplateChanges() {
     const json = await res.json();
     if (json && json.success) {
       editingTemplate.value = null;
-      proceedToStep2();
+      await proceedToStep2();
+    } else {
+      alert((json && json.error) ? json.error : 'Не удалось сохранить шаблон');
     }
   } catch (err) {
     console.error('Failed to save template:', err);
@@ -490,8 +492,10 @@ onUnmounted(() => {
                   <option value="DM_TOKEN_5">Account 5 (Softswiss)</option>
                 </optgroup>
                 <optgroup label="OTP роуты">
-                  <option value="DM_OTP_TOKEN_1">OTP Account 1</option>
-                  <option value="DM_OTP_TOKEN_2">OTP Account 2</option>
+                  <option value="DM_OTP_TOKEN_1">OTP Account 1 (Main)</option>
+                  <option value="DM_OTP_TOKEN_2">OTP Account 2 (Antonie)</option>
+                  <option value="DM_OTP_TOKEN_3">OTP Account 3 (Michael)</option>
+                  <option value="DM_OTP_TOKEN_4">OTP Account 4 (Legendspin)</option>
                 </optgroup>
               </select>
             </div>

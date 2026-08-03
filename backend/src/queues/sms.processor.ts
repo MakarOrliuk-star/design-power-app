@@ -1,13 +1,8 @@
-import { HttpsProxyAgent } from "https-proxy-agent";
 import { Queue } from "bullmq";
 import { prisma } from "../lib/prisma.js";
 import { SMS_QUEUE, getBullConnection, type SmsBatchJobData } from "./index.js";
 
 const smsQueue = new Queue(SMS_QUEUE, { connection: getBullConnection() });
-
-const proxyUrl = process.env.WHITELISTED_PROXY_URL;
-const proxyAgent = proxyUrl ? new HttpsProxyAgent(proxyUrl) : undefined;
-
 
 export async function processSmsJob(jobData: SmsBatchJobData) {
   const { campaignId, userId, provider, dmTokenKey, senderId, targets } = jobData;
@@ -48,14 +43,26 @@ export async function processSmsJob(jobData: SmsBatchJobData) {
     let failedCount = 0;
 
     for (const msg of createdMessages) {
+      const msgCountryNorm = (msg.country || "").trim().toLowerCase();
+      const msgLangNorm = (msg.language || "").trim().toLowerCase();
+
       const userTemplate =
-        templates.find((t) => t.country === msg.country && t.language === msg.language) ||
+        templates.find(
+          (t) =>
+            t.country.trim().toLowerCase() === msgCountryNorm &&
+            t.language.trim().toLowerCase() === msgLangNorm
+        ) ||
         templates.find((t) => t.isDefault) ||
         { body: "Code: [[TOKEN]]" };
 
       const rawToken = msg.testId?.includes("|") ? msg.testId.split("|")[1] : msg.testId;
       const testToken = rawToken ?? "";
-      const fullMessageBody = userTemplate.body.replace("[[TOKEN]]", testToken);
+
+      let templateBody = userTemplate.body;
+      if (!templateBody.includes("[[TOKEN]]")) {
+        templateBody = `${templateBody.trim()} [[TOKEN]]`;
+      }
+      const fullMessageBody = templateBody.replace("[[TOKEN]]", testToken);
 
       await prisma.smsMessage.update({
         where: { id: msg.id },
@@ -104,14 +111,14 @@ export async function processSmsJob(jobData: SmsBatchJobData) {
 
     console.log(`✅ [SMS Campaign ${campaignId}] Отправлено: ${sentCount}, Ошибок: ${failedCount}`);
 
-    // 6. Запускаем опрос статусов в TelQ (если были отправки)
+    // Запускаем первый опрос статусов TelQ уже через 15 секунд
     if (sentCount > 0) {
       await smsQueue.add(
         "poll-status",
         { campaignId, attempt: 1 },
-        { delay: 5 * 60 * 1000 }
+        { delay: 15 * 1000 }
       );
-      console.log(`⏳ [SMS Campaign ${campaignId}] Запланирован опрос TelQ через 5 минут.`);
+      console.log(`⏳ [SMS Campaign ${campaignId}] Запланирован опрос TelQ через 15 секунд.`);
     } else {
       await prisma.smsCampaign.update({
         where: { id: campaignId },
@@ -128,7 +135,7 @@ export async function processSmsJob(jobData: SmsBatchJobData) {
 }
 
 /**
- * 2. ПОЛЛИНГ ПРОЦЕССОР: Опрос статусов в TelQ в течение 1 часа
+ * ПОЛЛИНГ ПРОЦЕССОР: Опрос статусов в TelQ
  */
 export async function processSmsPollingJob(data: { campaignId: string; attempt: number }) {
   const { campaignId, attempt } = data;
@@ -197,10 +204,11 @@ export async function processSmsPollingJob(data: { campaignId: string; attempt: 
       }
     }
 
+    // Последующие опросы каждые 30 секунд
     await smsQueue.add(
       "poll-status",
       { campaignId, attempt: attempt + 1 },
-      { delay: 5 * 60 * 1000 }
+      { delay: 30 * 1000 }
     );
   } catch (err) {
     console.error(`⚠️ [Polling Error Campaign ${campaignId}]:`, err);
@@ -283,7 +291,7 @@ async function sendSMS(params: {
     const cleanPhone = params.phone.replace("+", "");
 
     switch (params.provider) {
-      // 1. MIATEL (Через прокси со статическим IP)
+      // 1. MIATEL
       case "miatel": {
         const miatelUrl = process.env.MIATEL_API_URL || "http://155.117.45.233:3000";
         const miatelUser = process.env.MIATEL_USERNAME || "";
@@ -297,12 +305,7 @@ async function sendSMS(params: {
           params.senderId
         )}&test_id=${encodeURIComponent(params.testId || "")}`;
 
-        const res = await fetch(url, {
-          method: "GET",
-          // @ts-ignore
-          agent: proxyAgent,
-        });
-
+        const res = await fetch(url, { method: "GET" });
         const body = await res.text();
         const isOk = res.ok && !body.toLowerCase().includes("auth failed") && !body.toLowerCase().includes("error");
         return isOk ? { success: true } : { success: false, error: body };
@@ -360,9 +363,10 @@ async function sendSMS(params: {
           ? `${dmUrl}/api/smsverify/message`
           : `${dmUrl}/api/SMSMessages/v2`;
 
-        const token = params.dmTokenKey 
-          ? (process.env[params.dmTokenKey] || "") 
-          : (process.env.DM_API_KEY || "");
+        const token =
+          (params.dmTokenKey && process.env[params.dmTokenKey]) ||
+          process.env.DM_API_KEY ||
+          "";
 
         const payload = isOtp
           ? { phoneNumber: params.phone, sender: params.senderId, message: params.text }

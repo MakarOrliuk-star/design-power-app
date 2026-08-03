@@ -15,12 +15,141 @@ const DEFAULT_ALLOWED_COUNTRIES = [
   "united kingdom"
 ];
 
-// Initialize the order for worker to process
+const DEFAULT_DICTIONARY: Record<string, { language: string; isDefault: boolean }[]> = {
+  "Albania": [
+    { language: "SQ", isDefault: true },
+    { language: "EN", isDefault: false }
+  ],
+  "Australia": [
+    { language: "EN", isDefault: true }
+  ],
+  "Austria": [
+    { language: "DE", isDefault: true }
+  ],
+  "Belgium": [
+    { language: "FR", isDefault: true },
+    { language: "EN", isDefault: false }
+  ],
+  "Bosnia and Herzegovina": [
+    { language: "BS", isDefault: true }
+  ],
+  "Brazil": [
+    { language: "BR", isDefault: true },
+    { language: "PT", isDefault: false }
+  ],
+  "Bulgaria": [
+    { language: "BG", isDefault: true }
+  ],
+  "Canada": [
+    { language: "EN", isDefault: true },
+    { language: "FR", isDefault: false }
+  ],
+  "Croatia": [
+    { language: "HR", isDefault: true }
+  ],
+  "Czech Republic": [
+    { language: "CS", isDefault: true }
+  ],
+  "Denmark": [
+    { language: "DA", isDefault: true }
+  ],
+  "Estonia": [
+    { language: "ET", isDefault: true }
+  ],
+  "Finland": [
+    { language: "FI", isDefault: true }
+  ],
+  "France": [
+    { language: "FR", isDefault: true }
+  ],
+  "Germany": [
+    { language: "DE", isDefault: true }
+  ],
+  "Greece": [
+    { language: "EN", isDefault: true },
+    { language: "EL", isDefault: false }
+  ],
+  "Hungary": [
+    { language: "HU", isDefault: true }
+  ],
+  "Ireland": [
+    { language: "EN", isDefault: true }
+  ],
+  "Italy": [
+    { language: "IT", isDefault: true }
+  ],
+  "Luxembourg": [
+    { language: "FR", isDefault: true },
+    { language: "PT", isDefault: false }
+  ],
+  "North Macedonia": [
+    { language: "MK", isDefault: true },
+    { language: "EN", isDefault: false }
+  ],
+  "Montenegro": [
+    { language: "SR", isDefault: true }
+  ],
+  "Netherlands": [
+    { language: "EN", isDefault: true }
+  ],
+  "New Zealand": [
+    { language: "EN", isDefault: true }
+  ],
+  "Norway": [
+    { language: "NO", isDefault: true }
+  ],
+  "Poland": [
+    { language: "PL", isDefault: true }
+  ],
+  "Portugal": [
+    { language: "PT", isDefault: true }
+  ],
+  "Romania": [
+    { language: "RO", isDefault: true }
+  ],
+  "Serbia": [
+    { language: "SR", isDefault: true }
+  ],
+  "Slovakia": [
+    { language: "SK", isDefault: true }
+  ],
+  "Slovenia": [
+    { language: "SL", isDefault: true }
+  ],
+  "South Korea": [
+    { language: "KO", isDefault: true }
+  ],
+  "Spain": [
+    { language: "ES", isDefault: true }
+  ],
+  "Sweden": [
+    { language: "EN", isDefault: true }
+  ],
+  "Switzerland": [
+    { language: "DE", isDefault: true },
+    { language: "EN", isDefault: false }
+  ],
+  "United Kingdom": [
+    { language: "EN", isDefault: true }
+  ]
+};
+
+function getDefaultLanguagesForCountry(countryName: string) {
+  const norm = countryName.trim().toLowerCase();
+  for (const [key, langs] of Object.entries(DEFAULT_DICTIONARY)) {
+    if (key.trim().toLowerCase() === norm) {
+      return langs;
+    }
+  }
+  return [{ language: "EN", isDefault: true }];
+}
+
+// Инициализируем очередь для отправки задач воркеру
 const smsQueue = new Queue(SMS_QUEUE, { connection: getBullConnection() });
 
 export const smsRouter = Router();
 
-// Validating request body from frontend
+// Схема валидации входящего тела запроса от Vue-фронтенда
 const smsBatchSchema = z.object({
   provider: z.enum(["dm", "miatel", "fortytwo", "messagewhiz"]),
   dmTokenKey: z.string().optional(),
@@ -142,13 +271,12 @@ smsRouter.get("/campaign/:id", async (req: Request, res: Response) => {
 
 /**
  * GET /api/sms/networks
- * Получение сетей из TelQ с ФИЛЬТРАЦИЕЙ по 36 странам (+ динамические страны из БД)
+ * Получение сетей из TelQ с ФИЛЬТРАЦИЕЙ по 36 странам
  */
 smsRouter.get("/networks", async (req: Request, res: Response) => {
   try {
     const userId = (req as any).user?.id;
 
-    // 1. Собираем уникальные страны из базы данных Prisma (если они там заведены)
     let userTemplates = userId
       ? await prisma.smsTemplate.findMany({
           where: { userId },
@@ -167,13 +295,11 @@ smsRouter.get("/networks", async (req: Request, res: Response) => {
       dbCountries = allTemplates.map((t) => t.country.trim().toLowerCase());
     }
 
-    // Объединяем базовые 36 стран и всё, что уже сохранено в БД
     const allowedSet = new Set([
       ...DEFAULT_ALLOWED_COUNTRIES,
       ...dbCountries,
     ]);
 
-    // 2. Авторизация в TelQ
     const appId = env.TELQ_APP_ID || "";
     const appKey = env.TELQ_APP_KEY || "";
     const numericAppId = /^\d+$/.test(appId) ? parseInt(appId, 10) : appId;
@@ -192,7 +318,6 @@ smsRouter.get("/networks", async (req: Request, res: Response) => {
     const tokenData: any = await tokenRes.json();
     const token = tokenData.value || tokenData.token;
 
-    // 3. Загрузка сетей из TelQ
     const netRes = await fetch(`${env.TELQ_API_URL}/networks`, {
       headers: { Authorization: `Bearer ${token}` },
     });
@@ -200,7 +325,6 @@ smsRouter.get("/networks", async (req: Request, res: Response) => {
     const netData: any = await netRes.json();
     const networks: any[] = Array.isArray(netData) ? netData : netData.data || [];
 
-    // 4. Оставляем только те операторы, страны которых входят в allowedSet
     const filteredNetworks = networks.filter((net: any) => {
       const countryName = (net.countryName || net.country || "").trim().toLowerCase();
       return countryName && allowedSet.has(countryName);
@@ -241,6 +365,56 @@ smsRouter.get("/history", async (req: Request, res: Response) => {
   }
 });
 
+/**
+ * POST /api/sms/templates/mapping
+ * Получение шаблонов с подстановкой дефолтного словаря языков
+ */
+smsRouter.post("/templates/mapping", async (req: Request, res: Response) => {
+  try {
+    const userId = (req as any).user?.id;
+    const { countries } = req.body as { countries: string[] };
+
+    if (!Array.isArray(countries)) {
+      res.status(400).json({ success: false, error: "Некорректный формат списка стран" });
+      return;
+    }
+
+    const dbTemplates = userId
+      ? await prisma.smsTemplate.findMany({
+          where: {
+            userId,
+            country: { in: countries },
+          },
+        })
+      : [];
+
+    const mapping: Record<string, any[]> = {};
+
+    for (const country of countries) {
+      const userCountryTemplates = dbTemplates.filter(
+        (t) => t.country.trim().toLowerCase() === country.trim().toLowerCase()
+      );
+
+      if (userCountryTemplates.length > 0) {
+        mapping[country] = userCountryTemplates;
+      } else {
+        const defaultLangs = getDefaultLanguagesForCountry(country);
+        mapping[country] = defaultLangs.map((item) => ({
+          country,
+          language: item.language,
+          body: "Code: [[TOKEN]]",
+          isDefault: item.isDefault,
+        }));
+      }
+    }
+
+    res.json({ success: true, data: mapping });
+  } catch (error: any) {
+    console.error("❌ Template Mapping Error:", error);
+    res.status(500).json({ success: false, error: "Ошибка сопоставления шаблонов" });
+  }
+});
+
 // Схема валидации для сохранения шаблона
 const templateSchema = z.object({
   country: z.string().min(1),
@@ -252,7 +426,6 @@ const templateSchema = z.object({
 
 /**
  * GET /api/sms/templates
- * Получение всех шаблонов текущего пользователя
  */
 smsRouter.get("/templates", async (req: Request, res: Response) => {
   try {
@@ -271,39 +444,6 @@ smsRouter.get("/templates", async (req: Request, res: Response) => {
   } catch (error: any) {
     console.error("❌ Get Templates Error:", error);
     res.status(500).json({ success: false, error: "Ошибка при получении шаблонов" });
-  }
-});
-
-/**
- * POST /api/sms/templates/mapping
- * Получение шаблонов, сгруппированных по выбранным странам (для Шага 2)
- */
-smsRouter.post("/templates/mapping", async (req: Request, res: Response) => {
-  try {
-    const userId = (req as any).user?.id;
-    const { countries } = req.body as { countries: string[] };
-
-    if (!Array.isArray(countries)) {
-      res.status(400).json({ success: false, error: "Некорректный формат списка стран" });
-      return;
-    }
-
-    const templates = await prisma.smsTemplate.findMany({
-      where: {
-        userId,
-        country: { in: countries },
-      },
-    });
-
-    const mapping: Record<string, typeof templates> = {};
-    for (const c of countries) {
-      mapping[c] = templates.filter((t) => t.country === c);
-    }
-
-    res.json({ success: true, data: mapping });
-  } catch (error: any) {
-    console.error("❌ Template Mapping Error:", error);
-    res.status(500).json({ success: false, error: "Ошибка сопоставления шаблонов" });
   }
 });
 
