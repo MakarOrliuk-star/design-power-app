@@ -53,14 +53,14 @@ export async function processSmsJob(jobData: SmsBatchJobData) {
             t.language.trim().toLowerCase() === msgLangNorm
         ) ||
         templates.find((t) => t.isDefault) ||
-        { body: "Code: [[TOKEN]]" };
+        { body: "[[TOKEN]] Code:" };
 
       const rawToken = msg.testId?.includes("|") ? msg.testId.split("|")[1] : msg.testId;
       const testToken = rawToken ?? "";
 
       let templateBody = userTemplate.body;
       if (!templateBody.includes("[[TOKEN]]")) {
-        templateBody = `${templateBody.trim()} [[TOKEN]]`;
+        templateBody = `[[TOKEN]] ${templateBody.trim()}`;
       }
       const fullMessageBody = templateBody.replace("[[TOKEN]]", testToken);
 
@@ -96,7 +96,6 @@ export async function processSmsJob(jobData: SmsBatchJobData) {
       }
     }
 
-    // Обновляем статистику кампании
     await prisma.smsCampaign.update({
       where: { id: campaignId },
       data: {
@@ -111,7 +110,6 @@ export async function processSmsJob(jobData: SmsBatchJobData) {
 
     console.log(`✅ [SMS Campaign ${campaignId}] Отправлено: ${sentCount}, Ошибок: ${failedCount}`);
 
-    // Запускаем первый опрос статусов TelQ уже через 15 секунд
     if (sentCount > 0) {
       await smsQueue.add(
         "poll-status",
@@ -134,9 +132,6 @@ export async function processSmsJob(jobData: SmsBatchJobData) {
   }
 }
 
-/**
- * ПОЛЛИНГ ПРОЦЕССОР: Опрос статусов в TelQ
- */
 export async function processSmsPollingJob(data: { campaignId: string; attempt: number }) {
   const { campaignId, attempt } = data;
   console.log(`🔍 [Polling Campaign ${campaignId}] Попытка #${attempt}...`);
@@ -204,7 +199,6 @@ export async function processSmsPollingJob(data: { campaignId: string; attempt: 
       }
     }
 
-    // Последующие опросы каждые 30 секунд
     await smsQueue.add(
       "poll-status",
       { campaignId, attempt: attempt + 1 },
@@ -214,10 +208,6 @@ export async function processSmsPollingJob(data: { campaignId: string; attempt: 
     console.error(`⚠️ [Polling Error Campaign ${campaignId}]:`, err);
   }
 }
-
-// ============================================================================
-// ВСПОМОГАТЕЛЬНЫЕ ФУНКЦИИ (TelQ + Senders)
-// ============================================================================
 
 async function getTelqToken(): Promise<string> {
   const appId = process.env.TELQ_APP_ID || "";
@@ -276,9 +266,6 @@ async function reserveTelqNumbers(token: string, targets: SmsBatchJobData["targe
   });
 }
 
-/**
- * Единый роутер отправки СМС по 4 провайдерам
- */
 async function sendSMS(params: {
   provider: string;
   phone: string;
@@ -291,7 +278,6 @@ async function sendSMS(params: {
     const cleanPhone = params.phone.replace("+", "");
 
     switch (params.provider) {
-      // 1. MIATEL
       case "miatel": {
         const miatelUrl = process.env.MIATEL_API_URL || "http://155.117.45.233:3000";
         const miatelUser = process.env.MIATEL_USERNAME || "";
@@ -311,7 +297,6 @@ async function sendSMS(params: {
         return isOk ? { success: true } : { success: false, error: body };
       }
 
-      // 2. FORTYTWO TELECOM
       case "fortytwo": {
         const fortyTwoUrl = process.env.FORTYTWO_API_URL || "https://rest.fortytwo.com/1/im";
         const fortyTwoToken = process.env.FORTYTWO_TOKEN || "";
@@ -332,7 +317,6 @@ async function sendSMS(params: {
         return res.ok ? { success: true } : { success: false, error: body };
       }
 
-      // 3. MESSAGEWHIZ
       case "messagewhiz": {
         const whizUrl = process.env.MESSAGEWHIZ_API_URL || "https://sms.messagewhiz.com/sms";
         const whizKey = process.env.MESSAGEWHIZ_API_KEY || "";
@@ -354,7 +338,6 @@ async function sendSMS(params: {
         return res.ok ? { success: true } : { success: false, error: body };
       }
 
-      // 4. DYNAMIC MESSAGING
       case "dm":
       default: {
         const dmUrl = process.env.DM_API_URL || "https://api.sms.dynamicmessaging.co.uk";
