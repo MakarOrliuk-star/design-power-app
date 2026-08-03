@@ -43,6 +43,9 @@ const validator = vi.hoisted(() => ({
   validateComposedAsset: vi.fn(),
   personLayerSanity: vi.fn(),
 }));
+// Задание 3, Фаза 6: scene-пайплайн живёт своим модулем и тестируется своим
+// файлом; здесь проверяется только МАРШРУТИЗАЦИЯ по флагу спеки.
+const scenePipeline = vi.hoisted(() => ({ renderSceneAsset: vi.fn() }));
 
 vi.mock("../src/lib/prisma.js", () => ({ prisma: db }));
 vi.mock("../src/lib/fal.js", () => fal);
@@ -57,6 +60,7 @@ vi.mock("../src/queues/person.processor.js", () => ({
   buildPersonPromptMemoized: vi.fn(async (_b: string, brand: string, text: string) => `PP(${brand}): ${text}`),
 }));
 vi.mock("../src/services/bundle.service.js", () => ({ recomputeBundleStatus: recompute }));
+vi.mock("../src/services/scenePipeline.js", () => scenePipeline);
 
 import { EMAIL_HERO_V1, EMAIL_HERO_V2 } from "../src/services/layoutSpec.js";
 import {
@@ -98,6 +102,7 @@ beforeEach(() => {
   // Defaults: sane layer, passing validation (tests override per case).
   validator.personLayerSanity.mockReturnValue({ ok: true, reason: "" });
   validator.validateComposedAsset.mockResolvedValue({ passed: true, checks: [], failedKeys: [] });
+  scenePipeline.renderSceneAsset.mockReset();
 });
 
 /**
@@ -848,6 +853,74 @@ describe("processRenderAssetJob — engine path (Phase 3)", () => {
     // Никаких AI-вызовов и Cloudinary-overlay в движковом пути (DI-Q6, D-E4).
     expect(fal.runPersonFal).not.toHaveBeenCalled();
     expect(cloud.composeLayersUrl).not.toHaveBeenCalled();
+  });
+
+  it("флаг scenePipeline в активной спеке уводит рендер в scene-пайплайн (Фаза 6)", async () => {
+    db.bundleAsset.findUnique.mockResolvedValue(engineAsset);
+    db.layoutSpec.findFirst.mockResolvedValue({
+      ...specRow,
+      spec: { ...EMAIL_HERO_V1, scenePipeline: true },
+    });
+    db.brand.findUnique.mockResolvedValue({
+      id: "br1",
+      decorUrls: [{ url: "https://cdn/decor/a.png", concepts: ["coin"] }],
+    });
+    scenePipeline.renderSceneAsset.mockResolvedValue({
+      ok: true,
+      imageUrl: "https://cdn/scene.png",
+      metadata: { scenePipeline: true },
+    });
+
+    await processRenderAssetJob("bun1", "v1", "a1");
+
+    expect(scenePipeline.renderSceneAsset).toHaveBeenCalledWith(
+      expect.objectContaining({
+        bundleId: "bun1",
+        variantId: "v1",
+        assetId: "a1",
+        assetKey: "email",
+        brandName: "Betnella(Men)",
+        brandId: "br1",
+        campaignPrompt: "Weekend reload",
+        personLayerHash: "hp",
+        itemLayerHash: "hi",
+        canvas: { w: 1200, h: 600 },
+        // Сырые Json-колонки — тегированные записи доходят до пайплайна,
+        // а не режутся до строк по дороге (D-N9').
+        brandDecorRaw: [{ url: "https://cdn/decor/a.png", concepts: ["coin"] }],
+      }),
+    );
+    // Старый движок не вызывается — подмена этапа, а не дублирование.
+    expect(engine.composeAsset).not.toHaveBeenCalled();
+    expect(db.bundleAsset.update).toHaveBeenLastCalledWith({
+      where: { id: "a1" },
+      data: expect.objectContaining({ status: "DONE", imageUrl: "https://cdn/scene.png" }),
+    });
+  });
+
+  it("провал scene-пайплайна кладёт отчёт валидатора в метаданные FAILED-ассета", async () => {
+    db.bundleAsset.findUnique.mockResolvedValue(engineAsset);
+    db.layoutSpec.findFirst.mockResolvedValue({
+      ...specRow,
+      spec: { ...EMAIL_HERO_V1, scenePipeline: true },
+    });
+    db.brand.findUnique.mockResolvedValue({ id: "br1", decorUrls: null });
+    scenePipeline.renderSceneAsset.mockResolvedValue({
+      ok: false,
+      reason: "scene validation failed — decorCount: 2 при требовании ≥ 6.65",
+      metadata: { scenePipeline: true, validator: { passed: false } },
+    });
+
+    await processRenderAssetJob("bun1", "v1", "a1");
+
+    expect(db.bundleAsset.update).toHaveBeenLastCalledWith({
+      where: { id: "a1" },
+      data: expect.objectContaining({
+        status: "FAILED",
+        errorMessage: expect.stringContaining("decorCount"),
+        metadata: expect.objectContaining({ scenePipeline: true }),
+      }),
+    });
   });
 
   it("fails readable when the static background template is missing (DI-Q6)", async () => {

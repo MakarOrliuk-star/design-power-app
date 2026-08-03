@@ -1,13 +1,22 @@
-import { createHash } from "node:crypto";
 import { readFile, unlink } from "node:fs/promises";
 import { Router } from "express";
 import type { Request, Response } from "express";
 import formidable from "formidable";
 import { z } from "zod";
-import { uploadBuffer, withRetry } from "../lib/cloudinary.js";
-import { hasUsefulAlpha, normalizeLayer } from "../lib/layerNormalize.js";
 import { prisma } from "../lib/prisma.js";
+import type { Prisma } from "../../generated/prisma/client.js";
 import type { BundleTypeAsset } from "../services/bundle.service.js";
+import {
+  DECOR_FOLDER,
+  MAX_DECOR_PER_SLOT,
+  ingestDecorBuffer,
+  attachEntriesToBrand,
+} from "../services/decorIngest.js";
+import {
+  parseDecorEntries,
+  serializeDecorEntries,
+  decorEntryUrls,
+} from "../lib/decorLibrary.js";
 
 /**
  * Библиотека декора (Задание 2, Фаза 2; DV-C1/DV-C2).
@@ -34,13 +43,14 @@ import type { BundleTypeAsset } from "../services/bundle.service.js";
 
 export const decorRouter = Router();
 
-/** Куда в Cloudinary складываются ассеты библиотеки. */
-export const DECOR_FOLDER = "crm-bundle/decor";
+// Приём файла (альфа-гейт, нормализация, sha256-дедуп, потолки) живёт в
+// services/decorIngest.ts — он общий с автосохранением нарезки листа декора
+// (`D-N8'`), у которого админки нет. Здесь остаётся только HTTP.
+export { DECOR_FOLDER, MAX_DECOR_PER_SLOT };
+
 /** Потолок на файл: декор — мелкая вырезка, мегабайты тут означают ошибку. */
 export const MAX_DECOR_BYTES = 8 * 1024 * 1024;
 export const MAX_DECOR_FILES = 24;
-/** Столько URL-ов принимает слот (совпадает со схемой bundle-types). */
-export const MAX_DECOR_PER_SLOT = 20;
 
 export interface DecorUploadResult {
   name: string;
@@ -53,9 +63,9 @@ export interface DecorUploadResult {
 
 const assetKeysSchema = z.array(z.string().min(1).max(40)).min(1).max(8);
 
-/** `Brand.decorUrls` — string[] в Json-колонке; всё прочее считаем пустым. */
+/** `Brand.decorUrls` — строки и тегированные записи (`D-N9'`) → только URL. */
 export function brandDecorUrls(raw: unknown): string[] {
-  return Array.isArray(raw) ? raw.filter((u): u is string => typeof u === "string") : [];
+  return decorEntryUrls(parseDecorEntries(raw));
 }
 
 /** Библиотеки для экрана админки: общая (по слотам) + бренды (DV-C2′). */
@@ -144,42 +154,34 @@ decorRouter.post("/", async (req: Request, res: Response) => {
       temps.push(file.filepath);
       const name = file.originalFilename ?? "decor";
       const raw = await readFile(file.filepath);
-
-      // Без альфы объект встанет на сцену прямоугольником — отказываем сразу
-      // и объясняем, что делать, вместо порчи баннера.
-      if (!(await hasUsefulAlpha(raw))) {
-        results.push({
-          name,
-          ok: false,
-          reason: "нет прозрачного фона — вырежьте объект и сохраните PNG с альфа-каналом",
-        });
+      // Общий приёмник (services/decorIngest.ts): альфа-гейт с внятной
+      // причиной отказа, нормализация тем же кодом, что слои героев,
+      // sha256-дедуп — тот же путь, что у автосохранения нарезки листа.
+      const ingested = await ingestDecorBuffer(raw, name);
+      if (!ingested.ok) {
+        results.push({ name, ok: false, reason: ingested.reason });
         continue;
       }
-      // Тот же нормализатор, что и для слоёв персонажа/item: чистка ореолов
-      // и обрезка по фактическому bbox, иначе масштаб в раскладке врёт.
-      const norm = await normalizeLayer(raw);
-      if (!norm.ok) {
-        results.push({ name, ok: false, reason: norm.reason });
-        continue;
-      }
-
-      const publicId = createHash("sha256").update(norm.png).digest("hex").slice(0, 32);
-      const up = await withRetry(
-        () => uploadBuffer(norm.png, publicId, DECOR_FOLDER),
-        `decor ${name}`,
-      );
-      if (!up.success || !up.secure_url) {
-        results.push({ name, ok: false, reason: up.error ?? "загрузка в Cloudinary не удалась" });
-        continue;
-      }
-      results.push({ name, ok: true, url: up.secure_url, width: norm.width, height: norm.height });
+      results.push({
+        name,
+        ok: true,
+        url: ingested.url,
+        width: ingested.width,
+        height: ingested.height,
+      });
     }
 
     const newUrls = results.filter((r) => r.ok && r.url).map((r) => r.url!);
     let slotUpdates: Array<{ assetKey: string; total: number; skipped: number }> = [];
     let brandUpdate: { brandId: string; total: number; skipped: number } | null = null;
     if (newUrls.length > 0) {
-      if (brandId) brandUpdate = await attachToBrand(brandId, newUrls);
+      // Ручная заливка остаётся безымянной (`D-N9'`): теги проставляет только
+      // автосохранение нарезки, у которого есть концепты брифа.
+      if (brandId)
+        brandUpdate = await attachEntriesToBrand(
+          brandId,
+          newUrls.map((url) => ({ url, concepts: [], season: null })),
+        );
       else slotUpdates = await attachToSlots(assetKeys, newUrls);
     }
 
@@ -224,10 +226,14 @@ decorRouter.delete("/", async (req: Request, res: Response) => {
       res.status(404).json({ error: "brand_not_found" });
       return;
     }
-    const current = brandDecorUrls(brand.decorUrls);
-    const next = current.filter((u) => u !== url);
+    // Отвязка по URL с сохранением тегов остальных записей (`D-N9'`).
+    const current = parseDecorEntries(brand.decorUrls);
+    const next = current.filter((e) => e.url !== url);
     if (next.length !== current.length) {
-      await prisma.brand.update({ where: { id: brandId }, data: { decorUrls: next } });
+      await prisma.brand.update({
+        where: { id: brandId },
+        data: { decorUrls: serializeDecorEntries(next) as unknown as Prisma.InputJsonValue },
+      });
     }
     res.json({ removed: current.length - next.length });
     return;
@@ -253,31 +259,6 @@ decorRouter.delete("/", async (req: Request, res: Response) => {
   }
   res.json({ removed });
 });
-
-/** Дописывает URL-ы в библиотеку бренда — те же правила, что у слота:
- *  без дублей, с сохранением порядка (раскладка сидирована по списку) и с
- *  тем же потолком MAX_DECOR_PER_SLOT. */
-async function attachToBrand(
-  brandId: string,
-  urls: string[],
-): Promise<{ brandId: string; total: number; skipped: number }> {
-  const brand = await prisma.brand.findUnique({
-    where: { id: brandId },
-    select: { decorUrls: true },
-  });
-  const merged = brandDecorUrls(brand?.decorUrls);
-  let skipped = 0;
-  for (const u of urls) {
-    if (merged.includes(u)) continue;
-    if (merged.length >= MAX_DECOR_PER_SLOT) {
-      skipped++;
-      continue;
-    }
-    merged.push(u);
-  }
-  await prisma.brand.update({ where: { id: brandId }, data: { decorUrls: merged } });
-  return { brandId, total: merged.length, skipped };
-}
 
 /**
  * Дописывает URL-ы в `decorUrls` указанных слотов, без дублей и с потолком.

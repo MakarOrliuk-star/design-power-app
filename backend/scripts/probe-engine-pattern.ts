@@ -9,7 +9,7 @@
  * угодно и когда угодно.
  *
  * Каждый результат прогоняется через тот же замер, что и эталоны
- * (`measure-visual-pattern.ts`), и сверяется с коридорами TASK §2.2.
+ * (`src/lib/patternMiner.ts`), и сверяется с коридорами TASK §2.2.
  *
  * Запуск: npx tsx scripts/probe-engine-pattern.ts [--keep <dir>]
  */
@@ -22,7 +22,7 @@ import sharp from "sharp";
 import { composeAsset, type EngineLayer } from "../src/lib/composeEngine.js";
 import { validateComposedAsset } from "../src/lib/assetValidator.js";
 import { EMAIL_HERO_V2, EMAIL_HERO_V3, EMAIL_HERO_KEY } from "../src/services/layoutSpec.js";
-import { measure } from "./measure-visual-pattern.js";
+import { measure } from "../src/lib/patternMiner.js";
 
 const PNG = { compressionLevel: 9, adaptiveFiltering: false, palette: false } as const;
 
@@ -84,7 +84,7 @@ async function main(): Promise<void> {
     }
     const file = path.join(outDir, `${b.name}.png`);
     writeFileSync(file, res.scales[0]!.png);
-    const m = await measure(file);
+    const { metrics: m, components } = await measure(file);
 
     // Проверки берём у НАСТОЯЩЕГО валидатора Фазы 4, а не дублируем здесь:
     // иначе пробник и прод расходятся, и он начинает врать (так и вышло на
@@ -97,10 +97,14 @@ async function main(): Promise<void> {
     });
     const failed = report.failedKeys;
     const L = res.metadata.layers;
+    const croppedByEdge = components.filter(
+      (c) => c.cropped.left || c.cropped.right || c.cropped.top || c.cropped.bottom,
+    ).length;
+    const f = (v: number) => v.toFixed(1);
     rows.push(
-      `| ${b.name} | ${m.person?.heightPct ?? "—"} | ${m.item?.heightPct ?? "—"} | ` +
-        `${m.person?.bottomPct ?? "—"} | ${m.decorCount} | ${m.decorCoveragePct} | ` +
-        `${m.totalCoveragePct} | ${m.croppedByEdge} | ${L.decorPlaced}/${L.decorPlaced + L.decorSkipped} |`,
+      `| ${b.name} | ${f(m.personClusterHeightPct)} | ${f(m.itemClusterHeightPct)} | ` +
+        `${f(m.contentBottomPct)} | ${m.decorCount} | ${f(m.bandCoverage)} | ` +
+        `${f(m.decorAreaPct)} | ${croppedByEdge} | ${L.decorPlaced}/${L.decorPlaced + L.decorSkipped} |`,
     );
     const detail = report.checks
       .filter((c) => !c.passed)

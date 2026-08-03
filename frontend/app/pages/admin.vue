@@ -903,6 +903,93 @@ async function detachDecor(target: { assetKey?: string; brandId?: string }, url:
   }
 }
 
+// ---- Pattern-спека (Задание 3 «промпт → композиция») ----
+// Коридоры паттерна добываются майнером из эталонов дизайнеров (D-C1) и
+// хранятся версиями в БД. Здесь корпус заливается файлами, спека публикуется
+// и сразу активна; включение нового пайплайна — флаг scenePipeline в
+// layout-спеке выше.
+interface PatternSpecRowUi {
+  id: string;
+  key: string;
+  version: number;
+  corpusHash: string;
+  corpus: string[];
+  corridorCount: number;
+  isActive: boolean;
+  createdAt: string;
+  createdBy: string | null;
+}
+interface PatternCorridorRow {
+  key: string;
+  direction: string;
+  lo: number | null;
+  hi: number | null;
+  outliers: string[];
+}
+
+const patternSpecs = ref<PatternSpecRowUi[]>([]);
+const psKey = ref<string>("pattern.email");
+const psInput = ref<HTMLInputElement | null>(null);
+const psBusy = ref(false);
+const psMsg = ref("");
+const psCorridors = ref<PatternCorridorRow[]>([]);
+
+async function loadPatternSpecs() {
+  try {
+    const res = await api<{ specs: PatternSpecRowUi[] }>("/api/admin/pattern-specs");
+    patternSpecs.value = res.specs;
+  } catch {
+    psMsg.value = "Не удалось загрузить pattern-спеки";
+  }
+}
+
+function pickPatternCorpus() {
+  psInput.value?.click();
+}
+
+async function minePatternSpec(event: Event) {
+  const input = event.target as HTMLInputElement;
+  const files = [...(input.files ?? [])];
+  if (files.length === 0) return;
+  psBusy.value = true;
+  psMsg.value = "";
+  psCorridors.value = [];
+  try {
+    const form = new FormData();
+    for (const f of files) form.append("files", f);
+    form.append("key", psKey.value);
+    const res = await api<{
+      created: boolean;
+      spec: PatternSpecRowUi;
+      corridors: PatternCorridorRow[];
+    }>("/api/admin/pattern-specs/mine", { method: "POST", body: form });
+    psMsg.value = res.created
+      ? `Опубликована ${res.spec.key}@v${res.spec.version} (активна) ✓ — корпус: ${res.spec.corpus.join(", ")}`
+      : `Корпус не менялся — остаётся ${res.spec.key}@v${res.spec.version}`;
+    psCorridors.value = res.corridors;
+    await loadPatternSpecs();
+  } catch (err) {
+    const details = (err as { data?: { details?: string; hint?: string } })?.data;
+    psMsg.value = `Майнер не отработал: ${details?.details ?? details?.hint ?? "ошибка"}`;
+  } finally {
+    psBusy.value = false;
+    input.value = "";
+  }
+}
+
+async function togglePatternSpec(s: PatternSpecRowUi) {
+  try {
+    await api(`/api/admin/pattern-specs/${s.id}`, {
+      method: "PATCH",
+      body: { isActive: !s.isActive },
+    });
+    s.isActive = !s.isActive;
+    psMsg.value = `${s.key}@v${s.version} ${s.isActive ? "активирована" : "деактивирована"} ✓`;
+  } catch {
+    psMsg.value = "Ошибка переключения версии";
+  }
+}
+
 // ---- Brand change log (TASK download-and-edit-style §2) ----
 // Every «Edit current style» save/rollback lands here: who, when, before → after.
 interface BrandLogEntry {
@@ -995,6 +1082,7 @@ onMounted(() => {
     void loadBundleTypes();
     void loadLayoutSpecs();
     void loadDecor();
+    void loadPatternSpecs();
     void loadBrandLogs();
   }
   void loadTournaments();
@@ -1733,6 +1821,94 @@ onMounted(() => {
         Библиотеки пусты — сейчас декор берётся из кусков сгенерированного ITEM-слоя, и кадр
         выходит разреженнее эталонов.
       </p>
+    </section>
+
+    <section v-if="auth.isAdmin" class="panel">
+      <h2>Pattern-спека — коридоры из эталонов (Задание 3)</h2>
+      <p class="muted">
+        Числовые коридоры нового пайплайна <b>добываются майнером из эталонов дизайнеров</b>, а не
+        задаются руками. Загрузите корпус ручных работ (рабочий набор — эталоны 1–5, формат 2:1) —
+        каждый файл будет замерен, коридоры агрегированы, спека опубликована в БД и сразу активна.
+        Добавился шестой эталон — перезалейте корпус целиком: получится следующая версия, старая
+        останется для уже собранных бандлов. Тот же корпус повторно версий не плодит.
+      </p>
+      <p class="muted">
+        Новый пайплайн включается флагом <code>"scenePipeline": true</code> в layout-спеке
+        (секция «Layout-спеки» выше) и требует активной pattern-спеки — иначе рендер честно
+        откажет с подсказкой.
+      </p>
+
+      <div class="bt__actions">
+        <label>
+          Ключ:
+          <select v-model="psKey">
+            <option value="pattern.email">pattern.email (1200×600)</option>
+            <option value="pattern.push">pattern.push (1024×512)</option>
+            <option value="pattern.popup">pattern.popup (800×600)</option>
+          </select>
+        </label>
+        <input
+          ref="psInput"
+          class="dec__file"
+          type="file"
+          accept="image/*"
+          multiple
+          @change="minePatternSpec"
+        />
+        <button class="btn-primary" :disabled="psBusy" @click="pickPatternCorpus">
+          {{ psBusy ? "Майнер работает…" : "Загрузить корпус и опубликовать" }}
+        </button>
+      </div>
+      <p v-if="psMsg" class="muted">{{ psMsg }}</p>
+
+      <table v-if="patternSpecs.length" class="table">
+        <thead>
+          <tr>
+            <th>Спека</th>
+            <th>Корпус</th>
+            <th>Хэш корпуса</th>
+            <th>Коридоров</th>
+            <th>Создана</th>
+            <th></th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr v-for="s in patternSpecs" :key="s.id">
+            <td>{{ s.key }}@v{{ s.version }}{{ s.isActive ? " ●" : "" }}</td>
+            <td class="muted">{{ s.corpus.join(", ") }}</td>
+            <td class="muted"><code>{{ s.corpusHash }}…</code></td>
+            <td>{{ s.corridorCount }}</td>
+            <td class="muted">{{ new Date(s.createdAt).toLocaleString("ru-RU") }}</td>
+            <td>
+              <button class="btn-toggle" @click="togglePatternSpec(s)">
+                {{ s.isActive ? "деактивировать" : "активировать" }}
+              </button>
+            </td>
+          </tr>
+        </tbody>
+      </table>
+      <p v-else class="muted">
+        Спек в БД нет — новый пайплайн работать не будет, пока корпус не залит.
+      </p>
+
+      <details v-if="psCorridors.length">
+        <summary>Добытые коридоры последнего прогона ({{ psCorridors.length }})</summary>
+        <table class="table">
+          <thead>
+            <tr><th>Метрика</th><th>Коридор (с допуском)</th><th>Выбросы корпуса</th></tr>
+          </thead>
+          <tbody>
+            <tr v-for="c in psCorridors" :key="c.key">
+              <td><code>{{ c.key }}</code></td>
+              <td>
+                {{ c.lo === null ? `≤ ${c.hi}` : c.hi === null ? `≥ ${c.lo}` : `${c.lo}…${c.hi}` }}
+                <span class="muted">({{ c.direction }})</span>
+              </td>
+              <td class="muted">{{ c.outliers.join(", ") || "—" }}</td>
+            </tr>
+          </tbody>
+        </table>
+      </details>
     </section>
   </div>
 </template>

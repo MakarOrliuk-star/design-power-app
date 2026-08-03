@@ -8,6 +8,8 @@ import { deriveTokens } from "../lib/typography3d.js";
 import { clampStyleProfile, requestStyleProfile } from "../lib/styleProfile.js";
 import type { StyleProfile } from "../lib/styleProfile.js";
 import { splitLayerPieces } from "../lib/layerSplit.js";
+import { parseDecorEntries, decorEntryUrls } from "../lib/decorLibrary.js";
+import { renderSceneAsset } from "../services/scenePipeline.js";
 import type { EngineLayer } from "../lib/composeEngine.js";
 import { validateComposedAsset, personLayerSanity } from "../lib/assetValidator.js";
 import {
@@ -360,9 +362,11 @@ export function backgroundPrompt(neuralPrompt: string): string {
 // Stage A — prepare-variant
 // ------------------------------------------------------------------
 
-/** `Brand.decorUrls` — string[] в Json-колонке; всё прочее считаем пустым. */
+/** `Brand.decorUrls` — строки И тегированные записи (`D-N9'`): автосохранение
+ *  нарезки листа пишет `{url, concepts}`, и старый фильтр «только строки»
+ *  молча выбрасывал бы их — библиотека казалась бы пустой. */
 function brandDecorUrlsOf(raw: unknown): string[] {
-  return Array.isArray(raw) ? raw.filter((u): u is string => typeof u === "string") : [];
+  return decorEntryUrls(parseDecorEntries(raw));
 }
 
 /**
@@ -659,9 +663,39 @@ async function renderLayeredWithEngine(opts: {
   styleProfile: unknown;
   /** Библиотека декора БРЕНДА (DV-C2′): непустая перекрывает общую слота. */
   brandDecorUrls: string[];
+  /** Для scene-пайплайна (Фаза 6): бренд и сырые Json-колонки библиотек. */
+  brandName: string;
+  brandId: string | null;
+  brandDecorRaw: unknown;
 }): Promise<EngineRenderResult> {
   const { specRow, config } = opts;
   const spec = specRow.spec;
+
+  // Задание 3, Фаза 6: флаг в активной версии спеки уводит рендер в новый
+  // пайплайн «промпт → композиция» (services/scenePipeline.ts). Старый путь
+  // ниже не тронут — откат = активировать версию спеки без флага, без деплоя.
+  if (spec.scenePipeline) {
+    if (!opts.itemLayerHash) {
+      return { ok: false, reason: "scene pipeline: item layer missing — regenerate the bundle" };
+    }
+    return renderSceneAsset({
+      bundleId: opts.bundleId,
+      variantId: opts.variantId,
+      assetId: opts.assetId,
+      assetKey: opts.assetKey,
+      brandName: opts.brandName,
+      brandId: opts.brandId,
+      campaignPrompt: opts.campaignPrompt,
+      personLayerHash: opts.personLayerHash,
+      itemLayerHash: opts.itemLayerHash,
+      canvas: { w: spec.canvas.w, h: spec.canvas.h },
+      ...(spec.subjects.person.cropTopFraction !== undefined
+        ? { personCropTopFraction: spec.subjects.person.cropTopFraction }
+        : {}),
+      brandDecorRaw: opts.brandDecorRaw,
+      commonDecorRaw: config.decorUrls ?? [],
+    });
+  }
 
   // DV-C2′: у бренда своя библиотека — общая остаётся фолбэком для брендов
   // без своего набора.
@@ -969,7 +1003,7 @@ export async function processRenderAssetJob(
         // brand-поля варианта). Бренд удалён/пуст → общая библиотека слота.
         const brandRow = await prisma.brand.findUnique({
           where: { name: variant.brandName },
-          select: { decorUrls: true },
+          select: { id: true, decorUrls: true },
         });
         const done = await renderLayeredWithEngine({
           bundleId,
@@ -983,6 +1017,9 @@ export async function processRenderAssetJob(
           campaignPrompt: variant.bundle.neuralPrompt ?? "",
           styleProfile: variant.styleProfile,
           brandDecorUrls: brandDecorUrlsOf(brandRow?.decorUrls),
+          brandName: variant.brandName,
+          brandId: brandRow?.id ?? null,
+          brandDecorRaw: brandRow?.decorUrls,
         });
         if (!done.ok) {
           // Keep the validator report on the FAILED asset — the CRM shows WHY.

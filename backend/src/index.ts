@@ -7,6 +7,7 @@ import { healthRouter } from "./routes/health.js";
 import { authRouter } from "./routes/auth.js";
 import { adminRouter } from "./routes/admin.js";
 import { decorRouter } from "./routes/decor.js";
+import { patternSpecAdminRouter } from "./routes/patternSpecAdmin.js";
 import { catalogRouter } from "./routes/catalog.js";
 import { generateRouter } from "./routes/generate.js";
 import { tournamentRouter } from "./routes/tournament.js";
@@ -55,6 +56,9 @@ app.use("/auth", authRouter);
 // Библиотека декора (Задание 2, Фаза 2). Монтируется ДО `/api/admin`: префикс
 // у adminRouter более общий, и он перехватил бы запрос первым.
 app.use("/api/admin/decor", loadUser, requireAdmin, decorRouter);
+// Pattern-спеки (Задание 3): майнер по корпусу эталонов из админки. Тоже до
+// общего /api/admin — иначе его перехватит adminRouter.
+app.use("/api/admin/pattern-specs", loadUser, requireAdmin, patternSpecAdminRouter);
 app.use("/api/admin", loadUser, requireAdmin, adminRouter);
 // Zone guards: Design (DESIGNER) vs CRM (CRM); ADMIN passes both (see requireZone).
 app.use("/api/catalog", loadUser, requireAuth, requireZone("DESIGNER"), catalogRouter);
