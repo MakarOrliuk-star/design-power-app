@@ -5,7 +5,6 @@ import { Queue } from "bullmq";
 import { SMS_QUEUE, getBullConnection } from "../queues/index.js";
 import { env } from "../env.js";
 
-// Базовый список 36 стран из словаря
 const DEFAULT_ALLOWED_COUNTRIES = [
   "albania", "australia", "austria", "belgium", "bosnia and herzegovina",
   "brazil", "bulgaria", "canada", "croatia", "czech republic", "denmark",
@@ -16,7 +15,6 @@ const DEFAULT_ALLOWED_COUNTRIES = [
   "united kingdom"
 ];
 
-// Захардкоженный словарь языков и дефолтов по странам
 const DEFAULT_DICTIONARY: Record<string, { language: string; isDefault: boolean }[]> = {
   "Albania": [
     { language: "SQ", isDefault: true },
@@ -146,12 +144,10 @@ function getDefaultLanguagesForCountry(countryName: string) {
   return [{ language: "EN", isDefault: true }];
 }
 
-// Инициализируем очередь для отправки задач воркеру
 const smsQueue = new Queue(SMS_QUEUE, { connection: getBullConnection() });
 
 export const smsRouter = Router();
 
-// Схема валидации входящего тела запроса от Vue-фронтенда
 const smsBatchSchema = z.object({
   provider: z.enum(["dm", "miatel", "fortytwo", "messagewhiz"]),
   dmTokenKey: z.string().optional(),
@@ -167,10 +163,6 @@ const smsBatchSchema = z.object({
   ).min(1, "Необходимо выбрать хотя бы одну сеть"),
 });
 
-/**
- * POST /api/sms/batch
- * Запуск новой SMS-кампании
- */
 smsRouter.post("/batch", async (req: Request, res: Response) => {
   try {
     const data = smsBatchSchema.parse(req.body);
@@ -218,10 +210,6 @@ smsRouter.post("/batch", async (req: Request, res: Response) => {
   }
 });
 
-/**
- * GET /api/sms/campaign/:id
- * Поллинг статуса кампании для фронтенда
- */
 smsRouter.get("/campaign/:id", async (req: Request, res: Response) => {
   try {
     const rawId = req.params.id;
@@ -271,10 +259,6 @@ smsRouter.get("/campaign/:id", async (req: Request, res: Response) => {
   }
 });
 
-/**
- * GET /api/sms/networks
- * Получение сетей из TelQ с ФИЛЬТРАЦИЕЙ по 36 странам
- */
 smsRouter.get("/networks", async (req: Request, res: Response) => {
   try {
     const userId = (req as any).user?.id || (req as any).user?.sub;
@@ -339,10 +323,6 @@ smsRouter.get("/networks", async (req: Request, res: Response) => {
   }
 });
 
-/**
- * GET /api/sms/history
- * Просмотр истории запущенных кампаний
- */
 smsRouter.get("/history", async (req: Request, res: Response) => {
   try {
     const userId = (req as any).user?.id || (req as any).user?.sub;
@@ -367,10 +347,6 @@ smsRouter.get("/history", async (req: Request, res: Response) => {
   }
 });
 
-/**
- * POST /api/sms/templates/mapping
- * Получение шаблонов с подстановкой дефолтного словаря языков
- */
 smsRouter.post("/templates/mapping", async (req: Request, res: Response) => {
   try {
     const userId = (req as any).user?.id || (req as any).user?.sub;
@@ -393,21 +369,49 @@ smsRouter.post("/templates/mapping", async (req: Request, res: Response) => {
     const mapping: Record<string, any[]> = {};
 
     for (const country of countries) {
+      const defaultLangs = getDefaultLanguagesForCountry(country);
       const userCountryTemplates = dbTemplates.filter(
         (t) => t.country.trim().toLowerCase() === country.trim().toLowerCase()
       );
 
-      if (userCountryTemplates.length > 0) {
-        mapping[country] = userCountryTemplates;
-      } else {
-        const defaultLangs = getDefaultLanguagesForCountry(country);
-        mapping[country] = defaultLangs.map((item) => ({
-          country,
-          language: item.language,
-          body: "Code: [[TOKEN]]",
-          isDefault: item.isDefault,
-        }));
-      }
+      const combinedList = defaultLangs.map((defItem) => {
+        const saved = userCountryTemplates.find(
+          (t) => t.language.trim().toLowerCase() === defItem.language.trim().toLowerCase()
+        );
+        return saved
+          ? {
+              id: saved.id,
+              country,
+              language: saved.language,
+              body: saved.body,
+              isDefault: saved.isDefault,
+              mnc: saved.mnc,
+            }
+          : {
+              country,
+              language: defItem.language,
+              body: "Code: [[TOKEN]]",
+              isDefault: defItem.isDefault,
+            };
+      });
+
+      userCountryTemplates.forEach((saved) => {
+        const exists = combinedList.some(
+          (item) => item.language.trim().toLowerCase() === saved.language.trim().toLowerCase()
+        );
+        if (!exists) {
+          combinedList.push({
+            id: saved.id,
+            country,
+            language: saved.language,
+            body: saved.body,
+            isDefault: saved.isDefault,
+            mnc: saved.mnc,
+          });
+        }
+      });
+
+      mapping[country] = combinedList;
     }
 
     res.json({ success: true, data: mapping });
@@ -417,7 +421,6 @@ smsRouter.post("/templates/mapping", async (req: Request, res: Response) => {
   }
 });
 
-// Схема валидации для сохранения шаблона
 const templateSchema = z.object({
   country: z.string().min(1),
   language: z.string().min(1),
@@ -426,9 +429,6 @@ const templateSchema = z.object({
   mnc: z.string().optional(),
 });
 
-/**
- * GET /api/sms/templates
- */
 smsRouter.get("/templates", async (req: Request, res: Response) => {
   try {
     const userId = (req as any).user?.id || (req as any).user?.sub;
@@ -449,10 +449,6 @@ smsRouter.get("/templates", async (req: Request, res: Response) => {
   }
 });
 
-/**
- * POST /api/sms/templates
- * Создание или обновление (Upsert) шаблона
- */
 smsRouter.post("/templates", async (req: Request, res: Response) => {
   try {
     const userId = (req as any).user?.id || (req as any).user?.sub;

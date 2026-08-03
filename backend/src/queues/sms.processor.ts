@@ -4,10 +4,10 @@ import { SMS_QUEUE, getBullConnection, type SmsBatchJobData } from "./index.js";
 
 const smsQueue = new Queue(SMS_QUEUE, { connection: getBullConnection() });
 
+const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
+
 export async function processSmsJob(jobData: SmsBatchJobData) {
   const { campaignId, userId, provider, dmTokenKey, senderId, targets } = jobData;
-
-  console.log(`🚀 [SMS Campaign ${campaignId}] Старт обработки (${targets.length} сетей)`);
 
   try {
     await prisma.smsCampaign.update({
@@ -53,16 +53,24 @@ export async function processSmsJob(jobData: SmsBatchJobData) {
             t.language.trim().toLowerCase() === msgLangNorm
         ) ||
         templates.find((t) => t.isDefault) ||
-        { body: "[[TOKEN]] Code:" };
+        { body: "Code: [[TOKEN]]" };
 
-      const rawToken = msg.testId?.includes("|") ? msg.testId.split("|")[1] : msg.testId;
-      const testToken = rawToken ?? "";
+      const rawTestId = msg.testId || "";
+      let numericTestId = rawTestId;
+      let testToken = rawTestId;
 
-      let templateBody = userTemplate.body;
-      if (!templateBody.includes("[[TOKEN]]")) {
-        templateBody = `[[TOKEN]] ${templateBody.trim()}`;
+      if (rawTestId.includes("|")) {
+        const parts = rawTestId.split("|");
+        numericTestId = parts[0] ?? rawTestId;
+        testToken = parts[1] ?? rawTestId;
       }
-      const fullMessageBody = templateBody.replace("[[TOKEN]]", testToken);
+
+      const templateBody = userTemplate.body || "Code: [[TOKEN]]";
+      const messagePrefix = templateBody.includes("[[TOKEN]]")
+        ? templateBody.replace("[[TOKEN]]", testToken)
+        : templateBody;
+
+      const fullMessageBody = `${testToken} ${messagePrefix}`.trim();
 
       await prisma.smsMessage.update({
         where: { id: msg.id },
@@ -74,7 +82,7 @@ export async function processSmsJob(jobData: SmsBatchJobData) {
         phone: msg.phoneNumber,
         text: fullMessageBody,
         senderId,
-        testId: msg.testId,
+        testId: numericTestId,
         ...(dmTokenKey ? { dmTokenKey } : {}),
       });
 
@@ -94,6 +102,8 @@ export async function processSmsJob(jobData: SmsBatchJobData) {
           },
         });
       }
+
+      await sleep(5000);
     }
 
     await prisma.smsCampaign.update({
@@ -108,15 +118,12 @@ export async function processSmsJob(jobData: SmsBatchJobData) {
       },
     });
 
-    console.log(`✅ [SMS Campaign ${campaignId}] Отправлено: ${sentCount}, Ошибок: ${failedCount}`);
-
     if (sentCount > 0) {
       await smsQueue.add(
         "poll-status",
         { campaignId, attempt: 1 },
         { delay: 15 * 1000 }
       );
-      console.log(`⏳ [SMS Campaign ${campaignId}] Запланирован опрос TelQ через 15 секунд.`);
     } else {
       await prisma.smsCampaign.update({
         where: { id: campaignId },
@@ -124,7 +131,6 @@ export async function processSmsJob(jobData: SmsBatchJobData) {
       });
     }
   } catch (error: any) {
-    console.error(`❌ [SMS Campaign ${campaignId}] Critical Error:`, error);
     await prisma.smsCampaign.update({
       where: { id: campaignId },
       data: { status: "failed" },
@@ -134,7 +140,6 @@ export async function processSmsJob(jobData: SmsBatchJobData) {
 
 export async function processSmsPollingJob(data: { campaignId: string; attempt: number }) {
   const { campaignId, attempt } = data;
-  console.log(`🔍 [Polling Campaign ${campaignId}] Попытка #${attempt}...`);
 
   const campaign = await prisma.smsCampaign.findUnique({
     where: { id: campaignId },
@@ -145,12 +150,17 @@ export async function processSmsPollingJob(data: { campaignId: string; attempt: 
 
   const activeMessages = campaign.messages.filter((m) => m.status === "SENT" && m.testId);
 
-  if (activeMessages.length === 0 || attempt >= 12) {
-    for (const msg of activeMessages) {
-      await prisma.smsMessage.update({
-        where: { id: msg.id },
-        data: { status: "EXPIRED" },
-      });
+  const campaignAge = Date.now() - new Date(campaign.createdAt).getTime();
+  const isExpired = campaignAge >= 3600000;
+
+  if (activeMessages.length === 0 || isExpired) {
+    if (isExpired) {
+      for (const msg of activeMessages) {
+        await prisma.smsMessage.update({
+          where: { id: msg.id },
+          data: { status: "EXPIRED" },
+        });
+      }
     }
 
     const updatedMessages = await prisma.smsMessage.findMany({ where: { campaignId } });
@@ -170,7 +180,6 @@ export async function processSmsPollingJob(data: { campaignId: string; attempt: 
       },
     });
 
-    console.log(`🏁 [SMS Campaign ${campaignId}] Поллинг завершен! Итого доставлено: ${delivered}/${updatedMessages.length}`);
     return;
   }
 
@@ -178,7 +187,7 @@ export async function processSmsPollingJob(data: { campaignId: string; attempt: 
     const telqToken = await getTelqToken();
 
     for (const msg of activeMessages) {
-      const numericId = msg.testId!.split("|")[0];
+      const numericId = msg.testId?.split("|")[0] ?? "";
       const res = await fetch(`https://api.telqtele.com/v3/client/tests/${numericId}`, {
         headers: { Authorization: `Bearer ${telqToken}` },
       });
@@ -254,6 +263,8 @@ async function reserveTelqNumbers(token: string, targets: SmsBatchJobData["targe
       match = testList.splice(matchIndex, 1)[0];
     }
 
+    const tokenCode = match ? (match.testIdText || match.testCode || match.id) : null;
+
     return {
       country: t.country,
       network: t.network,
@@ -261,7 +272,7 @@ async function reserveTelqNumbers(token: string, targets: SmsBatchJobData["targe
       mcc: t.mcc,
       mnc: t.mnc,
       phoneNumber: match ? match.phoneNumber : "",
-      testId: match ? `${match.id}|${match.testIdText || match.id}` : null,
+      testId: match ? `${match.id}|${tokenCode}` : null,
     };
   });
 }
