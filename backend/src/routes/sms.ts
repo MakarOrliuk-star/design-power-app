@@ -5,6 +5,7 @@ import { Queue } from "bullmq";
 import { SMS_QUEUE, getBullConnection } from "../queues/index.js";
 import { env } from "../env.js";
 
+// Базовый список 36 стран из словаря
 const DEFAULT_ALLOWED_COUNTRIES = [
   "albania", "australia", "austria", "belgium", "bosnia and herzegovina",
   "brazil", "bulgaria", "canada", "croatia", "czech republic", "denmark",
@@ -15,6 +16,7 @@ const DEFAULT_ALLOWED_COUNTRIES = [
   "united kingdom"
 ];
 
+// Захардкоженный словарь языков и дефолтов по странам
 const DEFAULT_DICTIONARY: Record<string, { language: string; isDefault: boolean }[]> = {
   "Albania": [
     { language: "SQ", isDefault: true },
@@ -172,7 +174,7 @@ const smsBatchSchema = z.object({
 smsRouter.post("/batch", async (req: Request, res: Response) => {
   try {
     const data = smsBatchSchema.parse(req.body);
-    const userId = (req as any).user?.id;
+    const userId = (req as any).user?.id || (req as any).user?.sub;
     if (!userId) {
       res.status(401).json({ success: false, error: "Пользователь не авторизован" });
       return;
@@ -230,7 +232,7 @@ smsRouter.get("/campaign/:id", async (req: Request, res: Response) => {
     }
 
     const campaignId: string = rawId;
-    const userId = (req as any).user?.id;
+    const userId = (req as any).user?.id || (req as any).user?.sub;
 
     const campaign = await prisma.smsCampaign.findUnique({
       where: { id: campaignId },
@@ -275,7 +277,7 @@ smsRouter.get("/campaign/:id", async (req: Request, res: Response) => {
  */
 smsRouter.get("/networks", async (req: Request, res: Response) => {
   try {
-    const userId = (req as any).user?.id;
+    const userId = (req as any).user?.id || (req as any).user?.sub;
 
     let userTemplates = userId
       ? await prisma.smsTemplate.findMany({
@@ -343,7 +345,7 @@ smsRouter.get("/networks", async (req: Request, res: Response) => {
  */
 smsRouter.get("/history", async (req: Request, res: Response) => {
   try {
-    const userId = (req as any).user?.id;
+    const userId = (req as any).user?.id || (req as any).user?.sub;
     if (!userId) {
       res.status(401).json({ success: false, error: "Не авторизован" });
       return;
@@ -371,7 +373,7 @@ smsRouter.get("/history", async (req: Request, res: Response) => {
  */
 smsRouter.post("/templates/mapping", async (req: Request, res: Response) => {
   try {
-    const userId = (req as any).user?.id;
+    const userId = (req as any).user?.id || (req as any).user?.sub;
     const { countries } = req.body as { countries: string[] };
 
     if (!Array.isArray(countries)) {
@@ -429,7 +431,7 @@ const templateSchema = z.object({
  */
 smsRouter.get("/templates", async (req: Request, res: Response) => {
   try {
-    const userId = (req as any).user?.id;
+    const userId = (req as any).user?.id || (req as any).user?.sub;
     if (!userId) {
       res.status(401).json({ success: false, error: "Не авторизован" });
       return;
@@ -453,7 +455,7 @@ smsRouter.get("/templates", async (req: Request, res: Response) => {
  */
 smsRouter.post("/templates", async (req: Request, res: Response) => {
   try {
-    const userId = (req as any).user?.id;
+    const userId = (req as any).user?.id || (req as any).user?.sub;
     if (!userId) {
       res.status(401).json({ success: false, error: "Не авторизован" });
       return;
