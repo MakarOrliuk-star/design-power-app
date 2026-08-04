@@ -320,6 +320,14 @@ async function removeCategory() {
 
 const systemOpen = ref(false);
 const systemMsg = ref("");
+const sysEl = ref<HTMLElement | null>(null);
+
+/** The wrapper sits last in a scrolling column — opening it must also show it. */
+function toggleSystem() {
+  systemOpen.value = !systemOpen.value;
+  if (!systemOpen.value) return;
+  void nextTick(() => sysEl.value?.scrollIntoView({ block: "nearest", behavior: "smooth" }));
+}
 
 async function saveSystem() {
   if (!systemDraft.value.trim()) {
@@ -504,8 +512,8 @@ function close() {
               <button class="btn btn--ghost btn--small" type="submit">Добавить</button>
             </form>
 
-            <div class="sys">
-              <button class="sys__head" type="button" @click="systemOpen = !systemOpen">
+            <div ref="sysEl" class="sys">
+              <button class="sys__head" type="button" @click="toggleSystem">
                 <span>Системная обёртка</span>
                 <span class="sys__chevron">{{ systemOpen ? "−" : "+" }}</span>
               </button>
@@ -705,6 +713,13 @@ function close() {
   overflow-y: auto;
   overflow-x: hidden;
   padding-right: 4px;
+  padding-bottom: 4px;
+}
+/* Flex children shrink by default, so the element list and the system wrapper
+   were squeezed (and clipped) instead of letting the column scroll. Pinning
+   them to their natural height is what actually turns on the scrollbar. */
+.scroll > * {
+  flex: 0 0 auto;
 }
 
 .form {
@@ -715,6 +730,12 @@ function close() {
   gap: 10px;
   overflow-y: auto;
   overflow-x: hidden;
+}
+/* Same rule as the pack column, minus the prompt fields — those are SUPPOSED to
+   absorb the leftover height. Everything else (names, provider refs, footer)
+   keeps its natural size and the column scrolls instead of squashing them. */
+.form > *:not(.field--grow) {
+  flex: 0 0 auto;
 }
 .field {
   display: flex;
