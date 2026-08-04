@@ -20,21 +20,26 @@ export async function processSmsJob(jobData: SmsBatchJobData) {
 
     const createdMessages = [];
     for (const item of reservedNumbers) {
+      const hasNumber = Boolean(item.phoneNumber && item.phoneNumber.trim().length > 0);
+      const isReady = Boolean(item.testId && hasNumber);
+
       const msg = await prisma.smsMessage.create({
         data: {
-          campaignId,
+          campaign: { connect: { id: campaignId } },
           testId: item.testId,
-          phoneNumber: item.phoneNumber,
+          phoneNumber: item.phoneNumber || "",
           mcc: item.mcc,
           mnc: item.mnc,
           country: item.country,
           network: item.network,
           senderId,
-          status: item.testId ? "READY_TO_SEND" : "ERROR",
-          errorLog: item.testId ? null : "TelQ: No number available",
+          status: isReady ? "READY_TO_SEND" : "ERROR",
+          errorLog: isReady ? null : (item.testId ? "TelQ: No phone number available" : "TelQ: Reservation failed"),
         },
       });
-      if (item.testId) createdMessages.push({ ...msg, language: item.language });
+      if (isReady) {
+        createdMessages.push({ ...msg, language: item.language });
+      }
     }
 
     const templates = await prisma.smsTemplate.findMany({ where: { userId } });
@@ -264,6 +269,7 @@ async function reserveTelqNumbers(token: string, targets: SmsBatchJobData["targe
     }
 
     const tokenCode = match ? (match.testIdText || match.testCode || match.id) : null;
+    const phoneNum = match?.phoneNumber || match?.number || match?.msisdn || "";
 
     return {
       country: t.country,
@@ -271,7 +277,7 @@ async function reserveTelqNumbers(token: string, targets: SmsBatchJobData["targe
       language: t.language,
       mcc: t.mcc,
       mnc: t.mnc,
-      phoneNumber: match ? match.phoneNumber : "",
+      phoneNumber: String(phoneNum || ""),
       testId: match ? `${match.id}|${tokenCode}` : null,
     };
   });
@@ -286,7 +292,7 @@ async function sendSMS(params: {
   dmTokenKey?: string;
 }): Promise<{ success: boolean; error?: string }> {
   try {
-    const cleanPhone = params.phone.replace("+", "");
+    const cleanPhone = params.phone.replace(/\D/g, "");
 
     switch (params.provider) {
       case "miatel": {
@@ -363,8 +369,8 @@ async function sendSMS(params: {
           "";
 
         const payload = isOtp
-          ? { phoneNumber: params.phone, sender: params.senderId, message: params.text }
-          : { message: params.text, sender: params.senderId, contacts: [{ phoneNumber: params.phone }] };
+          ? { phoneNumber: cleanPhone, sender: params.senderId, message: params.text }
+          : { message: params.text, sender: params.senderId, contacts: [{ phoneNumber: cleanPhone }] };
 
         const res = await fetch(endpoint, {
           method: "POST",
