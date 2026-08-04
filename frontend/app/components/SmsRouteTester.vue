@@ -77,9 +77,10 @@ const activeCampaignId = ref<string | null>(null);
 const activeCampaign = ref<SmsCampaign | null>(null);
 let pollTimer: ReturnType<typeof setInterval> | null = null;
 
-// History
+// History & Export
 const loadingHistory = ref(false);
 const historyCampaigns = ref<SmsCampaign[]>([]);
+const exportingServerCampaignId = ref<string | null>(null);
 
 // ==========================================
 // COMPUTED (БЕЗ ?.)
@@ -372,6 +373,36 @@ async function fetchHistory() {
   } finally {
     loadingHistory.value = false;
   }
+}
+
+// Экспорт отчета на сервер
+async function handleExportToServer(campaignId: string) {
+  if (!campaignId) return;
+  exportingServerCampaignId.value = campaignId;
+  try {
+    const res = await fetch(`/api/sms/export/server/${campaignId}`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      credentials: 'include',
+    });
+    const json = await res.json();
+    if (res.ok && json.success) {
+      alert('✅ Отчет успешно отправлен для экспорта!');
+    } else {
+      alert(`❌ Ошибка отправки: ${json ? json.error : 'Неизвестная ошибка'}`);
+    }
+  } catch (err: any) {
+    console.error('Export error:', err);
+    alert(`❌ Ошибка сети: ${err.message}`);
+  } finally {
+    exportingServerCampaignId.value = null;
+  }
+}
+
+// Скачивание CSV файла
+function handleDownloadCsv(campaignId: string) {
+  if (!campaignId) return;
+  window.open(`/api/sms/export/csv/${campaignId}`, '_blank');
 }
 
 function switchTab(tab: 'new' | 'history') {
@@ -724,8 +755,25 @@ onUnmounted(() => {
           </table>
         </div>
 
-        <div class="actions-row">
-          <button class="crm-btn-primary" @click="resetToStep1">🔄 Запустить новую пачку</button>
+        <div class="actions-row space-between">
+          <button class="crm-btn-sec" @click="resetToStep1">🔄 Запустить новую пачку</button>
+          
+          <div v-if="activeCampaignId" class="btn-group-sm">
+            <button 
+              class="crm-btn-sec-sm" 
+              :disabled="exportingServerCampaignId === activeCampaignId" 
+              @click="handleExportToServer(activeCampaignId)"
+            >
+              <span v-if="exportingServerCampaignId === activeCampaignId">⏳ Отправка...</span>
+              <span v-else>🚀 Отправить отчет</span>
+            </button>
+            <button 
+              class="crm-btn-sec-sm" 
+              @click="handleDownloadCsv(activeCampaignId)"
+            >
+              📊 Скачать CSV
+            </button>
+          </div>
         </div>
       </div>
     </div>
@@ -744,6 +792,7 @@ onUnmounted(() => {
               <th>Всего сообщений</th>
               <th>Доставлено</th>
               <th>Статус</th>
+              <th>Действия</th>
             </tr>
           </thead>
           <tbody>
@@ -756,6 +805,26 @@ onUnmounted(() => {
                 <span class="pill" :class="getStatusBadgeClass(c.status)">
                   {{ c.status.toUpperCase() }}
                 </span>
+              </td>
+              <td>
+                <div class="btn-group-sm">
+                  <button 
+                    class="crm-btn-sec-sm" 
+                    :disabled="exportingServerCampaignId === c.id" 
+                    @click="handleExportToServer(c.id)"
+                    title="Отправить отчет на сервер"
+                  >
+                    <span v-if="exportingServerCampaignId === c.id">⏳</span>
+                    <span v-else>🚀 Отправить</span>
+                  </button>
+                  <button 
+                    class="crm-btn-sec-sm" 
+                    @click="handleDownloadCsv(c.id)"
+                    title="Скачать CSV для Google Таблиц"
+                  >
+                    📊 CSV
+                  </button>
+                </div>
               </td>
             </tr>
           </tbody>

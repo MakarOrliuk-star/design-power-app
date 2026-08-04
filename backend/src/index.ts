@@ -33,6 +33,7 @@ import { qatoolsRouter } from "./routes/qatools.js";
 import { calculatorService } from "./services/calculator.service.js";
 
 import { smsRouter } from "./routes/sms.js";
+import { exportSmsRouter } from "./routes/export.sms.js";
 
 assertApiProductionConfig();
 
@@ -68,6 +69,7 @@ app.use("/api/smartico", loadUser, requireAuth, requireZone("CRM"), smarticoRout
 app.use("/api/qa-tools", loadUser, requireAuth, requireZone("CRM"), qatoolsRouter);
 app.use("/api/crm", loadUser, requireAuth, requireZone("CRM"), crmRouter);
 app.use("/api/sms", loadUser, requireAuth, requireZone("CRM"), smsRouter);
+app.use("/api/sms/export", loadUser, requireAuth, requireZone("CRM"), exportSmsRouter);
 // Image Bundles (TASK crm-bundle): CRM_SUPER / ADMIN / MANAGER only (D4).
 app.use("/api/bundles", loadUser, requireAuth, requireCrmSuper, bundlesRouter);
 app.use("/api/tournament-admin", loadUser, requireAuth, requireAdminOrManager, tournamentAdminRouter);
