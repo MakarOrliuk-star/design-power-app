@@ -12,6 +12,7 @@ import { catalogRouter } from "./routes/catalog.js";
 import { generateRouter } from "./routes/generate.js";
 import { tournamentRouter } from "./routes/tournament.js";
 import { tournamentAdminRouter } from "./routes/tournamentAdmin.js";
+import { tournamentPackRouter } from "./routes/tournamentPack.js";
 import { myBrandsRouter } from "./routes/myBrands.js";
 import {
   loadUser,
@@ -73,6 +74,9 @@ app.use("/api/sms/export", loadUser, requireAuth, requireZone("CRM"), exportSmsR
 // Image Bundles (TASK crm-bundle): CRM_SUPER / ADMIN / MANAGER only (D4).
 app.use("/api/bundles", loadUser, requireAuth, requireCrmSuper, bundlesRouter);
 app.use("/api/tournament-admin", loadUser, requireAuth, requireAdminOrManager, tournamentAdminRouter);
+// «Edit Tournament pack» (TASK tournament-pack): the same tournament data as the
+// admin panel, but audited + rollback-able, for SUPER_DESIGNER / ADMIN / MANAGER.
+app.use("/api/tournament-pack", loadUser, requireAuth, requireSuperDesigner, tournamentPackRouter);
 app.use("/api/tournament", loadUser, requireAuth, requireZone("DESIGNER"), tournamentRouter);
 // Super-designer surface (own-brand CRUD + brand test runs).
 app.use("/api/my-brands", loadUser, requireAuth, requireSuperDesigner, myBrandsRouter);

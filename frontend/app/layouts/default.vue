@@ -16,6 +16,9 @@
     <!-- Super-designer: Create a New Style / edit-brand modal (global, opens
          from the toolbar user menu and from the Library page). -->
     <SuperDesignerStyleModal />
+    <!-- Super-designer: «Edit Tournament pack» — the tournament editor, opened
+         from the same toolbar user menu (TASK tournament-pack). -->
+    <SuperDesignerTournamentPackModal />
   </div>
 </template>
 

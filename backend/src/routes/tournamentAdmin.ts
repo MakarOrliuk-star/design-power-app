@@ -1,79 +1,58 @@
 import { Router } from "express";
 import type { Request, Response } from "express";
 import { z } from "zod";
-import { prisma } from "../lib/prisma.js";
 import { cloudinaryConfigured } from "../env.js";
 import { uploadBase64, withRetry } from "../lib/cloudinary.js";
+import {
+  TOURNAMENT_MODES,
+  createCategory,
+  createElement,
+  deleteCategoryAudited,
+  listChangeLog,
+  loadPackConfig,
+  saveSystemPrompt,
+  softDeleteElement,
+  updateCategoryAudited,
+  updateElementAudited,
+} from "../services/tournamentPack.service.js";
+import type { PackActor } from "../services/tournamentPack.service.js";
 
 /**
  * Tournament admin (Phase 4): element CRUD per category, default prompts
  * (BASE/VIP), the 2 provider references, the system wrapper. Mounted at
  * /api/tournament-admin behind requireAdminOrManager (Phase 0 decision:
  * MANAGER edits tournaments too, but never reaches the ADMIN-only /api/admin).
+ *
+ * The domain logic lives in services/tournamentPack.service.ts, shared with the
+ * super-designer's «Edit Tournament pack» window (TASK tournament-pack) — one
+ * copy of the rules, and every edit from EITHER surface lands in the same audit
+ * log, which GET /change-log serves back to the panel.
  */
 export const tournamentAdminRouter: Router = Router();
 
-const MODES = ["BASE", "VIP"] as const;
-type Mode = (typeof MODES)[number];
-
-/** Which prompt modes an element of this category carries. */
-function modesOf(category: { hasModes: boolean; fixedMode: Mode | null }): Mode[] {
-  return category.hasModes ? ["BASE", "VIP"] : [category.fixedMode ?? "BASE"];
+function actorOf(req: Request): PackActor {
+  return { userId: req.user!.sub, userEmail: req.user!.email };
 }
 
 // ---- Full config (includes inactive elements + the system wrapper) ----
 
 tournamentAdminRouter.get("/config", async (_req: Request, res: Response) => {
-  const [categories, wrapper] = await Promise.all([
-    prisma.tournamentCategory.findMany({
-      orderBy: { order: "asc" },
-      select: {
-        id: true,
-        key: true,
-        name: true,
-        hasModes: true,
-        fixedMode: true,
-        order: true,
-        elements: {
-          orderBy: [{ order: "asc" }, { name: "asc" }],
-          select: {
-            id: true,
-            name: true,
-            nameVip: true,
-            order: true,
-            isActive: true,
-            referenceImages: true,
-            prompts: { select: { mode: true, content: true, updatedAt: true } },
-          },
-        },
-      },
-    }),
-    prisma.promptTemplate.findUnique({
-      where: { type_key: { type: "TOURNAMENT", key: "system" } },
-      select: { content: true },
-    }),
-  ]);
-  res.json({ categories, systemPrompt: wrapper?.content ?? "" });
+  res.json(await loadPackConfig());
+});
+
+// ---- Change log: who changed what, from either surface ----
+
+tournamentAdminRouter.get("/change-log", async (req: Request, res: Response) => {
+  const limit = Math.min(Math.max(Number(req.query.limit ?? 50) || 50, 1), 200);
+  res.json({ entries: await listChangeLog(limit) });
 });
 
 // ---- Categories CRUD ----
 
-/**
- * "Calendar (VIP)" -> "calendar_vip". The key doubles as the ZIP folder name
- * and is frozen at creation (renames keep it, so old archives stay coherent).
- */
-export function slugifyKey(name: string): string {
-  const s = name
-    .toLowerCase()
-    .replace(/[^a-z0-9]+/g, "_")
-    .replace(/^_+|_+$/g, "");
-  return s || "category";
-}
-
 const createCategorySchema = z.object({
   name: z.string().trim().min(1).max(120),
   hasModes: z.boolean(),
-  fixedMode: z.enum(MODES).nullable().optional(),
+  fixedMode: z.enum(TOURNAMENT_MODES).nullable().optional(),
 });
 
 tournamentAdminRouter.post("/categories", async (req: Request, res: Response) => {
@@ -89,25 +68,8 @@ tournamentAdminRouter.post("/categories", async (req: Request, res: Response) =>
     res.status(400).json({ error: "invalid_mode_config" });
     return;
   }
-
-  let key = slugifyKey(name);
-  for (
-    let n = 2;
-    await prisma.tournamentCategory.findUnique({ where: { key }, select: { id: true } });
-    n++
-  ) {
-    key = `${slugifyKey(name)}_${n}`;
-  }
-
-  const last = await prisma.tournamentCategory.findFirst({
-    orderBy: { order: "desc" },
-    select: { order: true },
-  });
-  const category = await prisma.tournamentCategory.create({
-    data: { key, name, hasModes, fixedMode, order: (last?.order ?? -1) + 1 },
-    select: { id: true, key: true, name: true, hasModes: true, fixedMode: true, order: true },
-  });
-  res.status(201).json({ category });
+  const result = await createCategory({ name, hasModes, fixedMode }, actorOf(req));
+  res.status(201).json({ category: result.category });
 });
 
 const patchCategorySchema = z.object({
@@ -117,40 +79,36 @@ const patchCategorySchema = z.object({
 
 /** Rename/reorder only — key and the Base/VIP config are frozen at creation. */
 tournamentAdminRouter.patch("/categories/:id", async (req: Request, res: Response) => {
-  const id = String(req.params.id ?? "");
   const parsed = patchCategorySchema.safeParse(req.body);
   if (!parsed.success) {
     res.status(400).json({ error: "invalid_body", details: parsed.error.flatten().fieldErrors });
     return;
   }
-  const data: { name?: string; order?: number } = {};
-  if (parsed.data.name !== undefined) data.name = parsed.data.name;
-  if (parsed.data.order !== undefined) data.order = parsed.data.order;
-  try {
-    const category = await prisma.tournamentCategory.update({
-      where: { id },
-      data,
-      select: { id: true, key: true, name: true, hasModes: true, fixedMode: true, order: true },
-    });
-    res.json({ category });
-  } catch {
+  const patch: { name?: string; order?: number } = {};
+  if (parsed.data.name !== undefined) patch.name = parsed.data.name;
+  if (parsed.data.order !== undefined) patch.order = parsed.data.order;
+
+  const result = await updateCategoryAudited(String(req.params.id ?? ""), patch, actorOf(req));
+  if (!result.ok) {
     res.status(404).json({ error: "not_found" });
+    return;
   }
+  res.json({ category: result.category });
 });
 
 /**
  * HARD delete (unlike elements): cascades to elements, default prompts and
  * user overrides. Generation history is untouched — it keeps the denormalized
  * tourCategoryKey/tourElementName, so old batches and their ZIPs still work.
+ * The audit entry keeps the full category snapshot.
  */
 tournamentAdminRouter.delete("/categories/:id", async (req: Request, res: Response) => {
-  const id = String(req.params.id ?? "");
-  try {
-    await prisma.tournamentCategory.delete({ where: { id } });
-    res.json({ ok: true });
-  } catch {
+  const result = await deleteCategoryAudited(String(req.params.id ?? ""), actorOf(req));
+  if (!result.ok) {
     res.status(404).json({ error: "not_found" });
+    return;
   }
+  res.json({ ok: true });
 });
 
 // ---- Elements CRUD ----
@@ -161,73 +119,27 @@ const createElementSchema = z.object({
   nameVip: z.string().trim().min(1).max(120).optional(),
 });
 
-/** VIP-name clash: another element of the category already uses it (as nameVip). */
-async function vipNameClash(
-  categoryId: string,
-  nameVip: string,
-  excludeId?: string,
-): Promise<boolean> {
-  const clash = await prisma.tournamentElement.findFirst({
-    where: { categoryId, nameVip, ...(excludeId ? { id: { not: excludeId } } : {}) },
-    select: { id: true },
-  });
-  return Boolean(clash);
-}
-
 tournamentAdminRouter.post("/elements", async (req: Request, res: Response) => {
   const parsed = createElementSchema.safeParse(req.body);
   if (!parsed.success) {
     res.status(400).json({ error: "invalid_body", details: parsed.error.flatten().fieldErrors });
     return;
   }
-  const { categoryId, name } = parsed.data;
-
-  const category = await prisma.tournamentCategory.findUnique({
-    where: { id: categoryId },
-    select: { id: true, hasModes: true, fixedMode: true },
-  });
-  if (!category) {
-    res.status(404).json({ error: "category_not_found" });
-    return;
-  }
-  // hasModes categories carry a separate VIP name (required); fixed-mode ones never do.
-  if (category.hasModes && !parsed.data.nameVip) {
+  const result = await createElement(parsed.data, actorOf(req));
+  if (!result.ok) {
+    if (result.error === "category_not_found") {
+      res.status(404).json({ error: "category_not_found" });
+      return;
+    }
+    if (result.error === "already_exists") {
+      res.status(409).json({ error: "already_exists" });
+      return;
+    }
+    // hasModes categories carry a separate VIP name (required).
     res.status(400).json({ error: "invalid_body", details: { nameVip: ["required"] } });
     return;
   }
-  const nameVip = category.hasModes ? (parsed.data.nameVip as string) : null;
-  const clash = await prisma.tournamentElement.findUnique({
-    where: { categoryId_name: { categoryId, name } },
-    select: { id: true },
-  });
-  if (clash || (nameVip && (await vipNameClash(categoryId, nameVip)))) {
-    res.status(409).json({ error: "already_exists" });
-    return;
-  }
-
-  const last = await prisma.tournamentElement.findFirst({
-    where: { categoryId },
-    orderBy: { order: "desc" },
-    select: { order: true },
-  });
-  // New elements get placeholder prompts for every mode of the category so the
-  // designers' page always has something to show/override.
-  const element = await prisma.tournamentElement.create({
-    data: {
-      categoryId,
-      name,
-      nameVip,
-      order: (last?.order ?? -1) + 1,
-      prompts: {
-        create: modesOf(category).map((mode) => ({
-          mode,
-          content: `[placeholder ${mode}] Default prompt for "${name}" — edit me in Admin → Tournaments.`,
-        })),
-      },
-    },
-    select: { id: true, name: true, nameVip: true, order: true, isActive: true, referenceImages: true },
-  });
-  res.status(201).json({ element });
+  res.status(201).json({ element: { id: result.element.id, ...result.snapshot } });
 });
 
 const patchElementSchema = z.object({
@@ -245,76 +157,44 @@ tournamentAdminRouter.patch("/elements/:id", async (req: Request, res: Response)
     res.status(400).json({ error: "invalid_body", details: parsed.error.flatten().fieldErrors });
     return;
   }
-  const existing = await prisma.tournamentElement.findUnique({
-    where: { id },
-    select: { categoryId: true, category: { select: { hasModes: true } } },
-  });
-  if (!existing) {
-    res.status(404).json({ error: "not_found" });
-    return;
-  }
-  // Reject a rename that collides with another element of the same category.
-  if (parsed.data.name) {
-    const clash = await prisma.tournamentElement.findUnique({
-      where: { categoryId_name: { categoryId: existing.categoryId, name: parsed.data.name } },
-      select: { id: true },
-    });
-    if (clash && clash.id !== id) {
+  // Only pass the keys the client actually sent (exactOptionalPropertyTypes).
+  const patch = Object.fromEntries(Object.entries(parsed.data).filter(([, v]) => v !== undefined));
+  const result = await updateElementAudited(id, patch, actorOf(req));
+  if (!result.ok) {
+    if (result.error === "element_not_found") {
+      res.status(404).json({ error: "not_found" });
+      return;
+    }
+    if (result.error === "already_exists") {
       res.status(409).json({ error: "already_exists" });
       return;
     }
-  }
-  if (parsed.data.nameVip) {
-    // VIP names exist only on hasModes categories; same clash rule as `name`.
-    if (!existing.category.hasModes) {
+    if (result.error === "vip_not_applicable") {
       res.status(400).json({ error: "invalid_body", details: { nameVip: ["not_applicable"] } });
       return;
     }
-    if (await vipNameClash(existing.categoryId, parsed.data.nameVip, id)) {
-      res.status(409).json({ error: "already_exists" });
-      return;
-    }
+    res.status(400).json({ error: result.error });
+    return;
   }
-
-  // Only write the keys the client actually sent (exactOptionalPropertyTypes).
-  const data: {
-    name?: string;
-    nameVip?: string;
-    order?: number;
-    isActive?: boolean;
-    referenceImages?: string[];
-  } = {};
-  if (parsed.data.name !== undefined) data.name = parsed.data.name;
-  if (parsed.data.nameVip !== undefined) data.nameVip = parsed.data.nameVip;
-  if (parsed.data.order !== undefined) data.order = parsed.data.order;
-  if (parsed.data.isActive !== undefined) data.isActive = parsed.data.isActive;
-  if (parsed.data.referenceImages !== undefined)
-    data.referenceImages = parsed.data.referenceImages.filter(Boolean);
-
-  const element = await prisma.tournamentElement.update({
-    where: { id },
-    data,
-    select: { id: true, name: true, nameVip: true, order: true, isActive: true, referenceImages: true },
-  });
-  res.json({ element });
+  const { prompts: _prompts, ...element } = result.snapshot;
+  res.json({ element: { id, ...element } });
 });
 
 /** Soft delete: history (Generation rows) keeps the denormalized name. */
 tournamentAdminRouter.delete("/elements/:id", async (req: Request, res: Response) => {
-  const id = String(req.params.id ?? "");
-  try {
-    await prisma.tournamentElement.update({ where: { id }, data: { isActive: false } });
-    res.json({ ok: true });
-  } catch {
+  const result = await softDeleteElement(String(req.params.id ?? ""), actorOf(req));
+  if (!result.ok) {
     res.status(404).json({ error: "not_found" });
+    return;
   }
+  res.json({ ok: true });
 });
 
 // ---- Default prompts ----
 
 const putPromptSchema = z.object({
   elementId: z.string().min(1),
-  mode: z.enum(MODES),
+  mode: z.enum(TOURNAMENT_MODES),
   content: z.string().trim().min(1).max(5000),
 });
 
@@ -325,29 +205,22 @@ tournamentAdminRouter.put("/prompts", async (req: Request, res: Response) => {
     return;
   }
   const { elementId, mode, content } = parsed.data;
-
-  const element = await prisma.tournamentElement.findUnique({
-    where: { id: elementId },
-    select: { category: { select: { hasModes: true, fixedMode: true } } },
-  });
-  if (!element) {
-    res.status(404).json({ error: "element_not_found" });
-    return;
-  }
-  if (!modesOf(element.category).includes(mode)) {
-    res.status(400).json({ error: "invalid_mode" });
-    return;
-  }
-
   // updatedAt bumps on every write — users with an override see the
   // "default changed" banner (their baseUpdatedAt snapshot is now older).
-  const prompt = await prisma.tournamentPrompt.upsert({
-    where: { elementId_mode: { elementId, mode } },
-    create: { elementId, mode, content },
-    update: { content },
-    select: { elementId: true, mode: true, content: true, updatedAt: true },
-  });
-  res.json({ prompt });
+  const result = await updateElementAudited(
+    elementId,
+    { prompts: [{ mode, content }] },
+    actorOf(req),
+  );
+  if (!result.ok) {
+    if (result.error === "element_not_found") {
+      res.status(404).json({ error: "element_not_found" });
+      return;
+    }
+    res.status(400).json({ error: result.error });
+    return;
+  }
+  res.json({ prompt: { elementId, mode, content } });
 });
 
 // ---- System wrapper ----
@@ -360,17 +233,13 @@ tournamentAdminRouter.put("/system-prompt", async (req: Request, res: Response) 
     res.status(400).json({ error: "invalid_body" });
     return;
   }
-  const row = await prisma.promptTemplate.upsert({
-    where: { type_key: { type: "TOURNAMENT", key: "system" } },
-    create: { type: "TOURNAMENT", key: "system", content: parsed.data.content },
-    update: { content: parsed.data.content },
-    select: { content: true },
-  });
-  res.json({ systemPrompt: row.content });
+  res.json({ systemPrompt: await saveSystemPrompt(parsed.data.content, actorOf(req)) });
 });
 
 // ---- Provider reference upload (same flow as the admin NanoRef upload) ----
 
+/** ~10 MB of binary once base64-decoded — a hard stop before Cloudinary. */
+const MAX_DATA_URL_CHARS = 14_000_000;
 const uploadSchema = z.object({ dataUrl: z.string().min(1) });
 
 tournamentAdminRouter.post("/upload", async (req: Request, res: Response) => {
@@ -381,6 +250,10 @@ tournamentAdminRouter.post("/upload", async (req: Request, res: Response) => {
   const parsed = uploadSchema.safeParse(req.body);
   if (!parsed.success) {
     res.status(400).json({ error: "invalid_body" });
+    return;
+  }
+  if (parsed.data.dataUrl.length > MAX_DATA_URL_CHARS) {
+    res.status(413).json({ error: "file_too_large" });
     return;
   }
   const folder = `tournaments/provider-refs/${new Date().toISOString().slice(0, 10)}`;
