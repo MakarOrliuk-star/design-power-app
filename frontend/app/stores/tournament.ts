@@ -1,4 +1,5 @@
 import { defineStore } from "pinia";
+import type { TournamentMode } from "~/types/tournament";
 
 /**
  * Tournaments page state (Phase 5). Selection model:
@@ -14,7 +15,8 @@ import { defineStore } from "pinia";
  * reuse the existing machinery.
  */
 
-export type TourMode = "BASE" | "VIP";
+/** Local alias of the shared definition — see ~/types/tournament. */
+export type TourMode = TournamentMode;
 export type TourAspect = "1:1" | "9:16";
 
 export interface TourPromptInfo {

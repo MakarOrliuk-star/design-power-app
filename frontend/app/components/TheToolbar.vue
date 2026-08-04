@@ -102,6 +102,7 @@ const userInitials = computed(() => {
 // Super-designer menu (TASK super-designer): click on the user card opens
 // Create a New Style / Library — visible to SUPER_DESIGNER/ADMIN/MANAGER only.
 const superDesigner = useSuperDesignerStore();
+const tournamentPack = useTournamentPackEditorStore();
 const userMenuOpen = ref(false);
 const userCardEl = ref<HTMLElement | null>(null);
 
@@ -116,6 +117,12 @@ function openCreateStyle() {
 function openEditStyle() {
   userMenuOpen.value = false;
   superDesigner.openEditCurrent();
+}
+// «Edit Tournament pack» (TASK tournament-pack): the tournament editor, next to
+// «Edit current style» and gated by the same canCreateStyles role check.
+function openTournamentPack() {
+  userMenuOpen.value = false;
+  tournamentPack.open();
 }
 function goLibrary() {
   userMenuOpen.value = false;
@@ -367,6 +374,9 @@ onBeforeUnmount(() => document.removeEventListener("click", onDocClick));
         </button>
         <button class="user-menu__item" type="button" @click="openEditStyle">
           Edit current style
+        </button>
+        <button class="user-menu__item" type="button" @click="openTournamentPack">
+          Edit Tournament pack
         </button>
         <button class="user-menu__item" type="button" @click="goLibrary">Library</button>
       </div>
