@@ -1,5 +1,7 @@
 <script setup lang="ts">
 // Admin: manage the email allowlist and existing users (role / activation).
+import type { TournamentMode } from "~/types/tournament";
+
 useHead({ title: "Design Power — Admin" });
 
 interface AllowedEmail {
@@ -399,7 +401,7 @@ async function removeSmarticoBrand(b: SmarticoBrand) {
 // ---- Tournaments (Phase 4): elements, default prompts, provider refs ----
 // ADMIN and MANAGER both edit this section; every other panel is ADMIN-only
 // (mirrors the backend: /api/tournament-admin vs /api/admin).
-type TourMode = "BASE" | "VIP";
+type TourMode = TournamentMode;
 interface TourPrompt {
   mode: TourMode;
   content: string;
@@ -454,6 +456,7 @@ async function loadTournaments() {
       })),
     }));
     tourSystemPrompt.value = res.systemPrompt;
+    void loadTourLog();
   } catch {
     error.value = "Не удалось загрузить турниры.";
   }
@@ -492,6 +495,7 @@ async function saveTourCategory(cat: TourCategory) {
       body: { name: cat.name.trim() },
     });
     tourMsg.value[cat.id] = "Сохранено ✓";
+    void loadTourLog();
   } catch {
     tourMsg.value[cat.id] = "Ошибка сохранения";
   }
@@ -509,6 +513,7 @@ async function deleteTourCategory(cat: TourCategory) {
   try {
     await api(`/api/tournament-admin/categories/${cat.id}`, { method: "DELETE" });
     tourCategories.value = tourCategories.value.filter((c) => c.id !== cat.id);
+    void loadTourLog();
   } catch {
     tourMsg.value[cat.id] = "Не удалось удалить категорию.";
   }
@@ -547,6 +552,7 @@ async function saveTourPrompt(el: TourElement, p: TourPrompt) {
       body: { elementId: el.id, mode: p.mode, content: p.content },
     });
     tourMsg.value[el.id] = "Промпт сохранён ✓ (у пользователей с правкой появится плашка)";
+    void loadTourLog();
   } catch {
     tourMsg.value[el.id] = "Ошибка сохранения промпта";
   }
@@ -568,6 +574,7 @@ async function saveTourElement(cat: TourCategory, el: TourElement) {
       body.referenceImages = el.referenceImages.map((s) => s.trim()).filter(Boolean);
     await api(`/api/tournament-admin/elements/${el.id}`, { method: "PATCH", body });
     tourMsg.value[el.id] = "Сохранено ✓";
+    void loadTourLog();
   } catch (e: unknown) {
     const code = (e as { data?: { error?: string } })?.data?.error;
     tourMsg.value[el.id] =
@@ -584,6 +591,7 @@ async function toggleTourActive(el: TourElement) {
     });
     el.isActive = !el.isActive;
     tourMsg.value[el.id] = el.isActive ? "Включён ✓" : "Выключен (скрыт у дизайнеров)";
+    void loadTourLog();
   } catch {
     tourMsg.value[el.id] = "Ошибка";
   }
@@ -596,6 +604,7 @@ async function deleteTourElement(el: TourElement) {
     await api(`/api/tournament-admin/elements/${el.id}`, { method: "DELETE" });
     el.isActive = false;
     tourMsg.value[el.id] = "Выключен (скрыт у дизайнеров)";
+    void loadTourLog();
   } catch {
     tourMsg.value[el.id] = "Ошибка";
   }
@@ -628,8 +637,71 @@ async function saveTourSystemPrompt() {
       body: { content: tourSystemPrompt.value },
     });
     tourMsg.value.system = "Сохранено ✓";
+    void loadTourLog();
   } catch {
     tourMsg.value.system = "Ошибка сохранения";
+  }
+}
+
+// ---- Журнал изменений (TASK tournament-pack) ----
+// Турниры правят из двух мест: эта панель и окно «Edit Tournament pack» у
+// супер-дизайнера. Оба пути идут через один сервис с аудитом, поэтому журнал
+// показывает ВСЕ правки — и панельные, и супер-дизайнерские — с полем «кто».
+interface TourLogChange {
+  field: string;
+  before: string;
+  after: string;
+}
+interface TourLogEntry {
+  id: string;
+  entityType: string;
+  entityName: string;
+  userEmail: string;
+  action: string;
+  createdAt: string;
+  changes: TourLogChange[];
+}
+
+const tourLog = ref<TourLogEntry[]>([]);
+const tourLogLoading = ref(false);
+
+const TOUR_LOG_ACTIONS: Record<string, string> = {
+  CREATE: "создание",
+  UPDATE: "изменение",
+  DELETE: "удаление",
+  ROLLBACK: "откат",
+};
+const TOUR_LOG_ENTITIES: Record<string, string> = {
+  ELEMENT: "элемент",
+  CATEGORY: "категория",
+  SYSTEM: "системная обёртка",
+};
+
+function tourLogAction(a: string): string {
+  return TOUR_LOG_ACTIONS[a] ?? a.toLowerCase();
+}
+function tourLogEntity(t: string): string {
+  return TOUR_LOG_ENTITIES[t] ?? t.toLowerCase();
+}
+function tourLogDate(iso: string): string {
+  return new Date(iso).toLocaleString("ru-RU", {
+    day: "2-digit",
+    month: "2-digit",
+    year: "2-digit",
+    hour: "2-digit",
+    minute: "2-digit",
+  });
+}
+
+async function loadTourLog() {
+  tourLogLoading.value = true;
+  try {
+    const res = await api<{ entries: TourLogEntry[] }>("/api/tournament-admin/change-log?limit=50");
+    tourLog.value = res.entries;
+  } catch {
+    tourMsg.value.log = "Не удалось загрузить журнал.";
+  } finally {
+    tourLogLoading.value = false;
   }
 }
 
@@ -1572,6 +1644,48 @@ onMounted(() => {
           <p v-if="!cat.elements.length" class="muted">Элементов нет.</p>
         </div>
       </div>
+
+      <!-- Журнал: кто и что менял в турнирах (TASK tournament-pack) -->
+      <div class="tour-log">
+        <div class="brand-card__head">
+          <span class="brand-card__name">Журнал изменений</span>
+          <button class="btn-toggle btn-small" :disabled="tourLogLoading" @click="loadTourLog">
+            {{ tourLogLoading ? "Обновление…" : "Обновить" }}
+          </button>
+          <span v-if="tourMsg.log" class="brand-card__msg">{{ tourMsg.log }}</span>
+        </div>
+        <p class="muted small">
+          Последние 50 правок турниров — и из этой панели, и из окна
+          «Edit Tournament pack» у супер-дизайнеров. Разверните запись, чтобы
+          увидеть, что именно поменялось.
+        </p>
+
+        <details v-for="e in tourLog" :key="e.id" class="tour-log__entry">
+          <summary class="tour-log__head">
+            <span class="tour-log__date">{{ tourLogDate(e.createdAt) }}</span>
+            <span class="tour-log__who">{{ e.userEmail }}</span>
+            <span :class="['badge', e.action === 'DELETE' ? 'badge--warn' : 'badge--ok']">
+              {{ tourLogAction(e.action) }}
+            </span>
+            <span class="tour-log__what">
+              {{ tourLogEntity(e.entityType) }} «{{ e.entityName }}»
+            </span>
+            <span class="tour-log__fields">
+              {{ e.changes.length ? e.changes.map((c) => c.field).join(", ") : "без изменений полей" }}
+            </span>
+          </summary>
+          <div class="tour-log__body">
+            <div v-for="c in e.changes" :key="c.field" class="tour-log__diff">
+              <span class="tour-log__field">{{ c.field }}</span>
+              <span class="tour-log__was">{{ c.before }}</span>
+              <span class="tour-log__arrow">→</span>
+              <span class="tour-log__now">{{ c.after }}</span>
+            </div>
+            <p v-if="!e.changes.length" class="muted small">Полей не изменилось.</p>
+          </div>
+        </details>
+        <p v-if="!tourLog.length && !tourLogLoading" class="muted">Записей пока нет.</p>
+      </div>
     </section>
 
     <!-- Smartico brands (Unique-Image-Smartico) -->
@@ -2314,6 +2428,72 @@ select {
   padding: 4px 12px;
   font-size: 12px;
   margin-left: auto;
+}
+
+/* ---- журнал изменений турниров (TASK tournament-pack) ---- */
+.tour-log {
+  margin-top: 28px;
+  padding-top: 16px;
+  border-top: 1px solid var(--color-border);
+}
+.tour-log__entry {
+  padding: 8px 0;
+  border-bottom: 1px solid var(--color-border);
+}
+.tour-log__head {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  font-size: 13px;
+  cursor: pointer;
+}
+.tour-log__date {
+  flex: 0 0 auto;
+  color: var(--color-grey);
+  font-variant-numeric: tabular-nums;
+}
+.tour-log__who {
+  flex: 0 0 auto;
+  font-weight: 600;
+}
+.tour-log__what {
+  flex: 0 0 auto;
+}
+/* the changed-field list is the first thing to give up room */
+.tour-log__fields {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--color-grey);
+}
+.tour-log__body {
+  padding: 8px 0 4px 12px;
+}
+.tour-log__diff {
+  display: grid;
+  grid-template-columns: 150px 1fr 16px 1fr;
+  gap: 10px;
+  align-items: start;
+  padding: 6px 0;
+  font-size: 12.5px;
+}
+.tour-log__field {
+  font-weight: 600;
+}
+/* prompts are long — keep the old/new columns readable, wrap instead of cutting */
+.tour-log__was,
+.tour-log__now {
+  overflow-wrap: anywhere;
+  white-space: pre-wrap;
+}
+.tour-log__was {
+  color: var(--color-grey);
+  text-decoration: line-through;
+}
+.tour-log__arrow {
+  color: var(--color-grey);
 }
 
 /* Image Bundles — шаблоны типов (D13) */

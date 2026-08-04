@@ -474,6 +474,29 @@ model UserTournamentPromptOverride {
   @@id([userId, elementId, mode])
 }
 
+/// Audit trail for the «Edit Tournament pack» window (TASK tournament-pack):
+/// a super-designer edits the SAME global data the admin panel owns, so every
+/// mutation is logged with full before/after snapshots. entityId carries no FK
+/// — the log must outlive a hard-deleted category. entityType: ELEMENT (the
+/// snapshot includes its BASE/VIP prompts) | CATEGORY (includes every element,
+/// so a hard delete stays recoverable by hand) | SYSTEM (the global wrapper).
+/// Rollback exists for ELEMENT only and writes its own ROLLBACK entry.
+model TournamentChangeLog {
+  id         String   @id @default(cuid())
+  entityType String // ELEMENT | CATEGORY | SYSTEM
+  entityId   String? // no FK — the log must outlive the entity
+  entityName String
+  userId     String?
+  userEmail  String
+  action     String // CREATE | UPDATE | DELETE | ROLLBACK
+  before     Json
+  after      Json
+  createdAt  DateTime @default(now())
+
+  @@index([entityType, entityId, createdAt])
+  @@index([createdAt])
+}
+
 /// Single-row global DES counter (seeded id=1, value=100000). Incremented
 /// atomically (UPDATE ... RETURNING) BEFORE each ZIP download, so the first
 /// issued archive is DES-100001 (per the spec's own example).

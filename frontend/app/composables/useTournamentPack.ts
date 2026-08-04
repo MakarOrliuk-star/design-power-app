@@ -16,7 +16,10 @@ import {
   type InpaintPayload,
 } from "./useResult";
 
-export type PackMode = "BASE" | "VIP";
+import type { TournamentMode } from "~/types/tournament";
+
+/** Kept as a local alias for readability; the definition is shared. */
+export type PackMode = TournamentMode;
 
 export interface PackGeneration {
   id: string;
