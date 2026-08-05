@@ -103,6 +103,51 @@ describe("validateAiAsset", () => {
     expect(borders.passed).toBe(true);
   });
 
+  it("чистый центр (A-3): без зоны чек не выполняется, с зоной — белый центр проходит", async () => {
+    // Боковые группы: шум слева и справа, центральная полоса — белая.
+    const side = await noisyImage(60, H);
+    const img = await sharp({
+      create: { width: W, height: H, channels: 3, background: { r: 255, g: 255, b: 255 } },
+    })
+      .composite([
+        { input: side, left: 0, top: 0 },
+        { input: side, left: W - 60, top: 0 },
+      ])
+      .png()
+      .toBuffer();
+
+    const noZone = await validateAiAsset(img, W, H);
+    expect(noZone.checks.some((c) => c.key === "center")).toBe(false);
+
+    const zone = { x: 0.28, y: 0.08, w: 0.44, h: 0.62 };
+    const withZone = await validateAiAsset(img, W, H, { centerClearZone: zone });
+    const center = withZone.checks.find((c) => c.key === "center")!;
+    expect(center.passed).toBe(true);
+  });
+
+  it("чистый центр (A-3): пропс в центральной зоне — брак", async () => {
+    const side = await noisyImage(60, H);
+    const coin = await noisyImage(40, 40);
+    const img = await sharp({
+      create: { width: W, height: H, channels: 3, background: { r: 255, g: 255, b: 255 } },
+    })
+      .composite([
+        { input: side, left: 0, top: 0 },
+        { input: side, left: W - 60, top: 0 },
+        // «Монетка» по центру текстовой зоны.
+        { input: coin, left: Math.round(W / 2) - 20, top: 30 },
+      ])
+      .png()
+      .toBuffer();
+
+    const report = await validateAiAsset(img, W, H, {
+      centerClearZone: { x: 0.28, y: 0.08, w: 0.44, h: 0.62 },
+    });
+    const center = report.checks.find((c) => c.key === "center")!;
+    expect(center.passed).toBe(false);
+    expect(center.detail).toContain("% белого");
+  });
+
   it("нечитаемый буфер = непройденный size-чек, не исключение", async () => {
     const report = await validateAiAsset(Buffer.from("not an image"), W, H);
     expect(report.passed).toBe(false);

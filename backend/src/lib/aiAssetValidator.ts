@@ -12,9 +12,17 @@ import sharp from "sharp";
  */
 
 export interface AiTechCheck {
-  key: "size" | "sharpness" | "borders";
+  key: "size" | "sharpness" | "borders" | "center";
   passed: boolean;
   detail: string;
+}
+
+/** Зона канваса в долях [0..1] — для проверки «чистого центра». */
+export interface FractionZone {
+  x: number;
+  y: number;
+  w: number;
+  h: number;
 }
 
 export interface AiTechReport {
@@ -42,6 +50,15 @@ const BORDER_STRIP = 4;
  */
 const BORDER_STD_MAX = 3;
 const BORDER_DARK_MEAN = 10;
+
+/**
+ * «Чистый центр» (A-3, по email mask дизайнера): на белом фоне центральная
+ * текстовая зона обязана оставаться белой — любой пропс/монетка в ней ловится
+ * детерминированно, без VLM. Пиксель считается фоном при яркости >= порога;
+ * небольшой допуск на свечение/мягкие тени от боковых групп.
+ */
+export const CENTER_BG_MIN_LUMA = 235;
+export const CENTER_CLEAR_MIN_RATIO = 0.97;
 
 /** Дисперсия лапласиана (4-соседний) по грейскейл-байтам. */
 export function laplacianVariance(gray: Uint8Array, width: number, height: number): number {
@@ -103,6 +120,10 @@ export async function validateAiAsset(
   buffer: Buffer,
   targetW: number,
   targetH: number,
+  opts?: {
+    /** Зона, обязанная быть чисто-белой (доли канваса); без неё чек не выполняется. */
+    centerClearZone?: FractionZone;
+  },
 ): Promise<AiTechReport> {
   const checks: AiTechCheck[] = [];
 
@@ -160,6 +181,29 @@ export async function validateAiAsset(
     passed: !letterboxed,
     detail: letterboxed ? "тёмные рамки/леттербокс по противоположным краям" : "чисто",
   });
+
+  // Чистый центр (A-3): доля почти-белых пикселей в переданной зоне.
+  if (opts?.centerClearZone) {
+    const z = opts.centerClearZone;
+    const x0 = Math.max(0, Math.floor(z.x * pw));
+    const y0 = Math.max(0, Math.floor(z.y * ph));
+    const x1 = Math.min(pw, Math.ceil((z.x + z.w) * pw));
+    const y1 = Math.min(ph, Math.ceil((z.y + z.h) * ph));
+    let bg = 0;
+    let total = 0;
+    for (let y = y0; y < y1; y++)
+      for (let x = x0; x < x1; x++) {
+        if (gray[y * pw + x]! >= CENTER_BG_MIN_LUMA) bg++;
+        total++;
+      }
+    const ratio = total > 0 ? bg / total : 1;
+    const centerOk = ratio >= CENTER_CLEAR_MIN_RATIO;
+    checks.push({
+      key: "center",
+      passed: centerOk,
+      detail: `чистая зона: ${Math.round(ratio * 100)}% белого (порог ${Math.round(CENTER_CLEAR_MIN_RATIO * 100)}%)`,
+    });
+  }
 
   return { passed: checks.every((c) => c.passed), checks };
 }

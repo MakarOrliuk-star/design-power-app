@@ -142,11 +142,11 @@ describe("buildAiReferencePrompt / pickOverlayToken (A-1)", () => {
     expect(p).toContain("FS, SCATTER, BONUS, VIP");
   });
 
-  it("контракт A-2: белый фон, пустой центр, треугольник + depth of field", () => {
+  it("контракт A-2/A-3: белый фон, пустой центр, три секции + depth of field", () => {
     const p = buildAiReferencePrompt("VIP weekend");
     expect(p).toContain("pure solid white");
     expect(p).toContain("COMPLETELY EMPTY");
-    expect(p).toContain("triangular composition");
+    expect(p).toContain("THREE sections");
     expect(p).toContain("depth of field");
   });
 
