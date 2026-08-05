@@ -3,8 +3,9 @@ import sharp from "sharp";
 import { enforceCenterClearZone } from "../src/lib/centerCleanup.js";
 import { validateAiAsset } from "../src/lib/aiAssetValidator.js";
 
-// Доводка центра (A-4, TASK ai-reference): летуны стираются, боковые группы,
-// залезшие в чистую зону, ужимаются в свои секции. Канвас 1200×600 — реальная
+// Доводка центра (A-5, TASK ai-reference): летуны стираются, при интрузии
+// боковых групп центр раздвигается белой полосой (композиция не трогается,
+// только равномерно мельчает с якорем к низу). Канвас 1200×600 — реальная
 // геометрия email-ассета, зона как в пайплайне.
 
 const W = 1200;
@@ -31,6 +32,11 @@ async function whiteCanvas(overlays: sharp.OverlayOptions[]): Promise<Buffer> {
     .toBuffer();
 }
 
+async function darkAt(buffer: Buffer): Promise<(x: number, y: number) => boolean> {
+  const { data, info } = await sharp(buffer).greyscale().raw().toBuffer({ resolveWithObject: true });
+  return (x, y) => data[y * info.width + x]! < 235;
+}
+
 describe("enforceCenterClearZone", () => {
   it("чистая композиция: буфер не меняется", async () => {
     const img = await whiteCanvas([
@@ -40,10 +46,11 @@ describe("enforceCenterClearZone", () => {
     const res = await enforceCenterClearZone(img, ZONE);
     expect(res.changed).toBe(false);
     expect(res.erased).toBe(0);
+    expect(res.gapPx).toBe(0);
     expect(res.buffer).toBe(img);
   });
 
-  it("летун в центре стирается, центр-чек проходит", async () => {
+  it("летун в центре стирается без раздвижки, центр-чек проходит", async () => {
     const img = await whiteCanvas([
       { input: await darkBlock(250, 400), left: 20, top: 180 },
       { input: await darkBlock(250, 500), left: 920, top: 80 },
@@ -52,63 +59,62 @@ describe("enforceCenterClearZone", () => {
     const res = await enforceCenterClearZone(img, ZONE);
     expect(res.changed).toBe(true);
     expect(res.erased).toBe(1);
-    expect(res.scaledLeft).toBeNull();
-    expect(res.scaledRight).toBeNull();
+    expect(res.gapPx).toBe(0);
 
     const report = await validateAiAsset(res.buffer, W, H, { centerClearZone: ZONE });
     expect(report.checks.find((c) => c.key === "center")!.passed).toBe(true);
   });
 
-  it("левая группа, залезшая в зону, ужимается в свою секцию", async () => {
-    // Группа 0..430px — заходит за границу зоны (336px) на ~94px.
+  it("интрузия левой группы: центр раздвигается, композиция сторон сохраняется", async () => {
+    // Левая группа 0..429 заходит за границу зоны (336) на ~94px.
     const img = await whiteCanvas([
       { input: await darkBlock(430, 400), left: 0, top: 200 },
       { input: await darkBlock(250, 500), left: 920, top: 80 },
     ]);
     const res = await enforceCenterClearZone(img, ZONE);
     expect(res.changed).toBe(true);
-    expect(res.scaledLeft).not.toBeNull();
-    expect(res.scaledLeft!).toBeLessThan(1);
-    expect(res.scaledLeft!).toBeGreaterThanOrEqual(0.55);
-    expect(res.scaledRight).toBeNull();
+    expect(res.gapPx).toBeGreaterThan(0);
+    expect(res.scale).toBeLessThan(1);
+    expect(res.scale).toBeGreaterThanOrEqual(0.72);
+    expect(res.seamX).not.toBeNull();
 
     const report = await validateAiAsset(res.buffer, W, H, { centerClearZone: ZONE });
     expect(report.checks.find((c) => c.key === "center")!.passed).toBe(true);
 
-    // Якорь сохранён: группа у левого края, прижата к своей нижней линии,
-    // а её прежний верх (y=200) освободился — ужатие ушло вниз.
-    const { data, info } = await sharp(res.buffer).greyscale().raw().toBuffer({ resolveWithObject: true });
-    const dark = (x: number, y: number) => data[y * info.width + x]! < 235;
-    expect(dark(2, 598)).toBe(true); // нижняя линия группы на месте
-    expect(dark(2, 210)).toBe(false); // прежний верх группы теперь белый
+    // Обе группы на месте: левая у левого края с якорем к низу, правая —
+    // правее зоны (её край сместился внутрь: в тесте группа не у края канваса).
+    const dark = await darkAt(res.buffer);
+    expect(dark(2, 598)).toBe(true);
+    expect(dark(2, 40)).toBe(false); // сверху белая полоса после ужатия
+    let rightSideDark = false;
+    for (let x = 900; x < W && !rightSideDark; x += 4)
+      for (let y = 300; y < H; y += 4)
+        if (dark(x, y)) {
+          rightSideDark = true;
+          break;
+        }
+    expect(rightSideDark).toBe(true);
   });
 
-  it("правая группа (персонаж), залезшая в зону, ужимается к правому краю", async () => {
-    // Группа 770..1199 — левый край на 94px внутри зоны (правая граница 864).
+  it("интрузия обеих групп: белая полоса шире, зона свободна", async () => {
     const img = await whiteCanvas([
-      { input: await darkBlock(250, 400), left: 20, top: 180 },
+      { input: await darkBlock(430, 400), left: 0, top: 200 },
       { input: await darkBlock(430, 500), left: 770, top: 90 },
     ]);
     const res = await enforceCenterClearZone(img, ZONE);
     expect(res.changed).toBe(true);
-    expect(res.scaledRight).not.toBeNull();
-    expect(res.scaledLeft).toBeNull();
+    expect(res.gapPx).toBeGreaterThan(0);
 
     const report = await validateAiAsset(res.buffer, W, H, { centerClearZone: ZONE });
     expect(report.checks.find((c) => c.key === "center")!.passed).toBe(true);
-
-    // Якорь: правый край группы остался у прежнего правого края (1199).
-    const { data, info } = await sharp(res.buffer).greyscale().raw().toBuffer({ resolveWithObject: true });
-    const dark = (x: number, y: number) => data[y * info.width + x]! < 235;
-    expect(dark(1198, 580)).toBe(true);
   });
 
-  it("безнадёжная раскладка (нужно ужатие сильнее лимита) не трогается", async () => {
-    // Группа почти во всю ширину: scale ≈ 330/1100 < 0.55 → отказ от доводки.
-    const img = await whiteCanvas([{ input: await darkBlock(1100, 300), left: 0, top: 250 }]);
+  it("экстремальная интрузия: ужатие клампится на 0.72, остаток допускается", async () => {
+    // Группа почти во всю ширину — полностью зону не освободить.
+    const img = await whiteCanvas([{ input: await darkBlock(1000, 300), left: 0, top: 250 }]);
     const res = await enforceCenterClearZone(img, ZONE);
-    expect(res.scaledLeft).toBeNull();
-    expect(res.scaledRight).toBeNull();
-    expect(res.changed).toBe(false);
+    expect(res.changed).toBe(true);
+    expect(res.scale).toBeGreaterThanOrEqual(0.72);
+    expect(res.scale).toBeLessThanOrEqual(0.73);
   });
 });

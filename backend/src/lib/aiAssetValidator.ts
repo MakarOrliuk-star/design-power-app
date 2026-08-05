@@ -56,9 +56,11 @@ const BORDER_DARK_MEAN = 10;
  * «Чистый центр» (A-3, по email mask дизайнера): на белом фоне центральная
  * текстовая зона обязана оставаться белой — любой пропс/монетка в ней ловится
  * детерминированно, без VLM. Порог люмы живёт в centerCleanup (см. коммент там).
+ * Порог доли белого ослаблен с 0.97 до 0.95 (A-5): после раздвижки центра
+ * лёгкое залезание item сбоку принято Пользователем как допустимое.
  */
 export { CENTER_BG_MIN_LUMA };
-export const CENTER_CLEAR_MIN_RATIO = 0.97;
+export const CENTER_CLEAR_MIN_RATIO = 0.95;
 
 /** Дисперсия лапласиана (4-соседний) по грейскейл-байтам. */
 export function laplacianVariance(gray: Uint8Array, width: number, height: number): number {

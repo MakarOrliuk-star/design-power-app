@@ -136,8 +136,8 @@ export interface AiRefAttempt {
   tech: AiTechReport | null;
   /** Приёмка пропущена по транспортной причине (vision недоступен). */
   qaSkipped?: boolean;
-  /** Доводка центра (A-4): стёртые летуны + ужатие боковых групп. */
-  centerFix?: { erased: number; scaledLeft: number | null; scaledRight: number | null };
+  /** Доводка центра (A-5): стёртые летуны + раздвижка центра белой полосой. */
+  centerFix?: { erased: number; gapPx: number; scale: number };
 }
 
 interface ChosenAttempt {
@@ -313,10 +313,10 @@ export async function processAiReferenceAsset(opts: {
       continue;
     }
 
-    // Доводка центра (A-4): banana собирает композицию хорошо, но размерность
-    // safe-зоны не выдерживает — чиним геометрию сами (летуны стираются,
-    // залезшие боковые группы ужимаются в свои секции). Best-effort: при сбое
-    // доводки попытка идёт дальше как есть, её судит валидатор.
+    // Доводка центра (A-5): banana собирает композицию хорошо, но размерность
+    // safe-зоны не выдерживает — центр раздвигается белой полосой (композиция
+    // не трогается, только равномерно мельчает), летуны в зоне стираются.
+    // Best-effort: при сбое доводки попытка идёт дальше как есть.
     let attemptBuffer = buffer;
     let attemptUrl = fitted.url;
     let centerFix: AiRefAttempt["centerFix"];
@@ -330,7 +330,7 @@ export async function processAiReferenceAsset(opts: {
         if (cleanUp.success && cleanUp.secure_url) {
           attemptBuffer = fix.buffer;
           attemptUrl = cleanUp.secure_url;
-          centerFix = { erased: fix.erased, scaledLeft: fix.scaledLeft, scaledRight: fix.scaledRight };
+          centerFix = { erased: fix.erased, gapPx: fix.gapPx, scale: fix.scale };
         }
       }
     } catch (err) {

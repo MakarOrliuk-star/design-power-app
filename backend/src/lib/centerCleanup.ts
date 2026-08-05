@@ -1,5 +1,4 @@
 import sharp from "sharp";
-import type { OverlayOptions } from "sharp";
 import type { FractionZone } from "./aiAssetValidator.js";
 
 /**
@@ -11,31 +10,39 @@ import type { FractionZone } from "./aiAssetValidator.js";
 export const CENTER_BG_MIN_LUMA = 235;
 
 /**
- * Гарантия «чистого центра» (A-4, TASK ai-reference): модель даже под строгим
- * контрактом заводит item/персонажа и мелкие партиклы в центральную полосу,
- * и три ретрая сгорают. Фон по A-2 чисто-белый, поэтому раскладку можно
- * чинить детерминированно, без второго AI-прохода:
+ * Гарантия «чистого центра», вариант A-5 (TASK ai-reference): banana собирает
+ * композицию хорошо, но размерность safe-зоны не выдерживает. Правка A-4
+ * (пере-раскладка боковых групп) признана неудачной — она перекраивала
+ * композицию. Теперь композиция НЕ трогается, вместо этого «раздвигается
+ * центр» (идея Пользователя):
  *
  *   1. «Летуны» — связные компоненты не-белых пикселей ЦЕЛИКОМ внутри чистой
- *      зоны — просто стираются (bbox заливается белым: зона и так обязана
- *      быть белой).
- *   2. Боковые группы (item слева / персонаж справа), залезшие в зону, —
- *      вырезаются целиком и вписываются обратно в СВОЮ секцию: масштаб вниз
- *      с якорем к своему краю канваса и к низу группы (как на email mask).
- *      Резать пропс «по живому» нельзя, поэтому группа уменьшается вся.
+ *      зоны — стираются заливкой белым (зона и так обязана быть белой).
+ *   2. Если боковые группы залезают в зону — кадр режется по самой «пустой»
+ *      вертикали у середины, в разрез вставляется белая полоса нужной ширины,
+ *      затем весь кадр равномерно уменьшается обратно до целевой ширины с
+ *      якорем к низу (сверху добавляется белое — фон и так белый). Каждая
+ *      половина композиции остаётся пиксельно нетронутой, только чуть мельче.
  *
- * Если группу пришлось бы ужать сильнее MIN_GROUP_SCALE — раскладка признаётся
- * безнадёжной и не трогается: её добьёт чек «center» и обычный ретрай.
+ * Ужатие ограничено MIN_WIDEN_SCALE: дальше полоса не растёт, остаточное
+ * «лёгкое залезание» item сбоку принято Пользователем как допустимое —
+ * порог чека center ослаблен соответственно (CENTER_CLEAR_MIN_RATIO).
+ *
+ * Генеративный филл (Bria GenFill / FLUX Fill на fal.ai) рассмотрен и
+ * отвергнут: вставка белая — дорисовывать нечего, а филл может насыпать в
+ * центр новые пропсы и стоит денег на каждую попытку.
  */
 
 export interface CenterEnforceResult {
   buffer: Buffer;
   /** Стёртые «летуны» в чистой зоне. */
   erased: number;
-  /** Коэффициент ужатия левой группы (null — не трогали). */
-  scaledLeft: number | null;
-  /** Коэффициент ужатия правой группы (null — не трогали). */
-  scaledRight: number | null;
+  /** Ширина вставленной белой полосы в исходных px (0 — не раздвигали). */
+  gapPx: number;
+  /** Итоговый коэффициент уменьшения кадра (1 — не раздвигали). */
+  scale: number;
+  /** Колонка разреза в исходных px (null — не раздвигали). */
+  seamX: number | null;
   /** Буфер был изменён (иначе возвращён исходный без перекодирования). */
   changed: boolean;
 }
@@ -46,24 +53,17 @@ const MIN_COMPONENT_PX = 4;
 /** Запас заливки вокруг bbox летуна: анти-алиас и остаточное свечение. */
 const FILL_PAD_PX = 2;
 
-/** Сколько пикселей компоненты в зоне считаем «залезла» (анти-алиас не в счёт). */
+/** Сколько пикселей интрузии в зоне игнорируем как анти-алиас. */
 const INTRUSION_MIN_PX = 8;
 
-/** Ниже этого группу не ужимаем — композиция безнадёжна, пусть решает ретрай. */
-const MIN_GROUP_SCALE = 0.55;
+/** Ниже этого кадр не ужимаем: остаток интрузии допустим (решение Пользователя). */
+const MIN_WIDEN_SCALE = 0.72;
 
-/** Зазор между группой и границей чистой зоны после вписывания. */
+/** Разрез ищем в этой доле ширины вокруг середины кадра. */
+const SEAM_SEARCH_HALF = 0.04;
+
+/** Зазор между группой и границей зоны после раздвижки. */
 const SECTION_GAP_PX = 6;
-
-interface Component {
-  size: number;
-  minX: number;
-  maxX: number;
-  minY: number;
-  maxY: number;
-  inZone: number;
-  sumX: number;
-}
 
 export async function enforceCenterClearZone(
   buffer: Buffer,
@@ -86,39 +86,50 @@ export async function enforceCenterClearZone(
   const by0 = Math.floor(zone.y * h);
   const bx1 = Math.ceil((zone.x + zone.w) * w);
   const by1 = Math.ceil((zone.y + zone.h) * h);
-  const inZone = (x: number, y: number) => x >= bx0 && x < bx1 && y >= by0 && y < by1;
 
-  // Разметка ВСЕХ компонент кадра (4-соседство, итеративный DFS).
+  const fillWhite = (x0: number, y0: number, x1: number, y1: number) => {
+    const fx0 = Math.max(0, x0);
+    const fy0 = Math.max(0, y0);
+    const fx1 = Math.min(w - 1, x1);
+    const fy1 = Math.min(h - 1, y1);
+    for (let y = fy0; y <= fy1; y++)
+      for (let x = fx0; x <= fx1; x++) {
+        const p = (y * w + x) * ch;
+        data[p] = 255;
+        data[p + 1] = 255;
+        data[p + 2] = 255;
+        if (ch === 4) data[p + 3] = 255;
+        nonBg[y * w + x] = 0;
+      }
+  };
+
+  // Шаг 1: летуны. Разметка компонент (4-соседство, итеративный DFS) с
+  // затравками в зоне; bbox строго внутри зоны → стереть.
   const labels = new Int32Array(w * h);
   const stack: number[] = [];
-  const components: Component[] = [];
-  for (let sy = 0; sy < h; sy++) {
-    for (let sx = 0; sx < w; sx++) {
+  let erased = 0;
+  let label = 0;
+  for (let sy = by0; sy < by1; sy++) {
+    for (let sx = bx0; sx < bx1; sx++) {
       const si = sy * w + sx;
       if (!nonBg[si] || labels[si]) continue;
-      const label = components.length + 1;
+      label++;
       labels[si] = label;
       stack.push(si);
-      const c: Component = {
-        size: 0,
-        minX: sx,
-        maxX: sx,
-        minY: sy,
-        maxY: sy,
-        inZone: 0,
-        sumX: 0,
-      };
+      let size = 0;
+      let minX = sx;
+      let maxX = sx;
+      let minY = sy;
+      let maxY = sy;
       while (stack.length) {
         const i = stack.pop()!;
         const x = i % w;
         const y = (i / w) | 0;
-        c.size++;
-        c.sumX += x;
-        if (x < c.minX) c.minX = x;
-        if (x > c.maxX) c.maxX = x;
-        if (y < c.minY) c.minY = y;
-        if (y > c.maxY) c.maxY = y;
-        if (inZone(x, y)) c.inZone++;
+        size++;
+        if (x < minX) minX = x;
+        if (x > maxX) maxX = x;
+        if (y < minY) minY = y;
+        if (y > maxY) maxY = y;
         if (x > 0 && nonBg[i - 1] && !labels[i - 1]) {
           labels[i - 1] = label;
           stack.push(i - 1);
@@ -136,135 +147,112 @@ export async function enforceCenterClearZone(
           stack.push(i + w);
         }
       }
-      components.push(c);
+      if (size < MIN_COMPONENT_PX) continue;
+      const inside = minX > bx0 && maxX < bx1 - 1 && minY > by0 && maxY < by1 - 1;
+      if (!inside) continue;
+      fillWhite(minX - FILL_PAD_PX, minY - FILL_PAD_PX, maxX + FILL_PAD_PX, maxY + FILL_PAD_PX);
+      erased++;
     }
   }
 
-  const fillWhite = (x0: number, y0: number, x1: number, y1: number) => {
-    const fx0 = Math.max(0, x0);
-    const fy0 = Math.max(0, y0);
-    const fx1 = Math.min(w - 1, x1);
-    const fy1 = Math.min(h - 1, y1);
-    for (let y = fy0; y <= fy1; y++)
-      for (let x = fx0; x <= fx1; x++) {
-        const p = (y * w + x) * ch;
-        data[p] = 255;
-        data[p + 1] = 255;
-        data[p + 2] = 255;
-        if (ch === 4) data[p + 3] = 255;
+  // Шаг 2: интрузия боковых групп в зону (по строкам зоны, после стирания
+  // летунов). Lmax — насколько левая сторона заходит вправо, Rmin — правая влево.
+  const mid = Math.floor(w / 2);
+  let lMax = -1;
+  let rMin = w;
+  let lCount = 0;
+  let rCount = 0;
+  for (let y = by0; y < by1; y++)
+    for (let x = bx0; x < bx1; x++) {
+      if (!nonBg[y * w + x]) continue;
+      if (x < mid) {
+        lCount++;
+        if (x > lMax) lMax = x;
+      } else {
+        rCount++;
+        if (x < rMin) rMin = x;
       }
-  };
+    }
+  const leftIntrudes = lCount >= INTRUSION_MIN_PX;
+  const rightIntrudes = rCount >= INTRUSION_MIN_PX;
 
-  // Шаг 1: летуны — bbox строго внутри зоны → стереть.
-  let erased = 0;
-  const floaters = new Set<Component>();
-  for (const c of components) {
-    if (c.size < MIN_COMPONENT_PX || !c.inZone) continue;
-    const inside = c.minX > bx0 && c.maxX < bx1 - 1 && c.minY > by0 && c.maxY < by1 - 1;
-    if (!inside) continue;
-    fillWhite(c.minX - FILL_PAD_PX, c.minY - FILL_PAD_PX, c.maxX + FILL_PAD_PX, c.maxY + FILL_PAD_PX);
-    floaters.add(c);
-    erased++;
+  let gapPx = 0;
+  let scale = 1;
+  let seamX: number | null = null;
+
+  if (leftIntrudes || rightIntrudes) {
+    // Требуемое уменьшение: после вставки полосы G кадр ужимается s = w/(w+G);
+    // левый край зоны должен освободиться (Lmax·s <= bx0 - зазор), правый —
+    // симметрично ((Rmin+G)·s >= bx1 + зазор).
+    const sLeft = leftIntrudes ? (bx0 - SECTION_GAP_PX) / (lMax + 1) : 1;
+    const sRight = rightIntrudes ? (w - bx1 - SECTION_GAP_PX) / (w - rMin) : 1;
+    scale = Math.max(MIN_WIDEN_SCALE, Math.min(1, sLeft, sRight));
+    if (scale < 1) {
+      gapPx = Math.round(w * (1 / scale - 1));
+      scale = w / (w + gapPx);
+
+      // Разрез — самая «пустая» вертикаль вокруг середины (меньше шансов
+      // распилить нижний декор, легально пересекающий центр).
+      const half = Math.max(1, Math.round(w * SEAM_SEARCH_HALF));
+      let best = mid;
+      let bestCount = Infinity;
+      for (let x = mid - half; x <= mid + half; x++) {
+        let cnt = 0;
+        for (let y = 0; y < h; y++) if (nonBg[y * w + x]) cnt++;
+        if (cnt < bestCount) {
+          bestCount = cnt;
+          best = x;
+        }
+      }
+      seamX = best;
+    }
   }
 
-  // Шаг 2: боковые группы. Кластер = не-летуны с центроидом слева/справа от
-  // середины; чиним сторону, только если её компоненты реально залезли в зону.
-  interface Cluster {
-    minX: number;
-    maxX: number;
-    minY: number;
-    maxY: number;
-    intrudes: boolean;
-    present: boolean;
-  }
-  const makeCluster = (): Cluster => ({
-    minX: w,
-    maxX: -1,
-    minY: h,
-    maxY: -1,
-    intrudes: false,
-    present: false,
-  });
-  const left = makeCluster();
-  const right = makeCluster();
-  for (const c of components) {
-    if (c.size < MIN_COMPONENT_PX || floaters.has(c)) continue;
-    const side = c.sumX / c.size < w / 2 ? left : right;
-    side.present = true;
-    if (c.minX < side.minX) side.minX = c.minX;
-    if (c.maxX > side.maxX) side.maxX = c.maxX;
-    if (c.minY < side.minY) side.minY = c.minY;
-    if (c.maxY > side.maxY) side.maxY = c.maxY;
-    if (c.inZone >= INTRUSION_MIN_PX) side.intrudes = true;
+  if (!erased && !gapPx) {
+    return { buffer, erased: 0, gapPx: 0, scale: 1, seamX: null, changed: false };
   }
 
-  interface Fix {
-    cluster: Cluster;
-    scale: number;
-    newW: number;
-    newH: number;
-    pasteX: number;
-    pasteY: number;
-  }
-  const planFix = (cluster: Cluster, side: "left" | "right"): Fix | null => {
-    if (!cluster.present || !cluster.intrudes) return null;
-    const bw = cluster.maxX - cluster.minX + 1;
-    const bh = cluster.maxY - cluster.minY + 1;
-    // Доступная ширина: от своего края группы до границы зоны с зазором.
-    const availW =
-      side === "left" ? bx0 - SECTION_GAP_PX - cluster.minX : cluster.maxX - (bx1 + SECTION_GAP_PX) + 1;
-    if (availW <= 0) return null;
-    // Группа залезла в зону → её bbox шире доступной секции, scale всегда < 1.
-    const scale = Math.min(1, availW / bw);
-    if (scale >= 1 || scale < MIN_GROUP_SCALE) return null;
-    const newW = Math.max(1, Math.round(bw * scale));
-    const newH = Math.max(1, Math.round(bh * scale));
-    // Якорь: свой край канваса по X (minX/maxX группы), низ группы по Y.
-    const pasteX = side === "left" ? cluster.minX : cluster.maxX - newW + 1;
-    const pasteY = cluster.maxY - newH + 1;
-    return { cluster, scale, newW, newH, pasteX, pasteY };
-  };
-
-  const leftFix = planFix(left, "left");
-  const rightFix = planFix(right, "right");
-
-  if (!erased && !leftFix && !rightFix) {
-    return { buffer, erased: 0, scaledLeft: null, scaledRight: null, changed: false };
-  }
-
-  // Кропы берём из кадра ПОСЛЕ стирания летунов (bbox группы может накрывать
-  // зону, где они были), потом их место заливается белым.
-  const overlays: OverlayOptions[] = [];
-  for (const fix of [leftFix, rightFix]) {
-    if (!fix) continue;
-    const { cluster } = fix;
-    const crop = await sharp(data, { raw: { width: w, height: h, channels: ch } })
-      .extract({
-        left: cluster.minX,
-        top: cluster.minY,
-        width: cluster.maxX - cluster.minX + 1,
-        height: cluster.maxY - cluster.minY + 1,
-      })
-      .resize(fix.newW, fix.newH)
+  const base = sharp(data, { raw: { width: w, height: h, channels: ch } });
+  let out: Buffer;
+  if (!gapPx || seamX === null) {
+    out = await base.png().toBuffer();
+  } else {
+    const leftCrop = await base
+      .clone()
+      .extract({ left: 0, top: 0, width: seamX, height: h })
       .png()
       .toBuffer();
-    overlays.push({ input: crop, left: fix.pasteX, top: fix.pasteY });
+    const rightCrop = await base
+      .clone()
+      .extract({ left: seamX, top: 0, width: w - seamX, height: h })
+      .png()
+      .toBuffer();
+    const newH = Math.max(1, Math.round(h * scale));
+    const shrunk = await sharp({
+      create: { width: w + gapPx, height: h, channels: 3, background: { r: 255, g: 255, b: 255 } },
+    })
+      .composite([
+        { input: leftCrop, left: 0, top: 0 },
+        { input: rightCrop, left: seamX + gapPx, top: 0 },
+      ])
+      .png()
+      .toBuffer();
+    const resized = await sharp(shrunk).resize(w, newH).png().toBuffer();
+    // Якорь к низу: сверху белая полоса (фон белый — шов не виден).
+    out = await sharp({
+      create: { width: w, height: h, channels: 3, background: { r: 255, g: 255, b: 255 } },
+    })
+      .composite([{ input: resized, left: 0, top: h - newH }])
+      .png()
+      .toBuffer();
   }
-  // Заливка исходных мест групп — после снятия кропов.
-  for (const fix of [leftFix, rightFix]) {
-    if (!fix) continue;
-    fillWhite(fix.cluster.minX, fix.cluster.minY, fix.cluster.maxX, fix.cluster.maxY);
-  }
-
-  let pipeline = sharp(data, { raw: { width: w, height: h, channels: ch } });
-  if (overlays.length) pipeline = pipeline.composite(overlays);
-  const out = await pipeline.png().toBuffer();
 
   return {
     buffer: out,
     erased,
-    scaledLeft: leftFix ? Math.round(leftFix.scale * 100) / 100 : null,
-    scaledRight: rightFix ? Math.round(rightFix.scale * 100) / 100 : null,
+    gapPx,
+    scale: Math.round(scale * 100) / 100,
+    seamX,
     changed: true,
   };
 }
