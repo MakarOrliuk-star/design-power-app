@@ -8,6 +8,7 @@ import { uploadFromUrl, uploadBuffer, withRetry } from "../lib/cloudinary.js";
 import { fetchBuffer } from "./layerCache.js";
 import { validateAiAsset } from "../lib/aiAssetValidator.js";
 import type { AiTechReport } from "../lib/aiAssetValidator.js";
+import { enforceCenterClearZone } from "../lib/centerCleanup.js";
 import { reviewComposition, QA_REFS_SHOWN } from "../lib/vlmReviewer.js";
 import {
   renderToken,
@@ -135,6 +136,8 @@ export interface AiRefAttempt {
   tech: AiTechReport | null;
   /** Приёмка пропущена по транспортной причине (vision недоступен). */
   qaSkipped?: boolean;
+  /** Доводка центра (A-4): стёртые летуны + ужатие боковых групп. */
+  centerFix?: { erased: number; scaledLeft: number | null; scaledRight: number | null };
 }
 
 interface ChosenAttempt {
@@ -310,17 +313,42 @@ export async function processAiReferenceAsset(opts: {
       continue;
     }
 
+    // Доводка центра (A-4): banana собирает композицию хорошо, но размерность
+    // safe-зоны не выдерживает — чиним геометрию сами (летуны стираются,
+    // залезшие боковые группы ужимаются в свои секции). Best-effort: при сбое
+    // доводки попытка идёт дальше как есть, её судит валидатор.
+    let attemptBuffer = buffer;
+    let attemptUrl = fitted.url;
+    let centerFix: AiRefAttempt["centerFix"];
+    try {
+      const fix = await enforceCenterClearZone(buffer, AI_REF_CENTER_CLEAR_ZONE);
+      if (fix.changed) {
+        const cleanUp = await withRetry(
+          () => uploadBuffer(fix.buffer, `${variantId}_${assetKey}_try${attempt}_fit`, folder),
+          `ai-ref-centerfix#${assetId}@${attempt}`,
+        );
+        if (cleanUp.success && cleanUp.secure_url) {
+          attemptBuffer = fix.buffer;
+          attemptUrl = cleanUp.secure_url;
+          centerFix = { erased: fix.erased, scaledLeft: fix.scaledLeft, scaledRight: fix.scaledRight };
+        }
+      }
+    } catch (err) {
+      console.warn(`⚠ ai-ref centerfix#${assetId}@${attempt}: ${err instanceof Error ? err.message : err}`);
+    }
+
     // Стадия C ДО стадии B: детерминированные проверки бесплатны, VLM — нет.
-    const tech = await validateAiAsset(buffer, targetW, targetH, {
+    const tech = await validateAiAsset(attemptBuffer, targetW, targetH, {
       centerClearZone: AI_REF_CENTER_CLEAR_ZONE,
     });
     if (!tech.passed) {
       attempts.push({
-        imageUrl: fitted.url,
+        imageUrl: attemptUrl,
         score: 0,
         pass: false,
         reasons: tech.checks.filter((c) => !c.passed).map((c) => `${c.key}: ${c.detail}`),
         tech,
+        ...(centerFix ? { centerFix } : {}),
       });
       continue;
     }
@@ -328,25 +356,26 @@ export async function processAiReferenceAsset(opts: {
     // Стадия B: приемщик (DI-R9). Транспортный сбой = приёмка пропущена,
     // попытка засчитывается как прошедшая (fail-open, причина в metadata).
     const verdict = await reviewComposition({
-      imageUrl: fitted.url,
+      imageUrl: attemptUrl,
       refUrls: refUrls.slice(0, QA_REFS_SHOWN),
       variationText,
       brandName: baseBrand,
     });
     const attemptRow: AiRefAttempt = {
-      imageUrl: fitted.url,
+      imageUrl: attemptUrl,
       score: Math.max(0, verdict.score),
       pass: verdict.pass,
       reasons: verdict.reasons,
       tech,
       ...(verdict.skipped ? { qaSkipped: true } : {}),
+      ...(centerFix ? { centerFix } : {}),
     };
     attempts.push(attemptRow);
 
     const candidate: ChosenAttempt = {
       index: attempts.length - 1,
-      imageUrl: fitted.url,
-      buffer,
+      imageUrl: attemptUrl,
+      buffer: attemptBuffer,
       pass: verdict.pass,
     };
     if (verdict.pass) {

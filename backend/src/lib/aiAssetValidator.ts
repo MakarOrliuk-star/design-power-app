@@ -1,4 +1,5 @@
 import sharp from "sharp";
+import { CENTER_BG_MIN_LUMA } from "./centerCleanup.js";
 
 /**
  * Стадия C: техническая валидация AI-композиции (TASK ai-reference).
@@ -54,10 +55,9 @@ const BORDER_DARK_MEAN = 10;
 /**
  * «Чистый центр» (A-3, по email mask дизайнера): на белом фоне центральная
  * текстовая зона обязана оставаться белой — любой пропс/монетка в ней ловится
- * детерминированно, без VLM. Пиксель считается фоном при яркости >= порога;
- * небольшой допуск на свечение/мягкие тени от боковых групп.
+ * детерминированно, без VLM. Порог люмы живёт в centerCleanup (см. коммент там).
  */
-export const CENTER_BG_MIN_LUMA = 235;
+export { CENTER_BG_MIN_LUMA };
 export const CENTER_CLEAR_MIN_RATIO = 0.97;
 
 /** Дисперсия лапласиана (4-соседний) по грейскейл-байтам. */
