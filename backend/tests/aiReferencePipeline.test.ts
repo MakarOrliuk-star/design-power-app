@@ -16,7 +16,11 @@ const db = vi.hoisted(() => ({
   variationReference: { findMany: vi.fn(), groupBy: vi.fn() },
   brand: { findMany: vi.fn() },
 }));
-const fal = vi.hoisted(() => ({ runPersonFal: vi.fn(), runBriaRemoveBg: vi.fn() }));
+const fal = vi.hoisted(() => ({
+  runPersonFal: vi.fn(),
+  runGptImage2Edit: vi.fn(),
+  runBriaRemoveBg: vi.fn(),
+}));
 const fit = vi.hoisted(() => ({ fitAndStoreAsset: vi.fn() }));
 const cloud = vi.hoisted(() => ({
   uploadFromUrl: vi.fn(),
@@ -104,6 +108,7 @@ beforeEach(() => {
   for (const delegate of Object.values(db))
     for (const fn of Object.values(delegate)) (fn as ReturnType<typeof vi.fn>).mockReset();
   fal.runPersonFal.mockReset();
+  fal.runGptImage2Edit.mockReset();
   fal.runBriaRemoveBg.mockReset();
   fit.fitAndStoreAsset.mockReset();
   cloud.uploadFromUrl.mockReset();
@@ -126,6 +131,7 @@ beforeEach(() => {
   db.bundle.update.mockResolvedValue({});
 
   fal.runPersonFal.mockResolvedValue({ success: true, imageUrl: "https://fal/gen.png" });
+  fal.runGptImage2Edit.mockResolvedValue({ success: true, imageUrl: "https://fal/gen.png" });
   fit.fitAndStoreAsset.mockResolvedValue({ ok: true, url: "https://cdn/fit.png", publicId: "fit" });
   cache.fetchBuffer.mockResolvedValue(pngBuffer);
   validator.validateAiAsset.mockResolvedValue({ passed: true, checks: [] });
@@ -178,15 +184,16 @@ describe("processAiReferenceAsset", () => {
     expect(db.variationReference.findMany).toHaveBeenCalledWith(
       expect.objectContaining({ where: { presetId: "p1", brandName: "Betnella" } }),
     );
-    // Генерация: дефолтная модель (null), аспект 16:9 для 1200×600.
+    // Генерация: GPT Image 2 (A-7) с точным канвасом, banana не вызывается.
     // Референсы + схема-раскладка последним слотом (A-6).
-    expect(fal.runPersonFal).toHaveBeenCalledTimes(1);
-    const [prompt, urls, aspect, model] = fal.runPersonFal.mock.calls[0]!;
-    expect(prompt).toContain("STRICTLY NO text");
-    expect(prompt).toContain("LAYOUT GUIDE");
-    expect(urls).toHaveLength(7);
-    expect(aspect).toBe("16:9");
-    expect(model).toBeNull();
+    expect(fal.runGptImage2Edit).toHaveBeenCalledTimes(1);
+    expect(fal.runPersonFal).not.toHaveBeenCalled();
+    const [args] = fal.runGptImage2Edit.mock.calls[0]!;
+    expect(args.prompt).toContain("STRICTLY NO text");
+    expect(args.prompt).toContain("LAYOUT GUIDE");
+    expect(args.imageUrls).toHaveLength(7);
+    expect(args.width).toBe(1200);
+    expect(args.height).toBe(600);
 
     // Производные строки семейства: notext + transparent, обе DONE.
     const upsertKeys = db.bundleAsset.upsert.mock.calls.map(
@@ -215,7 +222,7 @@ describe("processAiReferenceAsset", () => {
 
     await processAiReferenceAsset(OPTS);
 
-    expect(fal.runPersonFal).toHaveBeenCalledTimes(AI_REF_MAX_ATTEMPTS);
+    expect(fal.runGptImage2Edit).toHaveBeenCalledTimes(AI_REF_MAX_ATTEMPTS);
     const parentCall = db.bundleAsset.update.mock.calls.find(
       (c) => (c[0] as { data: { status?: string } }).data.status === "DONE",
     )![0] as {
@@ -231,9 +238,25 @@ describe("processAiReferenceAsset", () => {
     );
   });
 
+  it("env-откат A-7: AI_REF_IMAGE_MODEL=fal-ai/nano-banana-2 → путь banana (16:9)", async () => {
+    vi.stubEnv("AI_REF_IMAGE_MODEL", "fal-ai/nano-banana-2");
+    try {
+      await processAiReferenceAsset(OPTS);
+      expect(fal.runGptImage2Edit).not.toHaveBeenCalled();
+      expect(fal.runPersonFal).toHaveBeenCalledTimes(1);
+      const [, urls, aspect, model] = fal.runPersonFal.mock.calls[0]!;
+      expect(urls).toHaveLength(7);
+      expect(aspect).toBe("16:9");
+      expect(model).toBeNull();
+    } finally {
+      vi.unstubAllEnvs();
+    }
+  });
+
   it("меньше 5 референсов → семейство FAILED с причиной, генерация не вызывается", async () => {
     db.variationReference.findMany.mockResolvedValue(refRows(3));
     await processAiReferenceAsset(OPTS);
+    expect(fal.runGptImage2Edit).not.toHaveBeenCalled();
     expect(fal.runPersonFal).not.toHaveBeenCalled();
     const failCall = db.bundleAsset.update.mock.calls[0]![0] as {
       data: { status: string; errorMessage: string };
