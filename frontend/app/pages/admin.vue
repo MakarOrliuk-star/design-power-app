@@ -715,7 +715,8 @@ interface AdminBundleTypeAsset {
   height: number;
   templateUrl?: string;
   zones?: Record<string, { x: number; y: number; w: number; h: number }>;
-  composeMode?: "ai" | "layered";
+  // "ai_reference" — композиция из 5–15 референсов вариации (TASK ai-reference)
+  composeMode?: "ai" | "layered" | "ai_reference";
 }
 interface AdminBundleType {
   id: string;
@@ -770,7 +771,7 @@ async function removeBundleTemplate(t: AdminBundleType, a: AdminBundleTypeAsset)
 }
 
 async function setComposeMode(t: AdminBundleType, a: AdminBundleTypeAsset, e: Event) {
-  a.composeMode = (e.target as HTMLSelectElement).value as "ai" | "layered";
+  a.composeMode = (e.target as HTMLSelectElement).value as "ai" | "layered" | "ai_reference";
   try {
     await saveBundleTypeAssets(t);
     btMsg.value[t.id] = `Режим сборки ${a.label}: ${a.composeMode} ✓`;
@@ -1771,6 +1772,9 @@ onMounted(() => {
               <span v-else-if="a.composeMode === 'layered'" class="muted">
                 нет фона — рендер этого ассета упадёт
               </span>
+              <span v-else-if="a.composeMode === 'ai_reference'" class="muted">
+                шаблон не нужен — композиция собирается из референсов вариации
+              </span>
               <span v-else class="muted">нет шаблона — генерация по промпту</span>
             </div>
             <div class="bt__actions">
@@ -1784,11 +1788,12 @@ onMounted(() => {
               <select
                 class="bt__mode"
                 :value="a.composeMode ?? 'ai'"
-                title="layered — фон-слой + вырезки person/item по секциям (пиксельная гарантия зон); ai — одна генерация с промпт-раскладкой"
+                title="layered — фон-слой + вырезки person/item по секциям (пиксельная гарантия зон); ai — одна генерация с промпт-раскладкой; ai_reference — новая композиция из 5–15 референсов вариации + приёмка VLM"
                 @change="(e) => setComposeMode(t, a, e)"
               >
                 <option value="ai">AI-сборка</option>
                 <option value="layered">Слои (layered)</option>
+                <option value="ai_reference">AI по референсам (ai_reference)</option>
               </select>
             </div>
           </div>

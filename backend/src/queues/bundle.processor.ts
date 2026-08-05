@@ -1,5 +1,7 @@
 import { prisma } from "../lib/prisma.js";
-import { runPersonFal, runBriaExpand } from "../lib/fal.js";
+import { runPersonFal } from "../lib/fal.js";
+import { fitAndStoreAsset } from "../lib/assetFit.js";
+import { processAiReferenceAsset, parentOfDerivedKey } from "../services/aiReferencePipeline.js";
 import { getOrCreateNormalizedLayer, fetchBuffer } from "../services/layerCache.js";
 import { getActiveLayoutSpec, SPEC_KEY_BY_ASSET } from "../services/layoutSpec.js";
 import type { LayoutSpecRow } from "../services/layoutSpec.js";
@@ -182,110 +184,15 @@ export function compositionPrompt(
     .join(" ");
 }
 
-/**
- * Center the generated image inside the exact target canvas: scale to fit
- * (contain), Bria outpaints the remaining margins. Pure — unit-tested.
- */
-export function computeCanvasPlacement(
-  srcW: number,
-  srcH: number,
-  targetW: number,
-  targetH: number,
-): { canvasW: number; canvasH: number; imgW: number; imgH: number; originX: number; originY: number } {
-  const scale = Math.min(targetW / srcW, targetH / srcH);
-  const imgW = Math.min(targetW, Math.round(srcW * scale));
-  const imgH = Math.min(targetH, Math.round(srcH * scale));
-  return {
-    canvasW: targetW,
-    canvasH: targetH,
-    imgW,
-    imgH,
-    originX: Math.round((targetW - imgW) / 2),
-    originY: Math.round((targetH - imgH) / 2),
-  };
-}
-
-// Bria's outpaint can leave a feathered/semi-transparent seam along the outer
-// canvas edges (видимая «прозрачная рамка» на живом прогоне). The fix: expand
-// onto a canvas BLEED px larger on every side, then center-crop back to the
-// exact target at upload time — the artifact ring is cut away deterministically.
-export const EXPAND_BLEED = 32;
-
-/** Placement for the bleed-expanded canvas (target + BLEED on each side). */
-export function computeBleedPlacement(
-  srcW: number,
-  srcH: number,
-  targetW: number,
-  targetH: number,
-  bleed = EXPAND_BLEED,
-): { canvasW: number; canvasH: number; imgW: number; imgH: number; originX: number; originY: number } {
-  const inner = computeCanvasPlacement(srcW, srcH, targetW, targetH);
-  return {
-    canvasW: targetW + 2 * bleed,
-    canvasH: targetH + 2 * bleed,
-    imgW: inner.imgW,
-    imgH: inner.imgH,
-    originX: inner.originX + bleed,
-    originY: inner.originY + bleed,
-  };
-}
-
-const EXPAND_PROMPT =
-  "Seamlessly continue the existing background scene into the new margins, matching its colors, lighting and texture exactly. No borders, no frames, no empty or transparent areas.";
-
-/** Two sizes have the same aspect ratio (within a pixel-rounding tolerance). */
-function sameAspect(w1: number, h1: number, w2: number, h2: number): boolean {
-  return Math.abs(w1 / h1 - w2 / h2) < 0.01;
-}
-
-/**
- * Fit a generated image to the exact mask canvas (D5) and store it:
- * - exact size → plain upload;
- * - same aspect → Cloudinary incoming resize (`c_fill`), no extra fal call;
- * - different aspect → bleed-expand via Bria, then signed incoming
- *   center-crop back to the target (cuts the outpaint edge artifacts).
- */
-export async function fitAndStoreAsset(
-  sourceUrl: string,
-  targetW: number,
-  targetH: number,
-  fileName: string,
-  folder: string,
-  retryLabel: string,
-): Promise<{ ok: true; url: string; publicId: string } | { ok: false; reason: string }> {
-  const size = await probeImageSize(sourceUrl);
-  if (!size) return { ok: false, reason: "probe: could not read the generated image size" };
-
-  let uploadCall: () => ReturnType<typeof uploadFromUrl>;
-  if (size.width === targetW && size.height === targetH) {
-    uploadCall = () => uploadFromUrl(sourceUrl, fileName, folder);
-  } else if (sameAspect(size.width, size.height, targetW, targetH)) {
-    uploadCall = () =>
-      uploadFromUrlTransformed(sourceUrl, fileName, folder, `c_fill,w_${targetW},h_${targetH}`);
-  } else {
-    const placement = computeBleedPlacement(size.width, size.height, targetW, targetH);
-    const expanded = await runBriaExpand(sourceUrl, { ...placement, prompt: EXPAND_PROMPT });
-    if (!expanded.success || !expanded.imageUrl) {
-      return { ok: false, reason: `expand: ${expanded.error ?? "unknown"}` };
-    }
-    const expandedUrl = expanded.imageUrl;
-    uploadCall = () =>
-      uploadFromUrlTransformed(expandedUrl, fileName, folder, `c_crop,g_center,w_${targetW},h_${targetH}`);
-  }
-
-  const up = await withRetry(uploadCall, retryLabel);
-  if (!up.success || !up.secure_url) return { ok: false, reason: `upload: ${up.error ?? "unknown"}` };
-
-  // D5 guarantee: the STORED asset is exactly the canonical canvas.
-  const finalSize = await probeImageSize(up.secure_url);
-  if (finalSize && (finalSize.width !== targetW || finalSize.height !== targetH)) {
-    return {
-      ok: false,
-      reason: `size mismatch: got ${finalSize.width}×${finalSize.height}, want ${targetW}×${targetH}`,
-    };
-  }
-  return { ok: true, url: up.secure_url, publicId: up.public_id ?? "" };
-}
+// Fit-хелперы вынесены в lib/assetFit.ts (TASK ai-reference): пайплайн
+// ai_reference в services/ использует их без циклического импорта процессора.
+// Ре-экспорт сохраняет прежние импорты (тесты, соседние модули).
+export {
+  computeCanvasPlacement,
+  computeBleedPlacement,
+  EXPAND_BLEED,
+} from "../lib/assetFit.js";
+export { fitAndStoreAsset };
 
 // ------------------------------------------------------------------
 // Layered compose (D10 v2 — email): zone boxes → Cloudinary layers.
@@ -469,6 +376,33 @@ export async function processPrepareVariantJob(bundleId: string, variantId: stri
     });
     await recomputeBundleStatus(bundleId);
   };
+
+  // TASK ai-reference: если ВСЕ ассеты типа — ai_reference, персона/предмет/
+  // style-profile не нужны вовсе (композиция собирается из референсов
+  // вариации). Пропускаем stage A и сразу раздаём render-джобы. Смешанный тип
+  // (ai_reference + layered) идёт обычным путём — слои нужны соседним ассетам.
+  const allTypeAssets = variant.bundle.bundleType.assets as unknown as BundleTypeAsset[];
+  if (allTypeAssets.length > 0 && allTypeAssets.every((a) => a.composeMode === "ai_reference")) {
+    const pending = await prisma.bundleAsset.findMany({
+      where: { variantId, status: { in: ["PENDING", "GENERATING"] } },
+      select: { id: true },
+    });
+    if (pending.length === 0) {
+      await recomputeBundleStatus(bundleId);
+      return;
+    }
+    await prisma.bundleAsset.updateMany({
+      where: { id: { in: pending.map((a) => a.id) } },
+      data: { status: "GENERATING" },
+    });
+    await getBundleQueue().addBulk(
+      pending.map((a) => ({
+        name: "render-asset" as const,
+        data: { bundleId, variantId, assetId: a.id },
+      })),
+    );
+    return;
+  }
 
   const brand = await prisma.brand.findUnique({
     where: { name: variant.brandName },
@@ -962,15 +896,64 @@ export async function processRenderAssetJob(
   };
 
   const variant = asset.variant;
-  if (!variant.personImageUrl) {
-    await fail("missing person artifact — regenerate the bundle");
-    return;
-  }
-
   const typeAssets = variant.bundle.bundleType.assets as unknown as BundleTypeAsset[];
   const config = typeAssets.find((a) => a.key === asset.assetKey);
   const targetW = config?.width ?? asset.width;
   const targetH = config?.height ?? asset.height;
+
+  // TASK ai-reference: композиция из референсов вариации — свой пайплайн,
+  // person/item не нужны (проверка personImageUrl ниже к нему не относится).
+  if (config?.composeMode === "ai_reference") {
+    await prisma.bundleAsset.update({
+      where: { id: assetId },
+      data: { status: "GENERATING", errorMessage: null },
+    });
+    await processAiReferenceAsset({
+      bundleId,
+      variantId,
+      assetId,
+      assetKey: asset.assetKey,
+      brandName: variant.brandName,
+      targetW,
+      targetH,
+    });
+    return;
+  }
+
+  // Производный ключ семейства ai_reference ("email_notext"/"email_transparent"):
+  // Regenerate на нём перегенерирует РОДИТЕЛЯ — семейство обновляется целиком
+  // (одна композиция → три ассета, DI-R11).
+  const parentKey = parentOfDerivedKey(asset.assetKey);
+  const parentConfig = parentKey ? typeAssets.find((a) => a.key === parentKey) : undefined;
+  if (parentKey && parentConfig?.composeMode === "ai_reference") {
+    const parentAsset = await prisma.bundleAsset.findUnique({
+      where: { variantId_assetKey: { variantId, assetKey: parentKey } },
+      select: { id: true },
+    });
+    if (!parentAsset) {
+      await fail(`родительский ассет "${parentKey}" не найден — перезапустите генерацию бандла`);
+      return;
+    }
+    await prisma.bundleAsset.update({
+      where: { id: parentAsset.id },
+      data: { status: "GENERATING", errorMessage: null },
+    });
+    await processAiReferenceAsset({
+      bundleId,
+      variantId,
+      assetId: parentAsset.id,
+      assetKey: parentKey,
+      brandName: variant.brandName,
+      targetW: parentConfig.width,
+      targetH: parentConfig.height,
+    });
+    return;
+  }
+
+  if (!variant.personImageUrl) {
+    await fail("missing person artifact — regenerate the bundle");
+    return;
+  }
 
   await prisma.bundleAsset.update({
     where: { id: assetId },

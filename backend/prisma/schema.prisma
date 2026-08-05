@@ -563,6 +563,11 @@ model Bundle {
   brandNames    Json // string[] of base brand names
   bundleTypeId  String
   bundleType    BundleType   @relation(fields: [bundleTypeId], references: [id])
+  /// Chosen variation for the ai_reference compose mode (TASK ai-reference):
+  /// required at generate time when the bundle type has an ai_reference asset,
+  /// null for layered/scene bundles. SetNull so bundles survive preset deletes.
+  presetId      String?
+  preset        NeuralPromptPreset? @relation(fields: [presetId], references: [id], onDelete: SetNull)
   createdById   String?
   createdBy     User?        @relation(fields: [createdById], references: [id], onDelete: SetNull)
   createdAt     DateTime     @default(now())
@@ -694,6 +699,9 @@ model PatternSpec {
 }
 
 /// Global admin-editable Neural prompt suggestions shown on textarea focus (D8).
+/// Since TASK ai-reference a preset doubles as a "вариация": ai_reference
+/// bundles must pick one, and its per-brand reference banners live in
+/// VariationReference rows below.
 model NeuralPromptPreset {
   id        String   @id @default(cuid())
   title     String
@@ -701,6 +709,31 @@ model NeuralPromptPreset {
   order     Int      @default(0)
   isActive  Boolean  @default(true)
   createdAt DateTime @default(now())
+
+  references VariationReference[]
+  bundles    Bundle[]
+}
+
+/// Reference email banner for the ai_reference compose mode (TASK ai-reference,
+/// DI-R3/R5): finished 1200×600 banners uploaded per (variation × base brand).
+/// 5..15 per pair are allowed at rest; generation requires >= 5 and sends the
+/// first 14 by sortOrder (nano-banana-2 /edit hard limit). Deliberately NOT
+/// tied to BrandNanoRef — that table serves the person-layer pipeline.
+model VariationReference {
+  id          String   @id @default(cuid())
+  presetId    String
+  preset      NeuralPromptPreset @relation(fields: [presetId], references: [id], onDelete: Cascade)
+  brandName   String // BASE brand name, same values as Bundle.brandNames entries
+  imageUrl    String // Cloudinary secure_url
+  publicId    String // Cloudinary public_id (for delete)
+  width       Int
+  height      Int
+  sortOrder   Int      @default(0) // admin order = priority when trimming to 14
+  createdById String?
+  createdAt   DateTime @default(now())
+
+  @@unique([presetId, brandName, publicId])
+  @@index([presetId, brandName])
 }
 
 /// One "Send to Smartico" run (D6): approved assets → Cloudinary + generated

@@ -173,6 +173,37 @@ export async function uploadBuffer(
   }
 }
 
+const DESTROY_URL = () =>
+  `https://api.cloudinary.com/v1_1/${env.CLOUDINARY_CLOUD_NAME}/image/destroy`;
+
+/**
+ * Signed destroy. Best-effort by design: reference banners (TASK ai-reference)
+ * delete the DB row first and only then the bytes — a failed destroy leaves an
+ * orphan file, never a dangling DB reference.
+ */
+export async function deleteAsset(publicId: string): Promise<CloudinaryResult> {
+  try {
+    const timestamp = Math.round(Date.now() / 1000);
+    const signature = sign({ public_id: publicId, timestamp });
+    const body = new URLSearchParams({
+      public_id: publicId,
+      api_key: env.CLOUDINARY_API_KEY ?? "",
+      timestamp: String(timestamp),
+      signature,
+    });
+    const res = await fetch(DESTROY_URL(), {
+      method: "POST",
+      headers: { "Content-Type": "application/x-www-form-urlencoded" },
+      body,
+    });
+    const text = await res.text();
+    if (res.status === 200) return { success: true, public_id: publicId };
+    return { success: false, error: `Destroy failed: ${res.status}`, details: text.slice(0, 300) };
+  } catch (err) {
+    return { success: false, error: String(err) };
+  }
+}
+
 const BACKOFF_MS = [500, 1500, 3000];
 
 /** Light retry/backoff wrapper (mirrors the legacy `*WithRetry` helpers). */
