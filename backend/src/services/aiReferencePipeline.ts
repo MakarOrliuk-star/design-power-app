@@ -8,7 +8,8 @@ import { uploadFromUrl, uploadBuffer, withRetry } from "../lib/cloudinary.js";
 import { fetchBuffer } from "./layerCache.js";
 import { validateAiAsset } from "../lib/aiAssetValidator.js";
 import type { AiTechReport } from "../lib/aiAssetValidator.js";
-import { enforceCenterClearZone } from "../lib/centerCleanup.js";
+import { getLayoutGuideUrl, LAYOUT_GUIDE_INSTRUCTION } from "../lib/layoutGuide.js";
+import { MAX_EDIT_REFS } from "./variationRefs.js";
 import { reviewComposition, QA_REFS_SHOWN } from "../lib/vlmReviewer.js";
 import {
   renderToken,
@@ -96,16 +97,16 @@ export const AI_REF_COMPOSITION_CONTRACT =
   "BACKGROUND: pure solid white (#FFFFFF), completely flat — no scenery, no gradients, no glow, " +
   "no bokeh, no light rays, no patterns and no cast shadows on the background; the artwork will " +
   "be cut out later, so every element needs clean crisp edges against the white. " +
-  "CENTER: the central band of the canvas (the middle 46% of the width, from the very top to the " +
-  "very bottom) must stay COMPLETELY EMPTY — no plates, ovals, panels, frames, badges, and no " +
-  "floating coins, gems, sparkles, confetti or particles crossing it at ANY height; nothing but the " +
-  "white background. The only exception: one or two tiny decorative props may sit near the very " +
-  "bottom edge of that band. A headline and a CTA button will be overlaid in the center later. " +
-  "COMPOSITION: arrange the elements like a professional designer in THREE sections — the LEFT " +
-  "quarter of the canvas holds one large anchor group of props, the RIGHT quarter holds the main " +
-  "character with its details, and the central band between them stays clear; smaller props taper " +
-  "upward strictly above the side sections, never drifting toward the middle; foreground elements " +
-  "tack sharp, small distant props slightly blurred for depth of field. " +
+  "CENTER: like every professional email hero banner, reserve a wide blank COPY SPACE in the " +
+  "middle — the middle half of the banner is pure white negative space from top to bottom, where " +
+  "a headline and a CTA button will be placed later; no plates, panels, frames, props, characters, " +
+  "coins or sparkles may enter the copy space at any height (at most one or two tiny decor pieces " +
+  "near its very bottom), it must stay COMPLETELY EMPTY. " +
+  "COMPOSITION: THREE sections, like a magazine spread — the large anchor group of props fills " +
+  "the LEFT quarter of the canvas, the main character with its details fills the RIGHT quarter, " +
+  "and the wide copy space sits between them; small props stay tightly above their side groups, " +
+  "never drifting toward the middle; foreground elements tack sharp, small distant props slightly " +
+  "blurred for depth of field. " +
   "EDGES: the character and all key props stay fully inside the frame with a clear margin from the " +
   "canvas edges; only minor decorative props may approach the edges. " +
   "STRICTLY NO text, captions, headlines, CTA buttons, logos or watermarks anywhere; the only lettering " +
@@ -136,8 +137,6 @@ export interface AiRefAttempt {
   tech: AiTechReport | null;
   /** Приёмка пропущена по транспортной причине (vision недоступен). */
   qaSkipped?: boolean;
-  /** Доводка центра (A-5): стёртые летуны + раздвижка центра белой полосой. */
-  centerFix?: { erased: number; gapPx: number; scale: number };
 }
 
 interface ChosenAttempt {
@@ -254,10 +253,23 @@ export async function processAiReferenceAsset(opts: {
   }
   const refUrls = refs.map((r) => r.imageUrl);
 
+  // A-6: последним референсом уходит схема-раскладка — позиционирование
+  // модели показывается картинкой, под неё резервируется один слот из
+  // MAX_EDIT_REFS. Best-effort: без схемы генерация не блокируется.
+  let genUrls = refUrls.slice(0, MAX_EDIT_REFS);
+  let guideInstruction = "";
+  try {
+    const guideUrl = await getLayoutGuideUrl();
+    genUrls = [...refUrls.slice(0, MAX_EDIT_REFS - 1), guideUrl];
+    guideInstruction = ` ${LAYOUT_GUIDE_INSTRUCTION}`;
+  } catch (err) {
+    console.warn(`⚠ ai-ref layout-guide#${assetId}: ${err instanceof Error ? err.message : err}`);
+  }
+
   // Бриф: текст бандла (мастер заполняет его из вариации, но может уточнить);
   // пустой — сам текст вариации.
   const variationText = bundle.neuralPrompt.trim() || bundle.preset.text;
-  const prompt = buildAiReferencePrompt(variationText);
+  const prompt = buildAiReferencePrompt(variationText) + guideInstruction;
   const aspect = nearestFalAspect(targetW, targetH);
   const folder = `bundles/${bundleId}`;
 
@@ -270,7 +282,7 @@ export async function processAiReferenceAsset(opts: {
     // Модель — ВСЕГДА дефолтный nano-banana-2 (TASK: генерация «через
     // nano-banana-2»); брендовый override (grok режет референсы до 3) для
     // этого режима не имеет смысла.
-    const gen = await runPersonFal(prompt, refUrls, aspect, null);
+    const gen = await runPersonFal(prompt, genUrls, aspect, null);
     if (!gen.success || !gen.imageUrl) {
       attempts.push({
         imageUrl: null,
@@ -313,42 +325,19 @@ export async function processAiReferenceAsset(opts: {
       continue;
     }
 
-    // Доводка центра (A-5): banana собирает композицию хорошо, но размерность
-    // safe-зоны не выдерживает — центр раздвигается белой полосой (композиция
-    // не трогается, только равномерно мельчает), летуны в зоне стираются.
-    // Best-effort: при сбое доводки попытка идёт дальше как есть.
-    let attemptBuffer = buffer;
-    let attemptUrl = fitted.url;
-    let centerFix: AiRefAttempt["centerFix"];
-    try {
-      const fix = await enforceCenterClearZone(buffer, AI_REF_CENTER_CLEAR_ZONE);
-      if (fix.changed) {
-        const cleanUp = await withRetry(
-          () => uploadBuffer(fix.buffer, `${variantId}_${assetKey}_try${attempt}_fit`, folder),
-          `ai-ref-centerfix#${assetId}@${attempt}`,
-        );
-        if (cleanUp.success && cleanUp.secure_url) {
-          attemptBuffer = fix.buffer;
-          attemptUrl = cleanUp.secure_url;
-          centerFix = { erased: fix.erased, gapPx: fix.gapPx, scale: fix.scale };
-        }
-      }
-    } catch (err) {
-      console.warn(`⚠ ai-ref centerfix#${assetId}@${attempt}: ${err instanceof Error ? err.message : err}`);
-    }
-
+    // Кадр banana НЕ модифицируется (A-6: пост-обработка A-4/A-5 отменена
+    // Пользователем — композиция модели устраивает как есть).
     // Стадия C ДО стадии B: детерминированные проверки бесплатны, VLM — нет.
-    const tech = await validateAiAsset(attemptBuffer, targetW, targetH, {
+    const tech = await validateAiAsset(buffer, targetW, targetH, {
       centerClearZone: AI_REF_CENTER_CLEAR_ZONE,
     });
     if (!tech.passed) {
       attempts.push({
-        imageUrl: attemptUrl,
+        imageUrl: fitted.url,
         score: 0,
         pass: false,
         reasons: tech.checks.filter((c) => !c.passed).map((c) => `${c.key}: ${c.detail}`),
         tech,
-        ...(centerFix ? { centerFix } : {}),
       });
       continue;
     }
@@ -356,26 +345,25 @@ export async function processAiReferenceAsset(opts: {
     // Стадия B: приемщик (DI-R9). Транспортный сбой = приёмка пропущена,
     // попытка засчитывается как прошедшая (fail-open, причина в metadata).
     const verdict = await reviewComposition({
-      imageUrl: attemptUrl,
+      imageUrl: fitted.url,
       refUrls: refUrls.slice(0, QA_REFS_SHOWN),
       variationText,
       brandName: baseBrand,
     });
     const attemptRow: AiRefAttempt = {
-      imageUrl: attemptUrl,
+      imageUrl: fitted.url,
       score: Math.max(0, verdict.score),
       pass: verdict.pass,
       reasons: verdict.reasons,
       tech,
       ...(verdict.skipped ? { qaSkipped: true } : {}),
-      ...(centerFix ? { centerFix } : {}),
     };
     attempts.push(attemptRow);
 
     const candidate: ChosenAttempt = {
       index: attempts.length - 1,
-      imageUrl: attemptUrl,
-      buffer: attemptBuffer,
+      imageUrl: fitted.url,
+      buffer,
       pass: verdict.pass,
     };
     if (verdict.pass) {

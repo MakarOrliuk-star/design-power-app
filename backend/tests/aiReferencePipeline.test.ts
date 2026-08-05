@@ -155,9 +155,10 @@ describe("buildAiReferencePrompt / pickOverlayToken (A-1)", () => {
     expect(p).toContain("FS, SCATTER, BONUS, VIP");
   });
 
-  it("контракт A-2/A-3: белый фон, пустой центр, три секции + depth of field", () => {
+  it("контракт A-2/A-6: белый фон, copy space по центру, три секции + depth of field", () => {
     const p = buildAiReferencePrompt("VIP weekend");
     expect(p).toContain("pure solid white");
+    expect(p).toContain("COPY SPACE");
     expect(p).toContain("COMPLETELY EMPTY");
     expect(p).toContain("THREE sections");
     expect(p).toContain("depth of field");
@@ -178,10 +179,12 @@ describe("processAiReferenceAsset", () => {
       expect.objectContaining({ where: { presetId: "p1", brandName: "Betnella" } }),
     );
     // Генерация: дефолтная модель (null), аспект 16:9 для 1200×600.
+    // Референсы + схема-раскладка последним слотом (A-6).
     expect(fal.runPersonFal).toHaveBeenCalledTimes(1);
     const [prompt, urls, aspect, model] = fal.runPersonFal.mock.calls[0]!;
     expect(prompt).toContain("STRICTLY NO text");
-    expect(urls).toHaveLength(6);
+    expect(prompt).toContain("LAYOUT GUIDE");
+    expect(urls).toHaveLength(7);
     expect(aspect).toBe("16:9");
     expect(model).toBeNull();
 
