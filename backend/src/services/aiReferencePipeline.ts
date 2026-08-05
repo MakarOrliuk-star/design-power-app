@@ -1,7 +1,7 @@
 import sharp from "sharp";
 import { prisma } from "../lib/prisma.js";
 import type { Prisma } from "../../generated/prisma/client.js";
-import { runPersonFal, runBriaRemoveBg } from "../lib/fal.js";
+import { runPersonFal, runGptImage2Edit, runBriaRemoveBg } from "../lib/fal.js";
 import { fitAndStoreAsset } from "../lib/assetFit.js";
 import { nearestFalAspect } from "../lib/imageSize.js";
 import { uploadFromUrl, uploadBuffer, withRetry } from "../lib/cloudinary.js";
@@ -25,9 +25,10 @@ import { recomputeBundleStatus, stripGenderName } from "./bundle.service.js";
  * одна композиция на бренд» из 5–15 готовых email-баннеров-референсов.
  *
  * Цикл на ассет (DI-R10: 1 попытка + 2 ретрая):
- *   A. nano-banana-2 /edit: первые ≤14 референсов пары (вариация × базовый
- *      бренд) + бриф вариации + композиционный контракт «без текста» →
- *      16:9 → fitAndStoreAsset (Bria bleed-expand) → ровно target-канвас.
+ *   A. GPT Image 2 /edit (A-7; env-откат на nano-banana-2): референсы пары
+ *      (вариация × базовый бренд) + схема-раскладка + бриф вариации +
+ *      композиционный контракт «без текста» → точный канвас (GPT) либо
+ *      16:9 + fitAndStoreAsset/Bria (banana) → ровно target-канвас.
  *   C. Техвалидация (aiAssetValidator): размер/резкость/рамки. Дешёвая и
  *      детерминированная, поэтому идёт ДО приёмщика — на явный брак VLM
  *      не тратится.
@@ -44,6 +45,17 @@ import { recomputeBundleStatus, stripGenderName } from "./bundle.service.js";
  */
 
 export const AI_REF_MAX_ATTEMPTS = 3;
+
+/**
+ * Модель композиции (A-7): GPT Image 2 — по A/B-тесту 2026-08-05 держит
+ * safe-зону 96–97% против 89–93% у banana при том же стиле, и генерирует
+ * сразу точный канвас. Откат на banana — env `AI_REF_IMAGE_MODEL`
+ * = "fal-ai/nano-banana-2" (без деплоя кода, рестарт воркера).
+ */
+export const AI_REF_DEFAULT_MODEL = "openai/gpt-image-2";
+export function aiRefImageModel(): string {
+  return process.env.AI_REF_IMAGE_MODEL ?? AI_REF_DEFAULT_MODEL;
+}
 
 /** Safe-зона DI-Q7 (27–73% ширины = 46%) в долях канваса. */
 export const AI_REF_SAFE_ZONE = { x: 0.27, y: 0.04, w: 0.46, h: 0.92 };
@@ -279,10 +291,18 @@ export async function processAiReferenceAsset(opts: {
   let bestScore = -1;
 
   for (let attempt = 1; attempt <= AI_REF_MAX_ATTEMPTS && !chosen; attempt++) {
-    // Модель — ВСЕГДА дефолтный nano-banana-2 (TASK: генерация «через
-    // nano-banana-2»); брендовый override (grok режет референсы до 3) для
-    // этого режима не имеет смысла.
-    const gen = await runPersonFal(prompt, genUrls, aspect, null);
+    // Модель — GPT Image 2 (A-7, ей не нужен aspect: канвас точный);
+    // env-откат на nano-banana-2 → путь 16:9 + Bria-достройка, как раньше.
+    // Брендовый override (grok) для этого режима не имеет смысла.
+    const gen =
+      aiRefImageModel() === "fal-ai/nano-banana-2"
+        ? await runPersonFal(prompt, genUrls, aspect, null)
+        : await runGptImage2Edit({
+            prompt,
+            imageUrls: genUrls,
+            width: targetW,
+            height: targetH,
+          });
     if (!gen.success || !gen.imageUrl) {
       attempts.push({
         imageUrl: null,

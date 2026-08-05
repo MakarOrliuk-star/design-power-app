@@ -67,6 +67,30 @@ export async function runPersonFal(
 }
 
 /**
+ * GPT Image 2 (`openai/gpt-image-2/edit`) — модель режима ai_reference (A-7).
+ * A/B-тест 2026-08-05 (scripts/ab-position-test.ts): на одинаковых рефах и
+ * промпте держит safe-зону 96–97% белого против 89–93% у nano-banana-2.
+ * Бонусы против banana: произвольный точный канвас (сразу 1200×600, без
+ * Bria-достройки), до 16 референсов. Минусы: дороже и медленнее (принято).
+ */
+export async function runGptImage2Edit(opts: {
+  prompt: string;
+  imageUrls: string[];
+  width: number;
+  height: number;
+}): Promise<FalRunResult> {
+  if (!opts.imageUrls.length) return { success: false, error: "no image_urls" };
+  return callFalSync("openai/gpt-image-2/edit", {
+    prompt: opts.prompt,
+    image_urls: opts.imageUrls,
+    image_size: { width: opts.width, height: opts.height },
+    quality: "high",
+    num_images: 1,
+    output_format: "png",
+  });
+}
+
+/**
  * Upscale an existing image via `fal-ai/seedvr/upscale/image` (SeedVR2). Used
  * right after the Edit stage, before the result is stored in Cloudinary, so edited
  * images are delivered at higher resolution. Returns the upscaled image URL.
