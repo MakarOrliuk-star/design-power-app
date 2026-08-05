@@ -35,10 +35,13 @@ const SHARPNESS_PROBE_WIDTH = 600;
 /** Толщина краевой полосы для детекта рамок, px исходного размера. */
 const BORDER_STRIP = 4;
 
-/** Полоса считается «рамкой», если она почти однотонная и почти чёрная/белая. */
+/**
+ * Полоса считается «рамкой», если она почти однотонная и почти ЧЁРНАЯ.
+ * Белые края — норма: контракт A-2 требует чисто-белый фон под вырезание,
+ * поэтому светлые монотонные полосы больше не считаются леттербоксом.
+ */
 const BORDER_STD_MAX = 3;
 const BORDER_DARK_MEAN = 10;
-const BORDER_LIGHT_MEAN = 245;
 
 /** Дисперсия лапласиана (4-соседний) по грейскейл-байтам. */
 export function laplacianVariance(gray: Uint8Array, width: number, height: number): number {
@@ -143,19 +146,19 @@ export async function validateAiAsset(
     detail: `laplacian variance ${Math.round(variance)} (порог ${SHARPNESS_MIN_VARIANCE})`,
   });
 
-  // Рамки/леттербокс: почти однотонная почти чёрная/белая полоса на ПАРЕ
-  // противоположных краёв. Один край может быть законно ровным (флэт-фон),
-  // симметричная пара — типичный леттербокс или рамка от модели.
+  // Рамки/леттербокс: почти однотонная ЧЁРНАЯ полоса на ПАРЕ противоположных
+  // краёв — типичный леттербокс от модели. Белые монотонные края легальны
+  // (контракт A-2: чисто-белый фон под вырезание removeBg).
   const stripPx = Math.max(2, Math.round((BORDER_STRIP * pw) / Math.max(targetW, 1)));
   const flat = (side: "top" | "bottom" | "left" | "right") => {
     const { mean, std } = meanStd(edgeStrip(gray, pw, ph, side, stripPx));
-    return std <= BORDER_STD_MAX && (mean <= BORDER_DARK_MEAN || mean >= BORDER_LIGHT_MEAN);
+    return std <= BORDER_STD_MAX && mean <= BORDER_DARK_MEAN;
   };
   const letterboxed = (flat("top") && flat("bottom")) || (flat("left") && flat("right"));
   checks.push({
     key: "borders",
     passed: !letterboxed,
-    detail: letterboxed ? "однотонные рамки/леттербокс по противоположным краям" : "чисто",
+    detail: letterboxed ? "тёмные рамки/леттербокс по противоположным краям" : "чисто",
   });
 
   return { passed: checks.every((c) => c.passed), checks };

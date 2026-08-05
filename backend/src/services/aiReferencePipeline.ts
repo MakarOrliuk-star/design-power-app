@@ -78,14 +78,28 @@ export function derivedAssetLabel(parentLabel: string, assetKey: string): string
  * Правило текста — A-1: только короткие казино-слова на пропсах.
  */
 export const AI_REF_COMPOSITION_CONTRACT =
-  "Create ONE new cohesive casino email hero banner composition in the exact visual style of the " +
-  "reference banners: same palette, lighting, rendering style, material quality and overall layout " +
-  "structure. Do not copy any reference verbatim — compose a NEW scene from the same visual language. " +
+  // A-2 (2026-08-05, по итогам первого живого прогона): фон — чисто-белый под
+  // вырезание removeBg, центр канваса полностью пустой (там наш текст-слой),
+  // раскладка «треугольником» + depth-of-field, ключевые объекты не у краёв.
+  "Create ONE new cohesive casino email hero composition in the exact visual style of the " +
+  "reference banners: same palette, lighting, rendering style, material quality and prop family. " +
+  "Do not copy any reference verbatim — compose a NEW scene from the same visual language. " +
+  "BACKGROUND: pure solid white (#FFFFFF), completely flat — no scenery, no gradients, no glow, " +
+  "no bokeh, no light rays, no patterns and no cast shadows on the background; the artwork will " +
+  "be cut out later, so every element needs clean crisp edges against the white. " +
+  "CENTER: keep the middle of the canvas (roughly the central 46% of the width) COMPLETELY EMPTY — " +
+  "no plates, ovals, panels, frames, badges or any objects there, only the white background; a " +
+  "headline will be overlaid in that zone later. " +
+  "COMPOSITION: arrange the elements like a professional designer — a triangular composition with " +
+  "one large anchor group of props in a bottom corner, the main character on the opposite side and " +
+  "smaller props tapering upward around them; foreground elements tack sharp, small distant props " +
+  "slightly blurred for depth of field. " +
+  "EDGES: the character and all key props stay fully inside the frame with a clear margin from the " +
+  "canvas edges; only minor decorative props may approach the edges. " +
   "STRICTLY NO text, captions, headlines, CTA buttons, logos or watermarks anywhere; the only lettering " +
   "allowed is short casino words that naturally belong to props (slot reels, chips, medallions), such as " +
-  "FS, SCATTER, BONUS, VIP, WILD or 777. Keep the central area relatively uncluttered — a headline will " +
-  "be overlaid there later. FULL-BLEED: the scene must cover the entire canvas edge to edge, no borders, " +
-  "no frames, no empty margins. Professional advertising quality, coherent lighting across all elements.";
+  "FS, SCATTER, BONUS, VIP, WILD or 777. Professional advertising quality, coherent lighting across " +
+  "all elements.";
 
 export function buildAiReferencePrompt(variationText: string): string {
   const brief = variationText.trim();
