@@ -46,6 +46,14 @@ export const AI_REF_MAX_ATTEMPTS = 3;
 /** Safe-зона DI-Q7 (27–73% ширины = 46%) в долях канваса. */
 export const AI_REF_SAFE_ZONE = { x: 0.27, y: 0.04, w: 0.46, h: 0.92 };
 
+/**
+ * Зона «чистого центра» для техвалидации (A-3, email mask дизайнера):
+ * текстовая часть центральной полосы — там на белом фоне не должно быть НИ
+ * одного пропса/монетки. Нижняя часть центра исключена: по маске там
+ * «область декора» (мелкие элементы у CTA допустимы).
+ */
+export const AI_REF_CENTER_CLEAR_ZONE = { x: 0.28, y: 0.08, w: 0.44, h: 0.62 };
+
 /** Плейсхолдер текст-слоя, когда в брифе нет КАПС-токенов (A-1). */
 export const DEFAULT_OVERLAY_TOKEN = "BONUS";
 
@@ -87,13 +95,16 @@ export const AI_REF_COMPOSITION_CONTRACT =
   "BACKGROUND: pure solid white (#FFFFFF), completely flat — no scenery, no gradients, no glow, " +
   "no bokeh, no light rays, no patterns and no cast shadows on the background; the artwork will " +
   "be cut out later, so every element needs clean crisp edges against the white. " +
-  "CENTER: keep the middle of the canvas (roughly the central 46% of the width) COMPLETELY EMPTY — " +
-  "no plates, ovals, panels, frames, badges or any objects there, only the white background; a " +
-  "headline will be overlaid in that zone later. " +
-  "COMPOSITION: arrange the elements like a professional designer — a triangular composition with " +
-  "one large anchor group of props in a bottom corner, the main character on the opposite side and " +
-  "smaller props tapering upward around them; foreground elements tack sharp, small distant props " +
-  "slightly blurred for depth of field. " +
+  "CENTER: the central band of the canvas (the middle 46% of the width, from the very top to the " +
+  "very bottom) must stay COMPLETELY EMPTY — no plates, ovals, panels, frames, badges, and no " +
+  "floating coins, gems, sparkles, confetti or particles crossing it at ANY height; nothing but the " +
+  "white background. The only exception: one or two tiny decorative props may sit near the very " +
+  "bottom edge of that band. A headline and a CTA button will be overlaid in the center later. " +
+  "COMPOSITION: arrange the elements like a professional designer in THREE sections — the LEFT " +
+  "quarter of the canvas holds one large anchor group of props, the RIGHT quarter holds the main " +
+  "character with its details, and the central band between them stays clear; smaller props taper " +
+  "upward strictly above the side sections, never drifting toward the middle; foreground elements " +
+  "tack sharp, small distant props slightly blurred for depth of field. " +
   "EDGES: the character and all key props stay fully inside the frame with a clear margin from the " +
   "canvas edges; only minor decorative props may approach the edges. " +
   "STRICTLY NO text, captions, headlines, CTA buttons, logos or watermarks anywhere; the only lettering " +
@@ -300,7 +311,9 @@ export async function processAiReferenceAsset(opts: {
     }
 
     // Стадия C ДО стадии B: детерминированные проверки бесплатны, VLM — нет.
-    const tech = await validateAiAsset(buffer, targetW, targetH);
+    const tech = await validateAiAsset(buffer, targetW, targetH, {
+      centerClearZone: AI_REF_CENTER_CLEAR_ZONE,
+    });
     if (!tech.passed) {
       attempts.push({
         imageUrl: fitted.url,
