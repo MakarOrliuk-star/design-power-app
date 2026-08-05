@@ -44,6 +44,17 @@ async function letterboxedImage(): Promise<Buffer> {
     .toBuffer();
 }
 
+/** Шумный центр на чисто-белом фоне — целевой вид композиции по контракту A-2. */
+async function whiteBackgroundImage(): Promise<Buffer> {
+  const inner = await noisyImage(W - 80, H - 40);
+  return sharp({
+    create: { width: W, height: H, channels: 3, background: { r: 255, g: 255, b: 255 } },
+  })
+    .composite([{ input: inner, left: 40, top: 20 }])
+    .png()
+    .toBuffer();
+}
+
 describe("laplacianVariance", () => {
   it("шум даёт большую дисперсию, однотонное поле — ноль", () => {
     const w = 50;
@@ -84,6 +95,12 @@ describe("validateAiAsset", () => {
     const report = await validateAiAsset(await letterboxedImage(), W, H);
     const borders = report.checks.find((c) => c.key === "borders")!;
     expect(borders.passed).toBe(false);
+  });
+
+  it("белый фон по краям — НЕ леттербокс (контракт A-2: белый фон легален)", async () => {
+    const report = await validateAiAsset(await whiteBackgroundImage(), W, H);
+    const borders = report.checks.find((c) => c.key === "borders")!;
+    expect(borders.passed).toBe(true);
   });
 
   it("нечитаемый буфер = непройденный size-чек, не исключение", async () => {

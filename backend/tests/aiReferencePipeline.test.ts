@@ -142,6 +142,14 @@ describe("buildAiReferencePrompt / pickOverlayToken (A-1)", () => {
     expect(p).toContain("FS, SCATTER, BONUS, VIP");
   });
 
+  it("контракт A-2: белый фон, пустой центр, треугольник + depth of field", () => {
+    const p = buildAiReferencePrompt("VIP weekend");
+    expect(p).toContain("pure solid white");
+    expect(p).toContain("COMPLETELY EMPTY");
+    expect(p).toContain("triangular composition");
+    expect(p).toContain("depth of field");
+  });
+
   it("токен — первый КАПС из брифа, иначе дефолт", () => {
     expect(pickOverlayToken("Get your VIP reward now")).toBe("VIP");
     expect(pickOverlayToken("обычный текст без капса")).toBe(DEFAULT_OVERLAY_TOKEN);

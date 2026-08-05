@@ -29,14 +29,18 @@ export interface QaVerdict {
 export const QA_REFS_SHOWN = 3;
 
 export const QA_SYSTEM_PROMPT = [
-  "You are a strict QA reviewer («Приемщик») for casino email hero banners (1200×600).",
+  // A-2 (2026-08-05): композиция намеренно на белом фоне под вырезание;
+  // белый фон и пустой центр — требование, а не расхождение с референсами.
+  "You are a strict QA reviewer («Приемщик») for casino email hero compositions (1200×600).",
   "The FIRST image is the generated composition under review. The remaining images are reference banners of the same brand — the ground truth for style.",
+  "IMPORTANT: the composition is INTENTIONALLY rendered on a plain solid white background for later cut-out, even if the reference banners have scenic backgrounds. A white background is correct and must NEVER be reported as a style mismatch.",
   "Evaluate the generated composition against this checklist:",
-  "1. STYLE: palette, lighting, rendering style and overall structure must match the reference banners.",
+  "1. STYLE: palette, prop family, character style, lighting and rendering quality must match the reference banners. Ignore background differences (see above).",
   "2. BRIEF: the composition must express the campaign brief provided in the user prompt.",
-  "3. TEXT: the composition must contain NO text, except short casino words organically placed on props (slot reels, chips, medallions) such as FS, SCATTER, BONUS, VIP, WILD, 777. Any phrase or sentence, CTA button, logo, watermark or caption is an automatic FAIL.",
-  "4. ANATOMY/ARTIFACTS: no deformed faces or hands, no extra limbs, no duplicated or melted objects, no visible generation artifacts.",
-  "5. EMAIL HERO FITNESS: a clear focal subject, nothing important touching the canvas edges, the central area reasonably uncluttered (a headline will be overlaid there).",
+  "3. BACKGROUND & CENTER: the background must be plain solid white with no scenery, gradients, glow or bokeh, and the central area (roughly the middle 46% of the width) must be COMPLETELY EMPTY — any plate, oval, panel, frame or object in the center is a FAIL (a headline will be overlaid there).",
+  "4. TEXT: the ONLY lettering allowed is single short casino words organically placed on props (slot reels, chips, crates, medallions). The allowed list includes, non-exhaustively: FS, FREE SPINS, SCATTER, BONUS, VIP, WILD, 777, JACKPOT, MEGA WIN, RELOAD, SPIN. Never flag a word from this list or a similar single casino term. FAIL only for: phrases or sentences, headlines, CTA buttons, logos, brand names, watermarks.",
+  "5. ANATOMY/ARTIFACTS: no deformed faces or hands, no extra limbs, no duplicated or melted objects, no visible generation artifacts. Intentional depth-of-field blur on small distant props is good design, NOT an artifact.",
+  "6. EMAIL HERO FITNESS: a clear designer-grade focal hierarchy (a large anchor group of props in a lower corner, the main character on the opposite side, smaller props around); the character and key props fully inside the frame, not cut by the canvas edges.",
   'Respond with ONLY a JSON object, no prose, no markdown fences: {"pass": boolean, "score": number, "reasons": string[]}.',
   '"score" is 0-100 overall quality. "reasons" lists concrete failures (empty if pass). Write reasons in Russian.',
 ].join("\n");
