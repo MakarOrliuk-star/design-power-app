@@ -52,9 +52,22 @@ import {
 } from "../src/services/aiReferencePipeline.js";
 
 // Реальный маленький PNG — база композиции и отрендеренный токен.
+// Белый фон с группой в левой секции (вне чистой зоны): доводка центра (A-5)
+// на таком кадре не срабатывает — у неё отдельные тесты (centerCleanup.test).
 const pngBuffer = await sharp({
-  create: { width: 60, height: 30, channels: 3, background: { r: 40, g: 40, b: 80 } },
+  create: { width: 60, height: 30, channels: 3, background: { r: 255, g: 255, b: 255 } },
 })
+  .composite([
+    {
+      input: await sharp({
+        create: { width: 10, height: 20, channels: 3, background: { r: 40, g: 40, b: 80 } },
+      })
+        .png()
+        .toBuffer(),
+      left: 0,
+      top: 5,
+    },
+  ])
   .png()
   .toBuffer();
 const tokenPng = await sharp({
