@@ -3,7 +3,7 @@
 // (figma/crm-bundle/start.PNG). Canonical asset sizes come from the bundle
 // type config, not the static mock (D2). One brand toggle = both tone
 // variants (D3/D7). Presets drop-down on prompt focus (D8).
-import { ref, computed } from "vue";
+import { ref, computed, watch } from "vue";
 
 const MAX_PROMPT = 1500;
 
@@ -21,6 +21,54 @@ const triedSubmit = ref(false);
 
 const bundleType = computed(() => store.bundleTypes[0] ?? null);
 
+// ---- Режим ai_reference (TASK ai-reference): вариация обязательна ----
+// Композиция собирается из референсов пары «вариация × бренд», поэтому мастер
+// требует выбрать вариацию и показывает бейджи «N/15» у брендов; бренды с
+// числом референсов < минимума заблокированы (гейт дублируется сервером).
+const aiReferenceMode = computed(() =>
+  (bundleType.value?.assets ?? []).some((a) => a.composeMode === "ai_reference"),
+);
+const selectedPresetId = ref<string | null>(null);
+
+watch(selectedPresetId, (presetId) => {
+  if (!aiReferenceMode.value) return;
+  const preset = store.presets.find((p) => p.id === presetId);
+  if (preset) prompt.value = preset.text.slice(0, MAX_PROMPT);
+  void store.fetchRefCounts(presetId);
+  // Бренды, у которых при новой вариации не хватает референсов, снимаем сами —
+  // иначе Generate упрётся в серверный 422 без видимой причины.
+  if (presetId) {
+    const next = new Set(selectedBrands.value);
+    for (const key of next) {
+      if ((store.refCounts[key] ?? 0) < store.refCountsMin) next.delete(key);
+    }
+    // refCounts приезжают асинхронно — чистим ещё раз после загрузки (ниже).
+    selectedBrands.value = next;
+  }
+});
+watch(
+  () => store.refCounts,
+  (counts) => {
+    if (!aiReferenceMode.value || !selectedPresetId.value) return;
+    const next = new Set(selectedBrands.value);
+    let touched = false;
+    for (const key of next) {
+      if ((counts[key] ?? 0) < store.refCountsMin) {
+        next.delete(key);
+        touched = true;
+      }
+    }
+    if (touched) selectedBrands.value = next;
+  },
+);
+
+function brandRefCount(key: string): number {
+  return store.refCounts[key] ?? 0;
+}
+function brandBlocked(key: string): boolean {
+  return aiReferenceMode.value && Boolean(selectedPresetId.value) && brandRefCount(key) < store.refCountsMin;
+}
+
 const filteredBrands = computed(() => {
   const q = brandSearch.value.trim().toLowerCase();
   if (!q) return store.brands;
@@ -29,9 +77,13 @@ const filteredBrands = computed(() => {
 
 const nameError = computed(() => triedSubmit.value && !name.value.trim());
 const brandsError = computed(() => triedSubmit.value && selectedBrands.value.size === 0);
+const presetError = computed(
+  () => triedSubmit.value && aiReferenceMode.value && !selectedPresetId.value,
+);
 const canSubmit = computed(() => !store.launching && store.metaReady);
 
 function toggleBrand(key: string) {
+  if (brandBlocked(key)) return;
   const next = new Set(selectedBrands.value);
   if (next.has(key)) next.delete(key);
   else next.add(key);
@@ -54,6 +106,7 @@ function reset() {
   prompt.value = "";
   selectedBrands.value = new Set();
   brandSearch.value = "";
+  selectedPresetId.value = null;
   triedSubmit.value = false;
 }
 defineExpose({ reset });
@@ -61,18 +114,27 @@ defineExpose({ reset });
 async function submit() {
   triedSubmit.value = true;
   if (!name.value.trim() || selectedBrands.value.size === 0 || !bundleType.value) return;
+  if (aiReferenceMode.value && !selectedPresetId.value) return;
   const id = await store.createAndGenerate({
     name: name.value.trim(),
     plannedSendAt: plannedSendAt.value ? new Date(plannedSendAt.value).toISOString() : null,
     neuralPrompt: prompt.value,
     brandNames: [...selectedBrands.value],
     bundleTypeKey: bundleType.value.key,
+    presetId: selectedPresetId.value,
   });
   if (id) {
     reset();
     emit("launched", id);
   }
 }
+
+const LAUNCH_ERRORS: Record<string, string> = {
+  queue_unavailable: "Generation queue is unavailable — try again later.",
+  preset_required: "Для этого типа бандла нужно выбрать вариацию (промо).",
+  refs_missing:
+    "У части выбранных брендов меньше 5 референсов для этой вариации — загрузите их на вкладке «Референсы».",
+};
 
 const ASSET_ICONS: Record<string, string> = { email: "✉️", popup: "🪟", push: "🔔" };
 </script>
@@ -166,6 +228,23 @@ const ASSET_ICONS: Record<string, string> = { email: "✉️", popup: "🪟", pu
         <p v-else class="field__hint">Loading bundle types…</p>
       </div>
 
+      <!-- Вариация (обязательна в режиме ai_reference, TASK ai-reference) -->
+      <div v-if="aiReferenceMode" class="field">
+        <span class="field__label">Вариация (промо)</span>
+        <select
+          v-model="selectedPresetId"
+          class="field__input"
+          :class="{ 'field__input--error': presetError }"
+        >
+          <option :value="null" disabled>Выберите вариацию — например, VIP</option>
+          <option v-for="p in store.presets" :key="p.id" :value="p.id">{{ p.title }}</option>
+        </select>
+        <small v-if="presetError" class="field__err">Выберите вариацию — композиция собирается из её референсов</small>
+        <small v-else class="field__hint">
+          Одна генерация = одна композиция email 1200×600 на бренд из 5–15 референсов этой вариации.
+        </small>
+      </div>
+
       <!-- Neural network prompt + presets (D8) -->
       <div class="field field--prompt">
         <span class="field__label">Neural network prompt <span class="field__info" title="Used as the campaign brief for every brand variant">ⓘ</span></span>
@@ -214,13 +293,25 @@ const ASSET_ICONS: Record<string, string> = { email: "✉️", popup: "🪟", pu
         </div>
         <small v-if="brandsError" class="field__err">Select at least one brand</small>
         <div class="brands-grid">
-          <label v-for="b in filteredBrands" :key="b.key" class="brand">
+          <label
+            v-for="b in filteredBrands"
+            :key="b.key"
+            class="brand"
+            :class="{ 'brand--blocked': brandBlocked(b.key) }"
+            :title="brandBlocked(b.key) ? `Референсов ${brandRefCount(b.key)}/${store.refCountsMin} — загрузите ещё на вкладке «Референсы»` : undefined"
+          >
             <span class="brand__avatar">{{ b.displayName.slice(0, 1).toUpperCase() }}</span>
             <span class="brand__name" :title="b.variants.map((v) => v.displayName).join(', ')">{{ b.displayName }}</span>
+            <span
+              v-if="aiReferenceMode && selectedPresetId"
+              class="brand__refs"
+              :class="{ 'brand__refs--ok': !brandBlocked(b.key) }"
+            >{{ brandRefCount(b.key) }}/15</span>
             <input
               type="checkbox"
               class="brand__input"
               :checked="selectedBrands.has(b.key)"
+              :disabled="brandBlocked(b.key)"
               @change="toggleBrand(b.key)"
             />
             <span class="brand__toggle" aria-hidden="true" />
@@ -230,7 +321,7 @@ const ASSET_ICONS: Record<string, string> = { email: "✉️", popup: "🪟", pu
       </div>
 
       <p v-if="store.launchError" class="wizard__error">
-        {{ store.launchError === "queue_unavailable" ? "Generation queue is unavailable — try again later." : "Failed to launch the bundle." }}
+        {{ LAUNCH_ERRORS[store.launchError] ?? "Failed to launch the bundle." }}
       </p>
 
       <button class="btn-generate" type="button" :disabled="!canSubmit" @click="submit">
@@ -579,6 +670,22 @@ const ASSET_ICONS: Record<string, string> = { email: "✉️", popup: "🪟", pu
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
+}
+.brand--blocked {
+  opacity: 0.55;
+  cursor: not-allowed;
+}
+.brand__refs {
+  font-size: 10px;
+  font-weight: 700;
+  border-radius: var(--radius-pill);
+  padding: 2px 7px;
+  background: var(--color-segment);
+  color: var(--color-stop-hover, #dc2626);
+  flex: 0 0 auto;
+}
+.brand__refs--ok {
+  color: #16a34a;
 }
 .brand__input {
   position: absolute;

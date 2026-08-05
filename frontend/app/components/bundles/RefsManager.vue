@@ -1,0 +1,604 @@
+<script setup lang="ts">
+// Управление вариациями и их референсами (TASK ai-reference, DI-R3/R12).
+// Доступно CRM_SUPER / ADMIN / MANAGER — тот же гейт, что весь сервис бандлов
+// (бэкенд: /api/crm-admin за requireCrmSuper). Слева — вариации (промпт-
+// пресеты), справа — референсы выбранной пары «вариация × бренд»: 5–15
+// готовых email-баннеров, из которых пайплайн собирает новую композицию.
+import { ref, computed, onMounted, watch } from "vue";
+
+const api = useApi();
+const store = useBundlesStore();
+
+interface Preset {
+  id: string;
+  title: string;
+  text: string;
+  order: number;
+  isActive: boolean;
+}
+interface RefRow {
+  id: string;
+  brandName: string;
+  imageUrl: string;
+  width: number;
+  height: number;
+  sortOrder: number;
+}
+
+const MIN_REFS = 5;
+const MAX_REFS = 15;
+/** В генерацию уходят первые 14 (лимит nano-banana-2 /edit, DI-R5). */
+const GEN_REFS = 14;
+
+// ---- Вариации ----
+const presets = ref<Preset[]>([]);
+const presetsLoading = ref(false);
+const selectedPresetId = ref<string | null>(null);
+const presetForm = ref<{ id: string | null; title: string; text: string } | null>(null);
+const presetBusy = ref(false);
+const error = ref("");
+
+async function fetchPresets() {
+  presetsLoading.value = true;
+  error.value = "";
+  try {
+    const res = await api<{ presets: Preset[] }>("/api/crm-admin/prompt-presets");
+    presets.value = res.presets;
+    if (!selectedPresetId.value && res.presets[0]) selectedPresetId.value = res.presets[0].id;
+  } catch {
+    error.value = "Не удалось загрузить вариации";
+  } finally {
+    presetsLoading.value = false;
+  }
+}
+
+function openPresetForm(p: Preset | null) {
+  presetForm.value = p ? { id: p.id, title: p.title, text: p.text } : { id: null, title: "", text: "" };
+}
+
+async function savePreset() {
+  const form = presetForm.value;
+  if (!form || !form.title.trim() || !form.text.trim()) return;
+  presetBusy.value = true;
+  error.value = "";
+  try {
+    if (form.id) {
+      await api(`/api/crm-admin/prompt-presets/${form.id}`, {
+        method: "PATCH",
+        body: { title: form.title.trim(), text: form.text.trim() },
+      });
+    } else {
+      const res = await api<{ preset: Preset }>("/api/crm-admin/prompt-presets", {
+        method: "POST",
+        body: { title: form.title.trim(), text: form.text.trim() },
+      });
+      selectedPresetId.value = res.preset.id;
+    }
+    presetForm.value = null;
+    await fetchPresets();
+  } catch {
+    error.value = "Не удалось сохранить вариацию";
+  } finally {
+    presetBusy.value = false;
+  }
+}
+
+async function deletePreset(p: Preset) {
+  // Каскад: удаление вариации сносит и её референсы (onDelete: Cascade).
+  if (!window.confirm(`Удалить вариацию «${p.title}» и все её референсы?`)) return;
+  presetBusy.value = true;
+  try {
+    await api(`/api/crm-admin/prompt-presets/${p.id}`, { method: "DELETE" });
+    if (selectedPresetId.value === p.id) selectedPresetId.value = null;
+    await fetchPresets();
+  } catch {
+    error.value = "Не удалось удалить вариацию";
+  } finally {
+    presetBusy.value = false;
+  }
+}
+
+// ---- Референсы пары «вариация × бренд» ----
+const selectedBrand = ref<string | null>(null);
+const refs = ref<RefRow[]>([]);
+const counts = ref<Record<string, number>>({});
+const refsLoading = ref(false);
+const uploadBusy = ref(false);
+const uploadReport = ref<string[]>([]);
+
+const pairReady = computed(() => Boolean(selectedPresetId.value && selectedBrand.value));
+
+async function fetchRefs() {
+  if (!pairReady.value) {
+    refs.value = [];
+    return;
+  }
+  refsLoading.value = true;
+  try {
+    const res = await api<{ refs: RefRow[]; counts: Record<string, number> }>(
+      "/api/crm-admin/bundle-refs",
+      { query: { presetId: selectedPresetId.value, brandName: selectedBrand.value } },
+    );
+    refs.value = res.refs;
+    counts.value = res.counts;
+  } catch {
+    error.value = "Не удалось загрузить референсы";
+  } finally {
+    refsLoading.value = false;
+  }
+}
+
+watch([selectedPresetId, selectedBrand], () => {
+  uploadReport.value = [];
+  void fetchRefs();
+});
+
+async function onFilesPicked(e: Event) {
+  const input = e.target as HTMLInputElement;
+  const files = [...(input.files ?? [])];
+  input.value = "";
+  if (!files.length || !pairReady.value) return;
+  uploadBusy.value = true;
+  uploadReport.value = [];
+  error.value = "";
+  try {
+    const form = new FormData();
+    form.append("presetId", selectedPresetId.value!);
+    form.append("brandName", selectedBrand.value!);
+    for (const f of files) form.append("files", f);
+    const res = await api<{ results: Array<{ name: string; ok: boolean; reason?: string }> }>(
+      "/api/crm-admin/bundle-refs",
+      { method: "POST", body: form },
+    );
+    uploadReport.value = res.results
+      .filter((r) => !r.ok)
+      .map((r) => `${r.name}: ${r.reason ?? "ошибка"}`);
+    await fetchRefs();
+  } catch (err) {
+    const details = (err as { data?: { details?: string } })?.data?.details;
+    error.value = details ? `Загрузка не удалась: ${details}` : "Загрузка не удалась";
+  } finally {
+    uploadBusy.value = false;
+  }
+}
+
+async function deleteRef(r: RefRow) {
+  try {
+    await api(`/api/crm-admin/bundle-refs/${r.id}`, { method: "DELETE" });
+    await fetchRefs();
+  } catch {
+    error.value = "Не удалось удалить референс";
+  }
+}
+
+/** Порядок = приоритет: первые 14 уходят в модель (DI-R5). Кнопки ←/→. */
+async function moveRef(index: number, delta: -1 | 1) {
+  const next = [...refs.value];
+  const target = index + delta;
+  if (target < 0 || target >= next.length) return;
+  const [item] = next.splice(index, 1);
+  next.splice(target, 0, item!);
+  refs.value = next; // оптимистично — сервер вернёт каноничный порядок
+  try {
+    const res = await api<{ refs: RefRow[] }>("/api/crm-admin/bundle-refs/reorder", {
+      method: "POST",
+      body: {
+        presetId: selectedPresetId.value,
+        brandName: selectedBrand.value,
+        ids: next.map((r) => r.id),
+      },
+    });
+    refs.value = res.refs;
+  } catch {
+    error.value = "Не удалось изменить порядок";
+    await fetchRefs();
+  }
+}
+
+const countLabel = computed(() => `${refs.value.length}/${MAX_REFS}`);
+const countState = computed(() =>
+  refs.value.length >= MIN_REFS ? "ok" : refs.value.length > 0 ? "warn" : "empty",
+);
+
+onMounted(() => {
+  void fetchPresets();
+  if (!store.metaReady) void store.fetchMeta();
+});
+</script>
+
+<template>
+  <section class="refs">
+    <header class="refs__head">
+      <h2 class="refs__title">Вариации и референсы</h2>
+      <p class="refs__hint">
+        Для генерации нужно 5–15 готовых email-баннеров на пару «вариация × бренд».
+        Первые {{ GEN_REFS }} по порядку уходят в модель — порядок можно менять стрелками.
+      </p>
+    </header>
+
+    <p v-if="error" class="refs__error">{{ error }}</p>
+
+    <div class="refs__grid">
+      <!-- Вариации -->
+      <aside class="panel">
+        <div class="panel__head">
+          <b>Вариации</b>
+          <button class="btn btn--sm" type="button" @click="openPresetForm(null)">+ Новая</button>
+        </div>
+        <p v-if="presetsLoading" class="panel__note">Loading…</p>
+        <ul v-else class="plist">
+          <li
+            v-for="p in presets"
+            :key="p.id"
+            class="plist__item"
+            :class="{ 'plist__item--on': selectedPresetId === p.id, 'plist__item--off': !p.isActive }"
+          >
+            <button class="plist__main" type="button" @click="selectedPresetId = p.id">
+              <b>{{ p.title }}</b>
+              <small>{{ p.text }}</small>
+            </button>
+            <span class="plist__tools">
+              <button class="icon" type="button" title="Редактировать" @click="openPresetForm(p)">✎</button>
+              <button class="icon icon--danger" type="button" title="Удалить" :disabled="presetBusy" @click="deletePreset(p)">🗑</button>
+            </span>
+          </li>
+          <li v-if="!presets.length" class="panel__note">Вариаций пока нет — создайте первую.</li>
+        </ul>
+
+        <div v-if="presetForm" class="pform">
+          <b>{{ presetForm.id ? "Редактировать вариацию" : "Новая вариация" }}</b>
+          <input v-model="presetForm.title" type="text" maxlength="120" placeholder="Название (например, VIP Exclusive)" />
+          <textarea v-model="presetForm.text" rows="4" maxlength="1500" placeholder="Текст промпта — смысл композиции" />
+          <div class="pform__actions">
+            <button class="btn btn--sm btn--primary" type="button" :disabled="presetBusy || !presetForm.title.trim() || !presetForm.text.trim()" @click="savePreset">Сохранить</button>
+            <button class="btn btn--sm" type="button" @click="presetForm = null">Отмена</button>
+          </div>
+        </div>
+      </aside>
+
+      <!-- Референсы выбранной пары -->
+      <div class="panel">
+        <div class="panel__head panel__head--wrap">
+          <b>Референсы</b>
+          <select v-model="selectedBrand" class="brandsel">
+            <option :value="null" disabled>Выберите бренд</option>
+            <option v-for="b in store.brands" :key="b.key" :value="b.key">
+              {{ b.displayName }}{{ counts[b.key] ? ` — ${counts[b.key]}` : "" }}
+            </option>
+          </select>
+          <span v-if="pairReady" class="count" :class="`count--${countState}`">{{ countLabel }}</span>
+          <label v-if="pairReady" class="btn btn--sm btn--primary upload" :class="{ 'upload--busy': uploadBusy }">
+            <input type="file" accept="image/png,image/jpeg,image/webp" multiple :disabled="uploadBusy || refs.length >= MAX_REFS" @change="onFilesPicked" />
+            {{ uploadBusy ? "Загрузка…" : "⬆ Загрузить" }}
+          </label>
+        </div>
+
+        <p v-if="!selectedPresetId" class="panel__note">Выберите вариацию слева.</p>
+        <p v-else-if="!selectedBrand" class="panel__note">Выберите бренд, чтобы увидеть его референсы.</p>
+        <template v-else>
+          <p v-if="refs.length < MIN_REFS" class="panel__warn">
+            Для генерации нужно минимум {{ MIN_REFS }} референсов — сейчас {{ refs.length }}.
+          </p>
+          <ul v-if="uploadReport.length" class="panel__report">
+            <li v-for="(r, i) in uploadReport" :key="i">✗ {{ r }}</li>
+          </ul>
+          <p v-if="refsLoading" class="panel__note">Loading…</p>
+          <div v-else class="thumbs">
+            <figure v-for="(r, i) in refs" :key="r.id" class="thumb" :class="{ 'thumb--cut': i >= GEN_REFS }">
+              <img :src="r.imageUrl" :alt="`ref ${i + 1}`" loading="lazy" />
+              <figcaption class="thumb__bar">
+                <span class="thumb__num" :title="i >= GEN_REFS ? `Не попадает в генерацию (лимит ${GEN_REFS})` : 'Уходит в генерацию'">#{{ i + 1 }}</span>
+                <span class="thumb__tools">
+                  <button class="icon" type="button" title="Раньше" :disabled="i === 0" @click="moveRef(i, -1)">←</button>
+                  <button class="icon" type="button" title="Позже" :disabled="i === refs.length - 1" @click="moveRef(i, 1)">→</button>
+                  <button class="icon icon--danger" type="button" title="Удалить" @click="deleteRef(r)">🗑</button>
+                </span>
+              </figcaption>
+            </figure>
+            <p v-if="!refs.length" class="panel__note">
+              Референсов нет. Загрузите 5–15 готовых email-баннеров этого бренда (PNG/JPEG/WebP до 10 МБ).
+            </p>
+          </div>
+        </template>
+      </div>
+    </div>
+  </section>
+</template>
+
+<style scoped>
+.refs {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  background: var(--color-white);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-lg);
+  box-shadow: var(--shadow-card);
+  padding: 22px;
+  min-height: 0;
+  overflow-y: auto;
+}
+.refs__head {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+.refs__title {
+  margin: 0;
+  font-size: 16px;
+  color: var(--color-text);
+}
+.refs__hint {
+  margin: 0;
+  font-size: 12px;
+  color: var(--color-grey);
+}
+.refs__error {
+  margin: 0;
+  font-size: 12.5px;
+  color: var(--color-stop-hover);
+}
+.refs__grid {
+  display: grid;
+  grid-template-columns: minmax(260px, 340px) 1fr;
+  gap: 16px;
+  align-items: start;
+}
+@media (max-width: 980px) {
+  .refs__grid {
+    grid-template-columns: 1fr;
+  }
+}
+
+.panel {
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md);
+  padding: 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  min-width: 0;
+}
+.panel__head {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  justify-content: space-between;
+  font-size: 13px;
+  color: var(--color-text);
+}
+.panel__head--wrap {
+  justify-content: flex-start;
+  flex-wrap: wrap;
+}
+.panel__note {
+  margin: 0;
+  font-size: 12px;
+  color: var(--color-grey);
+}
+.panel__warn {
+  margin: 0;
+  font-size: 12px;
+  font-weight: 600;
+  color: #b45309;
+  background: #fef3c7;
+  border-radius: var(--radius-sm);
+  padding: 6px 9px;
+}
+:global(.dark) .panel__warn {
+  background: rgba(180, 83, 9, 0.16);
+}
+.panel__report {
+  margin: 0;
+  padding-left: 16px;
+  font-size: 11.5px;
+  color: var(--color-stop-hover);
+}
+
+.btn {
+  border: 1px solid var(--color-border);
+  background: none;
+  color: var(--color-text);
+  border-radius: var(--radius-sm);
+  padding: 7px 12px;
+  font-size: 12px;
+  font-weight: 600;
+  cursor: pointer;
+  white-space: nowrap;
+}
+.btn:hover:not(:disabled) {
+  border-color: var(--color-accent);
+}
+.btn--sm {
+  padding: 5px 10px;
+  font-size: 11.5px;
+}
+.btn--primary {
+  background: var(--gradient-active, var(--color-accent));
+  border: none;
+  color: #fff;
+}
+.icon {
+  border: none;
+  background: none;
+  cursor: pointer;
+  font-size: 12px;
+  color: var(--color-grey);
+  padding: 2px 4px;
+}
+.icon:hover:not(:disabled) {
+  color: var(--color-text);
+}
+.icon:disabled {
+  opacity: 0.35;
+  cursor: default;
+}
+.icon--danger:hover:not(:disabled) {
+  color: var(--color-stop-hover);
+}
+
+.plist {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  max-height: 420px;
+  overflow-y: auto;
+}
+.plist__item {
+  display: flex;
+  align-items: flex-start;
+  gap: 6px;
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-sm);
+  padding: 8px 10px;
+}
+.plist__item--on {
+  border-color: var(--color-accent);
+  box-shadow: 0 0 0 1px var(--color-accent);
+}
+.plist__item--off {
+  opacity: 0.55;
+}
+.plist__main {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  border: none;
+  background: none;
+  text-align: left;
+  cursor: pointer;
+  padding: 0;
+}
+.plist__main b {
+  font-size: 12.5px;
+  color: var(--color-text);
+}
+.plist__main small {
+  font-size: 11px;
+  color: var(--color-grey);
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+.plist__tools {
+  display: flex;
+  gap: 2px;
+  flex: 0 0 auto;
+}
+
+.pform {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  border: 1px dashed var(--color-border);
+  border-radius: var(--radius-sm);
+  padding: 10px;
+  font-size: 12.5px;
+  color: var(--color-text);
+}
+.pform input,
+.pform textarea {
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-sm);
+  background: none;
+  color: var(--color-text);
+  font-size: 12.5px;
+  font-family: inherit;
+  padding: 8px 10px;
+  outline: none;
+}
+.pform input:focus,
+.pform textarea:focus {
+  border-color: var(--color-accent);
+}
+.pform__actions {
+  display: flex;
+  gap: 8px;
+}
+
+.brandsel {
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-sm);
+  background: var(--color-white);
+  color: var(--color-text);
+  font-size: 12.5px;
+  padding: 6px 9px;
+  outline: none;
+  max-width: 240px;
+}
+.count {
+  font-size: 11px;
+  font-weight: 700;
+  border-radius: var(--radius-pill);
+  padding: 3px 9px;
+  background: var(--color-segment);
+}
+.count--ok {
+  color: #16a34a;
+}
+.count--warn {
+  color: #b45309;
+}
+.count--empty {
+  color: var(--color-grey);
+}
+.upload {
+  margin-left: auto;
+  position: relative;
+  overflow: hidden;
+}
+.upload input {
+  position: absolute;
+  inset: 0;
+  opacity: 0;
+  cursor: pointer;
+}
+.upload--busy {
+  opacity: 0.6;
+}
+
+.thumbs {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(170px, 1fr));
+  gap: 10px;
+}
+.thumb {
+  margin: 0;
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-sm);
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+}
+.thumb--cut {
+  opacity: 0.55;
+}
+.thumb img {
+  width: 100%;
+  aspect-ratio: 2 / 1;
+  object-fit: cover;
+  display: block;
+  background: var(--color-segment);
+}
+.thumb__bar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 4px 6px;
+}
+.thumb__num {
+  font-size: 10.5px;
+  font-weight: 700;
+  color: var(--color-grey);
+}
+.thumb__tools {
+  display: flex;
+  gap: 2px;
+}
+</style>

@@ -24,6 +24,7 @@ import {
   requireZone,
 } from "./middleware/auth.js";
 import { bundlesRouter } from "./routes/bundles.js";
+import { crmAdminRouter } from "./routes/crmAdmin.js";
 import { calculatorRouter } from "./routes/calculator.js";
 import { auditorRouter } from "./routes/auditor.js";
 import { crmRouter } from "./routes/crm.js";
@@ -69,6 +70,8 @@ app.use("/api/qa-tools", loadUser, requireAuth, requireZone("CRM"), qatoolsRoute
 app.use("/api/crm", loadUser, requireAuth, requireZone("CRM"), crmRouter);
 // Image Bundles (TASK crm-bundle): CRM_SUPER / ADMIN / MANAGER only (D4).
 app.use("/api/bundles", loadUser, requireAuth, requireCrmSuper, bundlesRouter);
+// CRM-админка (TASK ai-reference, DI-R12): вариации + референсы для CRM_SUPER.
+app.use("/api/crm-admin", loadUser, requireAuth, requireCrmSuper, crmAdminRouter);
 app.use("/api/tournament-admin", loadUser, requireAuth, requireAdminOrManager, tournamentAdminRouter);
 // «Edit Tournament pack» (TASK tournament-pack): the same tournament data as the
 // admin panel, but audited + rollback-able, for SUPER_DESIGNER / ADMIN / MANAGER.

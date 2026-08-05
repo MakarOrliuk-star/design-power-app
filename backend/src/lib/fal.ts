@@ -152,6 +152,66 @@ export async function runBriaEraser(imageUrl: string, maskUrl: string): Promise<
   });
 }
 
+// ------------------------------------------------------------------
+// VLM (TASK ai-reference, стадия B «Приемщик», DI-R9)
+// ------------------------------------------------------------------
+
+export interface FalVisionResult {
+  success: boolean;
+  /** Текстовый ответ модели (поле `output` эндпоинта). */
+  output?: string;
+  error?: string;
+}
+
+/**
+ * Модель приёмки. openrouter/router/vision маршрутизирует в любой VLM;
+ * Gemini Flash — дефолт из доков fal (цена/скорость). Переопределяется env
+ * без деплоя схемы (тот же приём, что TYPO_FONT_STACK в typography3d.ts).
+ */
+export const DEFAULT_VLM_MODEL = process.env.VLM_QA_MODEL ?? "google/gemini-2.5-flash";
+
+/**
+ * Vision-запрос через `openrouter/router/vision` (fal.ai Vision API): несколько
+ * изображений + промпт → текст. Ответ здесь НЕ картинка, поэтому у вызова свой
+ * разбор (`output`), а не callFalSync/extractFalImageUrl. Ретраи как у
+ * callFalSync: 5xx/429/сеть — до 3 попыток, остальное — fail fast.
+ */
+export async function runVisionQa(opts: {
+  prompt: string;
+  imageUrls: string[];
+  systemPrompt?: string;
+  model?: string;
+}): Promise<FalVisionResult> {
+  if (opts.imageUrls.length === 0) return { success: false, error: "no image_urls" };
+  const endpoint = "https://fal.run/openrouter/router/vision";
+  const payload = JSON.stringify({
+    model: opts.model ?? DEFAULT_VLM_MODEL,
+    prompt: opts.prompt,
+    image_urls: opts.imageUrls,
+    ...(opts.systemPrompt ? { system_prompt: opts.systemPrompt } : {}),
+  });
+  let lastError = "unknown";
+  for (let attempt = 1; attempt <= 3; attempt++) {
+    try {
+      const res = await fetch(endpoint, { method: "POST", headers: authHeaders(), body: payload });
+      const text = await res.text();
+      if (res.status === 200 || res.status === 201) {
+        const parsed = JSON.parse(text) as { output?: unknown };
+        if (typeof parsed.output === "string" && parsed.output.trim()) {
+          return { success: true, output: parsed.output };
+        }
+        return { success: false, error: `no output in vision response: ${text.slice(0, 160)}` };
+      }
+      lastError = `HTTP ${res.status}: ${text.slice(0, 160)}`;
+      if (!(res.status >= 500 || res.status === 429)) return { success: false, error: lastError };
+    } catch (e) {
+      lastError = String(e);
+    }
+    if (attempt < 3) await sleep(Math.min(8000, 1000 * 2 ** (attempt - 1)));
+  }
+  return { success: false, error: lastError };
+}
+
 /** Extract the generated image URL from a fal response (handles known shapes). */
 export function extractFalImageUrl(body: unknown): string {
   const root = body as Record<string, unknown> | null;

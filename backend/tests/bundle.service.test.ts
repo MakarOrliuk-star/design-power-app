@@ -98,7 +98,8 @@ function mockTransaction() {
         Promise.resolve({ id: `v_${where.bundleId_brandName.brandName}` }),
       ),
     },
-    bundleAsset: { upsert: vi.fn() },
+    // deleteMany — чистка производных ai_reference-строк прошлого запуска.
+    bundleAsset: { upsert: vi.fn(), deleteMany: vi.fn() },
     bundle: { update: vi.fn() },
   };
   db.$transaction.mockImplementation(async (cb: (t: unknown) => Promise<void>) => cb(tx));
