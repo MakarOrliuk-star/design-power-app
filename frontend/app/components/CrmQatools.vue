@@ -735,8 +735,8 @@ watch(logs, async () => {
 async function testTemplateParser() {
   templatePreviewData.value = '⏳ Распознаю данные...';
   try {
-    // 🟢 ФИКС: Используем относительный путь, чтобы запрос прошел через Railway Proxy
-    const response = await fetch('/api/single-report/preview', {
+    // 🟢 ФИКС: Стучимся в наш обновленный Node.js прокси
+    const response = await fetch('/api/qa-tools/single-preview', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
@@ -791,9 +791,9 @@ async function executeAuditPipeline(payloadData) {
   const firstItemValue = activeTab.value === 'single' ? payloadData[0].value : payloadData[0];
   const activeToken = savedTokens.value[extractEnvFromUrl(firstItemValue)];
 
-  // 🟢 ФИКС: Убрали хардкод 127.0.0.1. Теперь все запросы идут через маршрутизатор сервера.
+  // 🟢 ФИКС: Направляем оба запроса в правильные маршруты Node.js прокси
   const endpoint = activeTab.value === 'single' 
-    ? '/api/single-report/generate' 
+    ? '/api/qa-tools/single-audit' 
     : '/api/qa-tools/mass-audit';
 
   // Отправляем объект ВСЕХ токенов (tokens) + старый token для совместимости
