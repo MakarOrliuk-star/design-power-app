@@ -15,7 +15,6 @@ export const crmRouter: Router = Router();
 const VALID_SERVICE_KEYS = new Set([
   "calculator",
   "bonuscalc",
-  "auditor",
   "smartico",
   "chrome_extensions",
   "prioritycalc",
@@ -24,6 +23,7 @@ const VALID_SERVICE_KEYS = new Set([
   // user, but the tile itself is role-gated on the FE and the /api/bundles
   // router by requireCrmSuper — a favorite alone grants nothing.
   "bundles",
+  "sms",
 ]);
 
 /** Current user's favorite service keys. */

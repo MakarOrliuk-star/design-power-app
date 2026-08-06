@@ -12,7 +12,7 @@ const { theme, toggle: toggleTheme } = useTheme();
 
 // Only services with real logic are openable (and favoritable). The "soon"
 // tiles are disabled placeholders — see SERVICES below.
-type ServiceKey = "calculator" | "bonuscalc" | "auditor" | "smartico"| "prioritycalc" | "qatools" | "bundles";
+type ServiceKey = "calculator" | "bonuscalc" |  "smartico" | "prioritycalc" | "qatools" | "bundles" | "sms";
 const activeService = ref<null | ServiceKey>(null);
 
 const route = useRoute();
@@ -23,11 +23,11 @@ const router = useRouter();
 const OPENABLE = new Set<ServiceKey>([
   "calculator",
   "bonuscalc",
-  "auditor",
   "smartico",
   "prioritycalc",
   "qatools",
   "bundles",
+  "sms",
 ]);
 
 // How we arrived: captured once so a Drive OAuth return (/crm?drive=...) can be
@@ -74,15 +74,6 @@ const SERVICES: Service[] = [
     desc: "Расчёт костов, вейджеров и комиссий для Free Spins, Deposit Bonus и Hybrid.",
     icon: "🎯",
     iconBg: "#fef3c7",
-    footer: "Запустить сервис →",
-    soon: false,
-  },
-  {
-    key: "auditor",
-    title: "Массовый аудит",
-    desc: "Сканирование маркетинговых кампаний Smartico, генерация Flow Map и выгрузка интерактивных HTML-отчётов.",
-    icon: "🔎",
-    iconBg: "#eff6ff",
     footer: "Запустить сервис →",
     soon: false,
   },
@@ -143,17 +134,26 @@ const SERVICES: Service[] = [
     footer: "Запустить сервис →",
     soon: false,
     roles: ["CRM_SUPER", "ADMIN", "MANAGER"],
+  },
+  {
+    key: "sms",
+    title: "СМС-Плейсмент Тестер",
+    desc: "Массовая проверка доставки маркетинговых СМС по каналам операторов связи через TelQ.",
+    icon: "📱",
+    iconBg: "#e0f2fe",
+    footer: "Запустить сервис →",
+    soon: false,
   }
 ];
 
 const SERVICE_TITLES: Record<ServiceKey, string> = {
   calculator: "Валютный калькулятор",
   bonuscalc: "Калькулятор Бонусов",
-  auditor: "Массовый аудит",
   smartico: "Unique Image Smartico",
   prioritycalc: "Калькулятор Приоритетов",
   qatools: "QA tools",
   bundles: "Image Bundles",
+  sms: "СМС-Плейсмент Тестер",
 };
 
 const displayName = computed(() => auth.user?.name || auth.user?.email || "");
@@ -355,11 +355,11 @@ onMounted(() => {
         <div class="service-body">
           <CrmCalculator v-if="activeService === 'calculator'" />
           <CrmBonusCalculator v-else-if="activeService === 'bonuscalc'" />
-          <CrmAuditor v-else-if="activeService === 'auditor'" />
           <CrmSmartico v-else-if="activeService === 'smartico'" :drive-return="driveReturn" />
           <PriorityCalculator v-else-if="activeService === 'prioritycalc'" />
           <CrmQatools v-else-if="activeService === 'qatools'" />
           <CrmBundles v-else-if="activeService === 'bundles'" />
+          <SmsRouteTester v-else-if="activeService === 'sms'" />
         </div>
       </div>
     </div>

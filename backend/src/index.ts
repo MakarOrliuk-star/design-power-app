@@ -26,14 +26,15 @@ import {
 import { bundlesRouter } from "./routes/bundles.js";
 import { crmAdminRouter } from "./routes/crmAdmin.js";
 import { calculatorRouter } from "./routes/calculator.js";
-import { auditorRouter } from "./routes/auditor.js";
 import { crmRouter } from "./routes/crm.js";
 import { smarticoRouter } from "./routes/smartico.js";
 import { startSmarticoWorker, stopSmarticoWorker } from "./queues/smartico.worker.js";
 import { qatoolsRouter } from "./routes/qatools.js";
 
 import { calculatorService } from "./services/calculator.service.js";
-import { CRYPTO_CODES } from "./config/calculator.config.js";
+
+import { smsRouter } from "./routes/sms.js";
+import { exportSmsRouter } from "./routes/export.sms.js";
 
 assertApiProductionConfig();
 
@@ -64,10 +65,11 @@ app.use("/api/admin", loadUser, requireAdmin, adminRouter);
 // Zone guards: Design (DESIGNER) vs CRM (CRM); ADMIN passes both (see requireZone).
 app.use("/api/catalog", loadUser, requireAuth, requireZone("DESIGNER"), catalogRouter);
 app.use("/api/calculator", loadUser, requireAuth, requireZone("CRM"), calculatorRouter);
-app.use("/api/auditor", loadUser, requireAuth, requireZone("CRM"), auditorRouter);
 app.use("/api/smartico", loadUser, requireAuth, requireZone("CRM"), smarticoRouter);
 app.use("/api/qa-tools", loadUser, requireAuth, requireZone("CRM"), qatoolsRouter);
 app.use("/api/crm", loadUser, requireAuth, requireZone("CRM"), crmRouter);
+app.use("/api/sms", loadUser, requireAuth, requireZone("CRM"), smsRouter);
+app.use("/api/sms/export", loadUser, requireAuth, requireZone("CRM"), exportSmsRouter);
 // Image Bundles (TASK crm-bundle): CRM_SUPER / ADMIN / MANAGER only (D4).
 app.use("/api/bundles", loadUser, requireAuth, requireCrmSuper, bundlesRouter);
 // CRM-админка (TASK ai-reference, DI-R12): вариации + референсы для CRM_SUPER.
@@ -87,15 +89,11 @@ const server = app.listen(env.PORT, "0.0.0.0", () => {
   console.log(`Backend listening on http://0.0.0.0:${env.PORT} (${env.NODE_ENV})`);
   initCronJobs();
 
-  
-  calculatorService.fetchFiatRates();
-  calculatorService.fetchCryptoRates(CRYPTO_CODES);
+  calculatorService.checkAndRefreshRates();
 
   setInterval(() => {
-
-    calculatorService.fetchFiatRates();
-    calculatorService.fetchCryptoRates(CRYPTO_CODES);
-  }, 24 * 60 * 60 * 1000);
+    calculatorService.checkAndRefreshRates();
+  }, 60 * 60 * 1000);
   
   // Smartico jobs read the uploaded ZIP from this container's local temp dir, so
   // they must be processed here (not on the separate worker container).

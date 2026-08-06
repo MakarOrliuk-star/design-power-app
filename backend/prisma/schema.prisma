@@ -749,3 +749,51 @@ model BundleSend {
 
   @@index([bundleId])
 }
+
+model SmsCampaign {
+  id        String       @id @default(uuid())
+  userId    String
+  provider  String
+  status    String       @default("pending") // pending, processing, completed, failed
+  sheetUrl  String?
+  stats     Json         @default("{\"total\": 0, \"sent\": 0, \"delivered\": 0, \"failed\": 0}")
+  createdAt DateTime     @default(now())
+  updatedAt DateTime     @updatedAt
+
+  messages  SmsMessage[]
+
+  @@map("sms_campaigns")
+}
+
+model SmsMessage {
+  id          String      @id @default(uuid())
+  campaignId  String
+  campaign    SmsCampaign @relation(fields: [campaignId], references: [id], onDelete: Cascade)
+  testId      String?
+  phoneNumber String
+  mcc         String
+  mnc         String
+  country     String
+  network     String
+  senderId    String
+  messageBody String?
+  status      String      @default("READY_TO_SEND")
+  latency     Float?
+  errorLog    String?
+  sentAt      DateTime?
+
+  @@map("sms_messages")
+}
+
+model SmsTemplate {
+  id        Int     @id @default(autoincrement())
+  userId    String
+  country   String
+  language  String
+  body      String
+  isDefault Boolean @default(false)
+  mnc       String?
+
+  @@unique([userId, country, language])
+  @@map("sms_templates")
+}
