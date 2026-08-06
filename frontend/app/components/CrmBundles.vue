@@ -8,7 +8,9 @@ import type { BundleListItem } from "~/stores/bundles";
 
 const store = useBundlesStore();
 
-type RightPane = "wizard" | "result";
+// "refs" — управление вариациями и референсами (TASK ai-reference, DI-R12):
+// доступно всем, кто прошёл requireCrmSuper (CRM_SUPER / ADMIN / MANAGER).
+type RightPane = "wizard" | "result" | "refs";
 const pane = ref<RightPane>("wizard");
 
 const selectedId = computed(() => (pane.value === "result" ? store.selected?.id ?? null : null));
@@ -16,6 +18,11 @@ const selectedId = computed(() => (pane.value === "result" ? store.selected?.id 
 function openWizard() {
   store.clearSelected();
   pane.value = "wizard";
+}
+
+function openRefs() {
+  store.clearSelected();
+  pane.value = "refs";
 }
 
 async function selectBundle(b: BundleListItem) {
@@ -38,9 +45,22 @@ onUnmounted(() => store.stopPolling());
 
 <template>
   <div class="bundles" :class="{ 'bundles--result': pane === 'result' && store.selected }">
-    <BundlesProjectList :selected-id="selectedId" @new="openWizard" @select="selectBundle" />
+    <div class="bundles__left">
+      <button
+        class="refsbtn"
+        type="button"
+        :class="{ 'refsbtn--on': pane === 'refs' }"
+        title="Вариации и референсы для AI-композиции"
+        @click="pane === 'refs' ? openWizard() : openRefs()"
+      >
+        ⚙ Референсы и вариации
+      </button>
+      <BundlesProjectList :selected-id="selectedId" @new="openWizard" @select="selectBundle" />
+    </div>
 
     <BundlesBundleWizard v-if="pane === 'wizard'" @launched="onLaunched" />
+
+    <BundlesRefsManager v-else-if="pane === 'refs'" />
 
     <template v-else-if="store.selected">
       <BundlesBundleResult />
@@ -84,6 +104,31 @@ onUnmounted(() => store.stopPolling());
   .bundles--result > :last-child {
     grid-column: auto;
   }
+}
+
+.bundles__left {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  min-width: 0;
+}
+.refsbtn {
+  border: 1px solid var(--color-border);
+  background: var(--color-white);
+  color: var(--color-text);
+  border-radius: var(--radius-md);
+  padding: 9px 12px;
+  font-size: 12.5px;
+  font-weight: 600;
+  cursor: pointer;
+  text-align: left;
+}
+.refsbtn:hover {
+  border-color: var(--color-accent);
+}
+.refsbtn--on {
+  border-color: var(--color-accent);
+  box-shadow: 0 0 0 1px var(--color-accent);
 }
 
 .fallback {

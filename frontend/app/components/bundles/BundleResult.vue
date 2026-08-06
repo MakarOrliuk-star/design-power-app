@@ -176,6 +176,7 @@ function formatDateTime(iso: string | null): string {
         <h2 class="head__title">{{ bundle.name }}</h2>
         <p class="head__meta">
           <span>Bundle type: <b>{{ bundle.bundleType.title }}</b></span>
+          <span v-if="bundle.presetTitle">Вариация: <b>{{ bundle.presetTitle }}</b></span>
           <span>Planned send date: <b>{{ formatDateTime(bundle.plannedSendAt) }}</b></span>
           <span class="head__prompt">Neural prompt: <b>{{ bundle.neuralPrompt || "—" }}</b></span>
         </p>
@@ -311,6 +312,19 @@ function formatDateTime(iso: string | null): string {
                   <span class="safe__cta">Start Playing</span>
                 </div>
               </div>
+
+              <!-- Приёмка ai_reference (DI-R10): ни одна из 3 попыток не
+                   прошла QA — показан лучший по score, решение за человеком. -->
+              <p
+                v-if="a.status === 'done' && a.meta?.qa && !a.meta.qa.passed"
+                class="asset__qa"
+                :title="a.meta.qa.reasons.join('\n') || 'Причины не указаны'"
+              >
+                ⚠ Приёмка не пройдена — лучший из {{ a.meta.qa.attempts }}
+                <span v-if="a.meta.qa.reasons.length" class="asset__qa-reasons">
+                  {{ a.meta.qa.reasons.join(" · ") }}
+                </span>
+              </p>
 
               <p v-if="safePreview && a.meta" class="asset__meta">
                 spec {{ a.meta.specKey }}@v{{ a.meta.specVersion }} ·
@@ -813,6 +827,26 @@ function formatDateTime(iso: string | null): string {
   margin: 0;
   font-size: 10.5px;
   color: var(--color-grey);
+}
+/* Бейдж приёмки ai_reference (DI-R10) */
+.asset__qa {
+  margin: 0;
+  font-size: 10.5px;
+  font-weight: 600;
+  color: #b45309;
+  background: #fef3c7;
+  border-radius: var(--radius-sm);
+  padding: 5px 8px;
+  line-height: 1.35;
+}
+:global(.dark) .asset__qa {
+  background: rgba(180, 83, 9, 0.16);
+}
+.asset__qa-reasons {
+  display: block;
+  font-weight: 400;
+  color: inherit;
+  opacity: 0.85;
 }
 
 .modal {

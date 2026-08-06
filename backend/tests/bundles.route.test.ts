@@ -214,6 +214,8 @@ describe("GET /api/bundles/:id (Result screen)", () => {
       textContrast: { white: 1.2, dark: 14.4 },
       retinaUrl: "https://cdn/a1_2x.png",
       validator: { passed: true, attempts: 1 },
+      // Приёмка ai_reference: у движковых рендеров её нет (TASK ai-reference).
+      qa: null,
     });
     // The raw engine payload (seed, layer bboxes, check list) stays server-side.
     expect(asset.meta.seed).toBeUndefined();

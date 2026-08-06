@@ -2,6 +2,7 @@ import { prisma } from "../lib/prisma.js";
 import { getBundleQueue } from "../queues/index.js";
 import { canStartGeneration, deriveBundleStatus } from "./bundleStatus.js";
 import type { BundleAssetStatus } from "./bundleStatus.js";
+import { refCountsByBrand, MIN_REFS_FOR_GENERATION } from "./variationRefs.js";
 
 // Image Bundles domain service (TASK crm-bundle, R-PLAN §3/§6/§7).
 
@@ -16,7 +17,10 @@ export interface BundleTypeAsset {
   // "ai" (default): single multi-reference generation + canvas fit.
   // "layered" (D10 v2, email): background layer + transparent person/item
   // cutouts composited into their zone boxes by pixels — hard guarantee.
-  composeMode?: "ai" | "layered";
+  // "ai_reference" (TASK ai-reference): новая композиция целиком из 5–15
+  // референс-баннеров вариации (nano-banana-2 /edit) + приёмка VLM; выдаёт
+  // семейство из трёх ассетов (с текстом / _notext / _transparent).
+  composeMode?: "ai" | "layered" | "ai_reference";
   // Versioned geometry (TASK email-composition, Phase 1): key into LayoutSpec;
   // the composition engine resolves the latest active version at render time.
   layoutSpecKey?: string;
@@ -117,7 +121,17 @@ export async function recomputeBundleStatus(bundleId: string): Promise<void> {
 
 export type LaunchResult =
   | { ok: true; variantCount: number; assetCount: number }
-  | { ok: false; error: "already_generating" | "no_brands" | "queue_unavailable" };
+  | {
+      ok: false;
+      error:
+        | "already_generating"
+        | "no_brands"
+        | "queue_unavailable"
+        | "preset_required"
+        | "refs_missing";
+      /** refs_missing: базовые бренды с числом референсов < минимума (DI-R3). */
+      missingRefs?: Array<{ brandName: string; count: number; min: number }>;
+    };
 
 export async function launchGeneration(bundleId: string): Promise<LaunchResult | null> {
   const bundle = await prisma.bundle.findUnique({
@@ -132,6 +146,21 @@ export async function launchGeneration(bundleId: string): Promise<LaunchResult |
   if (variants.length === 0) return { ok: false, error: "no_brands" };
 
   const typeAssets = bundle.bundleType.assets as unknown as BundleTypeAsset[];
+
+  // Гейт ai_reference (fail-fast ДО очереди, R-PLAN §1.3): вариация выбрана и
+  // у каждого выбранного БАЗОВОГО бренда достаточно референсов.
+  if (typeAssets.some((a) => a.composeMode === "ai_reference")) {
+    if (!bundle.presetId) return { ok: false, error: "preset_required" };
+    const counts = await refCountsByBrand(bundle.presetId);
+    const missing = baseNames
+      .map((name) => ({
+        brandName: name,
+        count: counts[name] ?? 0,
+        min: MIN_REFS_FOR_GENERATION,
+      }))
+      .filter((m) => m.count < MIN_REFS_FOR_GENERATION);
+    if (missing.length > 0) return { ok: false, error: "refs_missing", missingRefs: missing };
+  }
 
   // Upsert variants + assets and reset them for a fresh run. brandNames are
   // locked after the first launch (route-level), so the expansion is stable;
@@ -156,6 +185,13 @@ export async function launchGeneration(bundleId: string): Promise<LaunchResult |
         },
       });
       variantIds.push(row.id);
+      // Производные строки ai_reference прошлого запуска (email_notext/…)
+      // и ассеты удалённых из типа ключей: сносим — новый запуск создаст
+      // семейство заново от свежей композиции (иначе рядом с новым родителем
+      // останутся «свежие» производные от старой).
+      await tx.bundleAsset.deleteMany({
+        where: { variantId: row.id, assetKey: { notIn: typeAssets.map((a) => a.key) } },
+      });
       for (const a of typeAssets) {
         await tx.bundleAsset.upsert({
           where: { variantId_assetKey: { variantId: row.id, assetKey: a.key } },

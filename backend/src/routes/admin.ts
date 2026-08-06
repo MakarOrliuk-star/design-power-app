@@ -459,7 +459,9 @@ const bundleTypeAssetSchema = z.object({
       z.object({ x: z.number(), y: z.number(), w: z.number(), h: z.number() }),
     )
     .optional(),
-  composeMode: z.enum(["ai", "layered"]).optional(),
+  // "ai_reference" — композиция из референсов вариации (TASK ai-reference):
+  // включение/откат режима = правка данных из админки, без деплоя.
+  composeMode: z.enum(["ai", "layered", "ai_reference"]).optional(),
   // Versioned geometry reference (Phase 1): render resolves the latest active
   // LayoutSpec with this key. Absent → legacy zones/composeMode path.
   layoutSpecKey: z.string().min(1).max(60).optional(),
