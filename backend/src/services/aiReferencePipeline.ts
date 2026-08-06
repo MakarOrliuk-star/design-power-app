@@ -1,22 +1,16 @@
-import sharp from "sharp";
 import { prisma } from "../lib/prisma.js";
 import type { Prisma } from "../../generated/prisma/client.js";
 import { runPersonFal, runGptImage2Edit, runBriaRemoveBg } from "../lib/fal.js";
 import { fitAndStoreAsset } from "../lib/assetFit.js";
 import { nearestFalAspect } from "../lib/imageSize.js";
-import { uploadFromUrl, uploadBuffer, withRetry } from "../lib/cloudinary.js";
+import { uploadFromUrl, withRetry } from "../lib/cloudinary.js";
 import { fetchBuffer } from "./layerCache.js";
 import { validateAiAsset } from "../lib/aiAssetValidator.js";
-import type { AiTechReport } from "../lib/aiAssetValidator.js";
 import { getLayoutGuideUrl, LAYOUT_GUIDE_INSTRUCTION } from "../lib/layoutGuide.js";
 import { MAX_EDIT_REFS } from "./variationRefs.js";
 import { reviewComposition, QA_REFS_SHOWN } from "../lib/vlmReviewer.js";
-import {
-  renderToken,
-  deriveTokens,
-  resolveMaterial,
-  MAX_TOKEN_CHARS,
-} from "../lib/typography3d.js";
+import { healComposition } from "./aiHealing.js";
+import type { AiRefAttempt } from "./aiHealing.js";
 import { pickGenerationRefs } from "./variationRefs.js";
 import { recomputeBundleStatus, stripGenderName } from "./bundle.service.js";
 
@@ -33,15 +27,19 @@ import { recomputeBundleStatus, stripGenderName } from "./bundle.service.js";
  *      детерминированная, поэтому идёт ДО приёмщика — на явный брак VLM
  *      не тратится.
  *   B. Приемщик (vlmReviewer): вердикт {pass, score, reasons}.
- *   pass → выбираем; иначе ретрай; после третьей попытки — лучшая по score
- *   с пометкой qaPassed=false (бейдж в CRM).
+ *   pass → выбираем; иначе ретрай; после третьей попытки — auto-healing
+ *   (TASK safe-zone/auto-heal, aiHealing.ts): лучший кандидат лечится
+ *   re-edit'ом по замечаниям приёмки (до 2 попыток, каждая — через тот же
+ *   контур C+B). Если и лечение не прошло — лучший по score среди всех
+ *   с пометкой qaPassed=false (warning-бейдж в CRM, B4).
  *
- * Выход — ТРИ строки BundleAsset (DI-R11, TASK §4):
- *   `<key>`             — родитель: композиция + текст-слой (казино-слово, A-1);
- *   `<key>_notext`      — композиция как сгенерирована;
- *   `<key>_transparent` — runBriaRemoveBg от базы (DI-R8: свечение/тени как есть).
- * Родительская строка создаётся launchGeneration из BundleType.assets;
- * производные создаёт/обновляет пайплайн (идемпотентно по [variantId, assetKey]).
+ * Выход — ОДНА строка BundleAsset (TASK safe-zone/auto-heal, A2): финальная
+ * база прогоняется через runBriaRemoveBg (DI-R8: свечение/тени как есть) и
+ * записывается в родительский ассет с metadata.transparent=true — CRM видит
+ * только «Email — прозрачный фон» без текста. Текст-слой и строки
+ * `_notext`/`_transparent` больше не создаются; провал removeBg теперь валит
+ * ассет (это единственный результат). Хелперы производных ключей оставлены
+ * для legacy-строк старых бандлов (подписи в API, Regenerate на производном).
  */
 
 export const AI_REF_MAX_ATTEMPTS = 3;
@@ -68,9 +66,9 @@ export const AI_REF_SAFE_ZONE = { x: 0.27, y: 0.04, w: 0.46, h: 0.92 };
  */
 export const AI_REF_CENTER_CLEAR_ZONE = { x: 0.28, y: 0.08, w: 0.44, h: 0.62 };
 
-/** Плейсхолдер текст-слоя, когда в брифе нет КАПС-токенов (A-1). */
-export const DEFAULT_OVERLAY_TOKEN = "BONUS";
-
+// Производные ключи трёх-ассетной схемы (до TASK safe-zone/auto-heal):
+// новые строки с ними НЕ создаются, хелперы обслуживают legacy-строки старых
+// бандлов — подписи в routes/bundles.ts и Regenerate в bundle.processor.ts.
 export const AI_REF_SUFFIX_NOTEXT = "_notext";
 export const AI_REF_SUFFIX_TRANSPARENT = "_transparent";
 
@@ -133,28 +131,13 @@ export function buildAiReferencePrompt(variationText: string): string {
     .join(" ");
 }
 
-/** Казино-слово для текст-слоя: первый КАПС-токен брифа, иначе BONUS (A-1). */
-export function pickOverlayToken(variationText: string): string {
-  const token = deriveTokens(variationText, 1)[0];
-  if (token && token.length <= MAX_TOKEN_CHARS) return token;
-  return DEFAULT_OVERLAY_TOKEN;
-}
-
-/** Одна попытка генерации в metadata.qa.attempts (что видел админ/CRM). */
-export interface AiRefAttempt {
-  imageUrl: string | null;
-  score: number;
-  pass: boolean;
-  reasons: string[];
-  tech: AiTechReport | null;
-  /** Приёмка пропущена по транспортной причине (vision недоступен). */
-  qaSkipped?: boolean;
-}
+// Тип попытки (генерации и лечения) живёт в aiHealing.ts; ре-экспорт
+// сохраняет прежний импорт для тестов и соседних модулей.
+export type { AiRefAttempt } from "./aiHealing.js";
 
 interface ChosenAttempt {
   index: number;
   imageUrl: string;
-  buffer: Buffer;
   pass: boolean;
 }
 
@@ -170,10 +153,10 @@ function safeZonePct(): { x: number; y: number; w: number; h: number } {
 }
 
 /**
- * Stage B процессора для composeMode "ai_reference": полный цикл + все записи
- * BundleAsset (родитель + производные) + recomputeBundleStatus. Логический
- * брак не бросает — семейство ассетов переводится в FAILED с причиной
- * (домашний паттерн: Regenerate — путь ретрая).
+ * Stage B процессора для composeMode "ai_reference": полный цикл (генерация →
+ * приёмка → auto-healing → removeBg) + запись результата в родительский
+ * BundleAsset + recomputeBundleStatus. Логический брак не бросает — ассет
+ * переводится в FAILED с причиной (домашний паттерн: Regenerate — путь ретрая).
  */
 export async function processAiReferenceAsset(opts: {
   bundleId: string;
@@ -188,37 +171,11 @@ export async function processAiReferenceAsset(opts: {
   const { bundleId, variantId, assetId, assetKey, targetW, targetH } = opts;
   const [notextKey, transparentKey] = derivedAssetKeys(assetKey);
 
-  const upsertDerived = async (
-    key: string,
-    data: {
-      status: "DONE" | "FAILED";
-      imageUrl?: string | null;
-      errorMessage?: string | null;
-      metadata?: Prisma.InputJsonValue;
-    },
-  ) => {
-    await prisma.bundleAsset.upsert({
-      where: { variantId_assetKey: { variantId, assetKey: key } },
-      create: {
-        bundleId,
-        variantId,
-        assetKey: key,
-        width: targetW,
-        height: targetH,
-        status: data.status,
-        imageUrl: data.imageUrl ?? null,
-        errorMessage: data.errorMessage ?? null,
-        ...(data.metadata !== undefined ? { metadata: data.metadata } : {}),
-      },
-      update: {
-        width: targetW,
-        height: targetH,
-        status: data.status,
-        approved: false,
-        imageUrl: data.imageUrl ?? null,
-        errorMessage: data.errorMessage ?? null,
-        ...(data.metadata !== undefined ? { metadata: data.metadata } : {}),
-      },
+  // Legacy-строки трёх-ассетной схемы (старые бандлы): любой новый прогон —
+  // успешный или проваленный — сносит их, в CRM остаётся один ассет (A2).
+  const dropLegacyDerived = async () => {
+    await prisma.bundleAsset.deleteMany({
+      where: { variantId, assetKey: { in: [notextKey, transparentKey] } },
     });
   };
 
@@ -231,13 +188,7 @@ export async function processAiReferenceAsset(opts: {
         ...(metadata !== undefined ? { metadata } : {}),
       },
     });
-    // Производные прошлого запуска не должны пережить проваленный новый:
-    // семейство падает целиком, иначе в CRM останется «свежий» notext от
-    // старой композиции рядом с FAILED родителем.
-    await prisma.bundleAsset.updateMany({
-      where: { variantId, assetKey: { in: [notextKey, transparentKey] } },
-      data: { status: "FAILED", errorMessage: `родительский ассет: ${reason}`, approved: false },
-    });
+    await dropLegacyDerived();
     await recomputeBundleStatus(bundleId);
   };
 
@@ -383,7 +334,6 @@ export async function processAiReferenceAsset(opts: {
     const candidate: ChosenAttempt = {
       index: attempts.length - 1,
       imageUrl: fitted.url,
-      buffer,
       pass: verdict.pass,
     };
     if (verdict.pass) {
@@ -394,21 +344,63 @@ export async function processAiReferenceAsset(opts: {
     }
   }
 
-  // DI-R10: ни одна не прошла — показываем лучшую по score с пометкой.
-  const finalPick = chosen ?? bestCandidate;
-  if (!finalPick) {
+  // Ни одной пригодной попытки (все упали до приёмки) — лечить нечего.
+  if (!chosen && !bestCandidate) {
     const lastReason = attempts.at(-1)?.reasons[0] ?? "все попытки провалились";
     await fail(`ai_reference: ${lastReason} (${attempts.length} попыток)`, {
       qa: { attempts, qaPassed: false },
     } as unknown as Prisma.InputJsonValue);
     return;
   }
-  const qaPassed = finalPick.pass;
+
+  // metadata.qa хранит tech-отчёт в виде списка проверок (без буферов).
+  const attemptRows = (rows: AiRefAttempt[]) =>
+    rows.map((a) => ({ ...a, tech: a.tech ? a.tech.checks : null }));
+
+  // DI-R10 → auto-healing (B1): все попытки провалили приёмку — лучший
+  // кандидат уходит на re-edit по замечаниям приёмщика (aiHealing.ts).
+  // Победитель лечения (или исходник, если лучше не стало) — финальная база.
+  const finalPick = (chosen ?? bestCandidate)!;
+  let finalUrl = finalPick.imageUrl;
+  let qaPassed = finalPick.pass;
+  let healingMeta: {
+    attempts: ReturnType<typeof attemptRows>;
+    used: boolean;
+    chosenAttempt: number | null;
+  } | null = null;
+
+  if (!chosen && bestCandidate) {
+    const bestAttempt = attempts[bestCandidate.index]!;
+    const heal = await healComposition({
+      source: {
+        imageUrl: bestCandidate.imageUrl,
+        score: bestAttempt.score,
+        reasons: bestAttempt.reasons,
+      },
+      targetW,
+      targetH,
+      publicIdBase: `${variantId}_${assetKey}`,
+      folder,
+      logTag: `ai-ref#${assetId}`,
+      refUrls,
+      variationText,
+      brandName: baseBrand,
+      centerClearZone: AI_REF_CENTER_CLEAR_ZONE,
+    });
+    finalUrl = heal.winner.imageUrl;
+    qaPassed = heal.winner.pass;
+    healingMeta = {
+      attempts: attemptRows(heal.attempts),
+      used: heal.winner.healingIndex !== null,
+      chosenAttempt: heal.winner.healingIndex,
+    };
+  }
 
   const qaMeta = {
-    attempts: attempts.map((a) => ({ ...a, tech: a.tech ? a.tech.checks : null })),
+    attempts: attemptRows(attempts),
     chosenAttempt: finalPick.index,
     qaPassed,
+    ...(healingMeta ? { healing: healingMeta } : {}),
   };
   const baseMeta = {
     specKey: "ai_reference",
@@ -423,117 +415,51 @@ export async function processAiReferenceAsset(opts: {
     qa: qaMeta,
   };
 
-  // 1) Без текста — база как сгенерирована. Детерминированный public id:
-  //    повторный запуск перезаписывает, не плодя файлов.
-  const notextUp = await withRetry(
-    () => uploadFromUrl(finalPick.imageUrl, `${variantId}_${assetKey}${AI_REF_SUFFIX_NOTEXT}`, folder),
-    `ai-ref-notext#${assetId}`,
-  );
-  if (!notextUp.success || !notextUp.secure_url) {
-    await fail(`notext upload: ${notextUp.error ?? "unknown"}`);
+  // Финал (A2): removeBg от финальной базы (DI-R8: свечение/тени как отдаст
+  // модель) → единственная картинка ассета. Прозрачная версия — единственный
+  // результат, поэтому её провал валит ассет (раньше — только производную
+  // строку). Детерминированный public id: повторный запуск перезаписывает.
+  const removed = await runBriaRemoveBg(finalUrl);
+  if (!removed.success || !removed.imageUrl) {
+    await fail(
+      `removeBg: ${removed.error ?? "unknown"}`,
+      baseMeta as unknown as Prisma.InputJsonValue,
+    );
     return;
   }
-  await upsertDerived(notextKey, {
-    status: "DONE",
-    imageUrl: notextUp.secure_url,
-    metadata: { ...baseMeta, derivedFrom: assetKey } as unknown as Prisma.InputJsonValue,
-  });
-
-  // 2) Прозрачный фон (DI-R8): removeBg от базы, свечение/тени — как отдаст
-  //    модель. Провал НЕ валит семейство — только эту строку.
-  const removed = await runBriaRemoveBg(finalPick.imageUrl);
-  if (removed.success && removed.imageUrl) {
-    const trUp = await withRetry(
-      () =>
-        uploadFromUrl(
-          removed.imageUrl!,
-          `${variantId}_${assetKey}${AI_REF_SUFFIX_TRANSPARENT}`,
-          folder,
-        ),
-      `ai-ref-transparent#${assetId}`,
+  const trUp = await withRetry(
+    () =>
+      uploadFromUrl(
+        removed.imageUrl!,
+        `${variantId}_${assetKey}${AI_REF_SUFFIX_TRANSPARENT}`,
+        folder,
+      ),
+    `ai-ref-transparent#${assetId}`,
+  );
+  if (!trUp.success || !trUp.secure_url) {
+    await fail(
+      `transparent upload: ${trUp.error ?? "unknown"}`,
+      baseMeta as unknown as Prisma.InputJsonValue,
     );
-    if (trUp.success && trUp.secure_url) {
-      await upsertDerived(transparentKey, {
-        status: "DONE",
-        imageUrl: trUp.secure_url,
-        metadata: { ...baseMeta, derivedFrom: assetKey } as unknown as Prisma.InputJsonValue,
-      });
-    } else {
-      await upsertDerived(transparentKey, {
-        status: "FAILED",
-        errorMessage: `upload: ${trUp.error ?? "unknown"}`,
-      });
-    }
-  } else {
-    await upsertDerived(transparentKey, {
-      status: "FAILED",
-      errorMessage: `removeBg: ${removed.error ?? "unknown"}`,
-    });
-  }
-
-  // 3) Родитель — композиция + текст-слой (A-1: одно казино-слово нашим
-  //    рендером в safe-зоне). Провал оверлея деградирует к базе без текста
-  //    (в metadata остаётся причина), а не роняет DONE-семейство.
-  const token = pickOverlayToken(variationText);
-  let parentUrl = notextUp.secure_url;
-  let overlayError: string | null = null;
-  try {
-    const rendered = await renderToken({
-      token,
-      fontSizePx: Math.round(targetH * 0.3),
-      material: resolveMaterial(undefined),
-      skewDeg: 8,
-      rotateDeg: -4,
-      bevel: true,
-      specular: true,
-      ownShadow: true,
-    });
-    // Вписываем в safe-зону с полями: ширина ≤ 90% зоны, высота ≤ 42% канваса.
-    const maxW = Math.round(targetW * AI_REF_SAFE_ZONE.w * 0.9);
-    const maxH = Math.round(targetH * 0.42);
-    const scale = Math.min(1, maxW / rendered.width, maxH / rendered.height);
-    const w = Math.max(1, Math.round(rendered.width * scale));
-    const h = Math.max(1, Math.round(rendered.height * scale));
-    const overlay =
-      scale < 1
-        ? await sharp(Buffer.from(rendered.png)).resize(w, h).png().toBuffer()
-        : Buffer.from(rendered.png);
-    const cx = AI_REF_SAFE_ZONE.x + AI_REF_SAFE_ZONE.w / 2;
-    const cy = AI_REF_SAFE_ZONE.y + AI_REF_SAFE_ZONE.h / 2;
-    const left = Math.max(0, Math.round(targetW * cx - w / 2));
-    const top = Math.max(0, Math.round(targetH * cy - h / 2));
-    const withText = await sharp(finalPick.buffer)
-      .composite([{ input: overlay, left, top }])
-      .png()
-      .toBuffer();
-    const textUp = await withRetry(
-      () => uploadBuffer(withText, `${variantId}_${assetKey}_text`, folder),
-      `ai-ref-text#${assetId}`,
-    );
-    if (textUp.success && textUp.secure_url) parentUrl = textUp.secure_url;
-    else overlayError = textUp.error ?? "upload failed";
-  } catch (err) {
-    overlayError = err instanceof Error ? err.message : String(err);
+    return;
   }
 
   await prisma.bundleAsset.update({
     where: { id: assetId },
     data: {
       status: "DONE",
-      imageUrl: parentUrl,
+      imageUrl: trUp.secure_url,
       errorMessage: null,
-      metadata: {
-        ...baseMeta,
-        overlayToken: token,
-        overlayError,
-        derivedKeys: [notextKey, transparentKey],
-      } as unknown as Prisma.InputJsonValue,
+      // transparent — сигнал API добавить к подписи «— прозрачный фон» (A1/A2).
+      metadata: { ...baseMeta, transparent: true } as unknown as Prisma.InputJsonValue,
     },
   });
+  await dropLegacyDerived();
 
   console.log(
-    `🧩 ai-ref ${assetKey}#${assetId}: refs=${refs.length} attempts=${attempts.length} ` +
-      `qaPassed=${qaPassed} token=${token}${overlayError ? ` overlayError=${overlayError}` : ""}`,
+    `🧩 ai-ref ${assetKey}#${assetId}: refs=${refs.length} attempts=${attempts.length}` +
+      (healingMeta ? ` heal=${healingMeta.attempts.length} healed=${healingMeta.used}` : "") +
+      ` qaPassed=${qaPassed}`,
   );
   await recomputeBundleStatus(bundleId);
 }

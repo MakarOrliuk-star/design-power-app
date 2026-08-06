@@ -1,16 +1,17 @@
 import { describe, it, expect, beforeEach, vi } from "vitest";
 import sharp from "sharp";
 
-// Пайплайн ai_reference (TASK ai-reference): цикл 1+2 ретрая, best-of по
-// score, семейство из трёх ассетов. Всё внешнее замокано, sharp — настоящий
-// (композит текст-слоя работает с реальными байтами).
+// Пайплайн ai_reference (TASK ai-reference + safe-zone/auto-heal): цикл
+// 1+2 ретрая, auto-healing лучшего кандидата при провале приёмки, выход —
+// ОДИН ассет (removeBg от финальной базы). Всё внешнее замокано; healing
+// тестируется отдельно (aiHealing.test.ts), здесь — его встройка.
 
 const db = vi.hoisted(() => ({
   bundle: { findUnique: vi.fn(), update: vi.fn() },
   bundleAsset: {
     update: vi.fn(),
     updateMany: vi.fn(),
-    upsert: vi.fn(),
+    deleteMany: vi.fn(),
     findMany: vi.fn(),
   },
   variationReference: { findMany: vi.fn(), groupBy: vi.fn() },
@@ -30,7 +31,7 @@ const cloud = vi.hoisted(() => ({
 const cache = vi.hoisted(() => ({ fetchBuffer: vi.fn() }));
 const validator = vi.hoisted(() => ({ validateAiAsset: vi.fn() }));
 const reviewer = vi.hoisted(() => ({ reviewComposition: vi.fn(), QA_REFS_SHOWN: 3 }));
-const renderTokenMock = vi.hoisted(() => vi.fn());
+const healing = vi.hoisted(() => ({ healComposition: vi.fn() }));
 
 vi.mock("../src/lib/prisma.js", () => ({ prisma: db }));
 vi.mock("../src/lib/fal.js", () => fal);
@@ -39,9 +40,9 @@ vi.mock("../src/lib/cloudinary.js", () => cloud);
 vi.mock("../src/services/layerCache.js", () => cache);
 vi.mock("../src/lib/aiAssetValidator.js", () => validator);
 vi.mock("../src/lib/vlmReviewer.js", () => reviewer);
-vi.mock("../src/lib/typography3d.js", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("../src/lib/typography3d.js")>();
-  return { ...actual, renderToken: renderTokenMock };
+vi.mock("../src/services/aiHealing.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../src/services/aiHealing.js")>();
+  return { ...actual, healComposition: healing.healComposition };
 });
 
 import {
@@ -50,14 +51,10 @@ import {
   parentOfDerivedKey,
   derivedAssetLabel,
   buildAiReferencePrompt,
-  pickOverlayToken,
-  DEFAULT_OVERLAY_TOKEN,
   AI_REF_MAX_ATTEMPTS,
 } from "../src/services/aiReferencePipeline.js";
 
-// Реальный маленький PNG — база композиции и отрендеренный токен.
-// Белый фон с группой в левой секции (вне чистой зоны): доводка центра (A-5)
-// на таком кадре не срабатывает — у неё отдельные тесты (centerCleanup.test).
+// Реальный маленький PNG — база композиции (техвалидация работает с байтами).
 const pngBuffer = await sharp({
   create: { width: 60, height: 30, channels: 3, background: { r: 255, g: 255, b: 255 } },
 })
@@ -72,11 +69,6 @@ const pngBuffer = await sharp({
       top: 5,
     },
   ])
-  .png()
-  .toBuffer();
-const tokenPng = await sharp({
-  create: { width: 20, height: 10, channels: 4, background: { r: 255, g: 200, b: 0, alpha: 1 } },
-})
   .png()
   .toBuffer();
 
@@ -104,6 +96,27 @@ const OPTS = {
   targetH: 600,
 };
 
+/** Последний update родителя со статусом DONE (финальная запись ассета). */
+function parentDoneCall() {
+  return db.bundleAsset.update.mock.calls.find(
+    (c) => (c[0] as { data: { status?: string } }).data.status === "DONE",
+  )?.[0] as
+    | {
+        data: {
+          imageUrl: string;
+          metadata: {
+            transparent?: boolean;
+            qa: {
+              qaPassed: boolean;
+              chosenAttempt: number;
+              healing?: { used: boolean; chosenAttempt: number | null; attempts: unknown[] };
+            };
+          };
+        };
+      }
+    | undefined;
+}
+
 beforeEach(() => {
   for (const delegate of Object.values(db))
     for (const fn of Object.values(delegate)) (fn as ReturnType<typeof vi.fn>).mockReset();
@@ -116,7 +129,7 @@ beforeEach(() => {
   cache.fetchBuffer.mockReset();
   validator.validateAiAsset.mockReset();
   reviewer.reviewComposition.mockReset();
-  renderTokenMock.mockReset();
+  healing.healComposition.mockReset();
 
   db.bundle.findUnique.mockResolvedValue({
     neuralPrompt: "VIP Exclusive weekend BONUS",
@@ -126,7 +139,7 @@ beforeEach(() => {
   db.variationReference.findMany.mockResolvedValue(refRows(6));
   db.bundleAsset.update.mockResolvedValue({});
   db.bundleAsset.updateMany.mockResolvedValue({});
-  db.bundleAsset.upsert.mockResolvedValue({});
+  db.bundleAsset.deleteMany.mockResolvedValue({});
   db.bundleAsset.findMany.mockResolvedValue([{ status: "DONE" }]); // recompute
   db.bundle.update.mockResolvedValue({});
 
@@ -139,10 +152,9 @@ beforeEach(() => {
   fal.runBriaRemoveBg.mockResolvedValue({ success: true, imageUrl: "https://fal/nobg.png" });
   cloud.uploadFromUrl.mockResolvedValue({ success: true, secure_url: "https://cdn/stored.png" });
   cloud.uploadBuffer.mockResolvedValue({ success: true, secure_url: "https://cdn/text.png" });
-  renderTokenMock.mockResolvedValue({ png: tokenPng, width: 20, height: 10 });
 });
 
-describe("хелперы производных ключей", () => {
+describe("хелперы производных ключей (legacy, старые бандлы)", () => {
   it("derivedAssetKeys / parentOfDerivedKey / derivedAssetLabel", () => {
     expect(derivedAssetKeys("email")).toEqual(["email_notext", "email_transparent"]);
     expect(parentOfDerivedKey("email_notext")).toBe("email");
@@ -153,7 +165,7 @@ describe("хелперы производных ключей", () => {
   });
 });
 
-describe("buildAiReferencePrompt / pickOverlayToken (A-1)", () => {
+describe("buildAiReferencePrompt (A-1)", () => {
   it("промпт = бриф + композиционный контракт без текста", () => {
     const p = buildAiReferencePrompt("VIP weekend");
     expect(p).toContain("Campaign brief: VIP weekend.");
@@ -169,15 +181,10 @@ describe("buildAiReferencePrompt / pickOverlayToken (A-1)", () => {
     expect(p).toContain("THREE sections");
     expect(p).toContain("depth of field");
   });
-
-  it("токен — первый КАПС из брифа, иначе дефолт", () => {
-    expect(pickOverlayToken("Get your VIP reward now")).toBe("VIP");
-    expect(pickOverlayToken("обычный текст без капса")).toBe(DEFAULT_OVERLAY_TOKEN);
-  });
 });
 
-describe("processAiReferenceAsset", () => {
-  it("happy path: одна попытка → родитель с текстом + notext + transparent, qaPassed", async () => {
+describe("processAiReferenceAsset — один ассет (TASK safe-zone/auto-heal)", () => {
+  it("happy path: одна попытка → removeBg → единственный ассет с metadata.transparent", async () => {
     await processAiReferenceAsset(OPTS);
 
     // Референсы ищутся по базовому имени бренда (stripGenderName).
@@ -185,7 +192,6 @@ describe("processAiReferenceAsset", () => {
       expect.objectContaining({ where: { presetId: "p1", brandName: "Betnella" } }),
     );
     // Генерация: GPT Image 2 (A-7) с точным канвасом, banana не вызывается.
-    // Референсы + схема-раскладка последним слотом (A-6).
     expect(fal.runGptImage2Edit).toHaveBeenCalledTimes(1);
     expect(fal.runPersonFal).not.toHaveBeenCalled();
     const [args] = fal.runGptImage2Edit.mock.calls[0]!;
@@ -195,22 +201,32 @@ describe("processAiReferenceAsset", () => {
     expect(args.width).toBe(1200);
     expect(args.height).toBe(600);
 
-    // Производные строки семейства: notext + transparent, обе DONE.
-    const upsertKeys = db.bundleAsset.upsert.mock.calls.map(
-      (c) => (c[0] as { where: { variantId_assetKey: { assetKey: string } } }).where.variantId_assetKey.assetKey,
+    // Финал: removeBg от базы, аплоад с детерминированным public id.
+    expect(fal.runBriaRemoveBg).toHaveBeenCalledWith("https://cdn/fit.png");
+    expect(cloud.uploadFromUrl).toHaveBeenCalledWith(
+      "https://fal/nobg.png",
+      "v1_email_transparent",
+      "bundles/bun1",
     );
-    expect(upsertKeys).toEqual(["email_notext", "email_transparent"]);
+    // Текст-слой не рендерится (uploadBuffer зовёт только layout-guide),
+    // производные строки не создаются, healing на прошедшей приёмке не нужен.
+    const uploadBufferIds = cloud.uploadBuffer.mock.calls.map((c) => c[1] as string);
+    expect(uploadBufferIds).not.toContain("v1_email_text");
+    expect(healing.healComposition).not.toHaveBeenCalled();
 
-    // Родитель: DONE, картинка с текст-слоем, qa в метаданных.
-    const parentCall = db.bundleAsset.update.mock.calls.find(
-      (c) => (c[0] as { data: { status?: string } }).data.status === "DONE",
-    )![0] as { data: { imageUrl: string; metadata: { qa: { qaPassed: boolean }; overlayToken: string } } };
-    expect(parentCall.data.imageUrl).toBe("https://cdn/text.png");
-    expect(parentCall.data.metadata.qa.qaPassed).toBe(true);
-    expect(parentCall.data.metadata.overlayToken).toBe("VIP");
+    const parent = parentDoneCall()!;
+    expect(parent.data.imageUrl).toBe("https://cdn/stored.png");
+    expect(parent.data.metadata.transparent).toBe(true);
+    expect(parent.data.metadata.qa.qaPassed).toBe(true);
+    expect(parent.data.metadata.qa.healing).toBeUndefined();
+
+    // Legacy-строки трёх-ассетной схемы сносятся.
+    expect(db.bundleAsset.deleteMany).toHaveBeenCalledWith({
+      where: { variantId: "v1", assetKey: { in: ["email_notext", "email_transparent"] } },
+    });
   });
 
-  it(`DI-R10: все ${AI_REF_MAX_ATTEMPTS} попытки провалили приёмку → лучший по score с пометкой`, async () => {
+  it(`B1: все ${AI_REF_MAX_ATTEMPTS} попытки провалили приёмку → healing лучшего кандидата, победитель — вылеченная версия`, async () => {
     reviewer.reviewComposition
       .mockResolvedValueOnce({ pass: false, score: 10, reasons: ["стиль"] })
       .mockResolvedValueOnce({ pass: false, score: 55, reasons: ["текст на баннере"] })
@@ -219,23 +235,64 @@ describe("processAiReferenceAsset", () => {
       .mockResolvedValueOnce({ ok: true, url: "https://cdn/try1.png", publicId: "t1" })
       .mockResolvedValueOnce({ ok: true, url: "https://cdn/try2.png", publicId: "t2" })
       .mockResolvedValueOnce({ ok: true, url: "https://cdn/try3.png", publicId: "t3" });
+    healing.healComposition.mockResolvedValue({
+      attempts: [
+        { imageUrl: "https://cdn/heal1.png", score: 88, pass: true, reasons: [], tech: { passed: true, checks: [] } },
+      ],
+      winner: { imageUrl: "https://cdn/heal1.png", pass: true, score: 88, healingIndex: 0 },
+    });
 
     await processAiReferenceAsset(OPTS);
 
     expect(fal.runGptImage2Edit).toHaveBeenCalledTimes(AI_REF_MAX_ATTEMPTS);
-    const parentCall = db.bundleAsset.update.mock.calls.find(
-      (c) => (c[0] as { data: { status?: string } }).data.status === "DONE",
-    )![0] as {
-      data: { metadata: { qa: { qaPassed: boolean; chosenAttempt: number } } };
-    };
-    expect(parentCall.data.metadata.qa.qaPassed).toBe(false);
-    expect(parentCall.data.metadata.qa.chosenAttempt).toBe(1); // score 55 — лучший
-    // База деривативов — лучшая попытка, не последняя.
-    expect(cloud.uploadFromUrl).toHaveBeenCalledWith(
-      "https://cdn/try2.png",
-      "v1_email_notext",
-      "bundles/bun1",
+    // Лечится лучший по score (try2, score 55) по его замечаниям.
+    expect(healing.healComposition).toHaveBeenCalledTimes(1);
+    const [healArgs] = healing.healComposition.mock.calls[0]!;
+    expect(healArgs.source).toEqual({
+      imageUrl: "https://cdn/try2.png",
+      score: 55,
+      reasons: ["текст на баннере"],
+    });
+    expect(healArgs.publicIdBase).toBe("v1_email");
+    expect(healArgs.brandName).toBe("Betnella");
+
+    // Финальная база — вылеченная версия, приёмка пройдена.
+    expect(fal.runBriaRemoveBg).toHaveBeenCalledWith("https://cdn/heal1.png");
+    const parent = parentDoneCall()!;
+    expect(parent.data.metadata.qa.qaPassed).toBe(true);
+    expect(parent.data.metadata.qa.chosenAttempt).toBe(1);
+    expect(parent.data.metadata.qa.healing).toEqual(
+      expect.objectContaining({ used: true, chosenAttempt: 0 }),
     );
+  });
+
+  it("B4: healing не помог → лучший исходный кандидат с warning (qaPassed=false), ассет DONE", async () => {
+    reviewer.reviewComposition
+      .mockResolvedValueOnce({ pass: false, score: 10, reasons: ["стиль"] })
+      .mockResolvedValueOnce({ pass: false, score: 55, reasons: ["монеты в центре"] })
+      .mockResolvedValueOnce({ pass: false, score: 30, reasons: ["анатомия"] });
+    fit.fitAndStoreAsset
+      .mockResolvedValueOnce({ ok: true, url: "https://cdn/try1.png", publicId: "t1" })
+      .mockResolvedValueOnce({ ok: true, url: "https://cdn/try2.png", publicId: "t2" })
+      .mockResolvedValueOnce({ ok: true, url: "https://cdn/try3.png", publicId: "t3" });
+    healing.healComposition.mockResolvedValue({
+      attempts: [
+        { imageUrl: "https://cdn/heal1.png", score: 40, pass: false, reasons: ["хуже"], tech: { passed: true, checks: [] } },
+        { imageUrl: "https://cdn/heal2.png", score: 20, pass: false, reasons: ["ещё хуже"], tech: { passed: true, checks: [] } },
+      ],
+      winner: { imageUrl: "https://cdn/try2.png", pass: false, score: 55, healingIndex: null },
+    });
+
+    await processAiReferenceAsset(OPTS);
+
+    expect(fal.runBriaRemoveBg).toHaveBeenCalledWith("https://cdn/try2.png");
+    const parent = parentDoneCall()!;
+    expect(parent.data.metadata.qa.qaPassed).toBe(false);
+    expect(parent.data.metadata.qa.chosenAttempt).toBe(1); // score 55 — лучший
+    expect(parent.data.metadata.qa.healing).toEqual(
+      expect.objectContaining({ used: false, chosenAttempt: null }),
+    );
+    expect((parent.data.metadata.qa.healing!.attempts as unknown[]).length).toBe(2);
   });
 
   it("env-откат A-7: AI_REF_IMAGE_MODEL=fal-ai/nano-banana-2 → путь banana (16:9)", async () => {
@@ -253,7 +310,7 @@ describe("processAiReferenceAsset", () => {
     }
   });
 
-  it("меньше 5 референсов → семейство FAILED с причиной, генерация не вызывается", async () => {
+  it("меньше 5 референсов → FAILED с причиной, legacy-строки снесены, генерация не вызывается", async () => {
     db.variationReference.findMany.mockResolvedValue(refRows(3));
     await processAiReferenceAsset(OPTS);
     expect(fal.runGptImage2Edit).not.toHaveBeenCalled();
@@ -263,12 +320,9 @@ describe("processAiReferenceAsset", () => {
     };
     expect(failCall.data.status).toBe("FAILED");
     expect(failCall.data.errorMessage).toContain("нужно >= 5");
-    // Производные прошлого запуска тоже падают — семейство целиком.
-    expect(db.bundleAsset.updateMany).toHaveBeenCalledWith(
-      expect.objectContaining({
-        where: { variantId: "v1", assetKey: { in: ["email_notext", "email_transparent"] } },
-      }),
-    );
+    expect(db.bundleAsset.deleteMany).toHaveBeenCalledWith({
+      where: { variantId: "v1", assetKey: { in: ["email_notext", "email_transparent"] } },
+    });
   });
 
   it("нет выбранной вариации → FAILED", async () => {
@@ -278,27 +332,25 @@ describe("processAiReferenceAsset", () => {
     expect(failCall.data.errorMessage).toContain("не выбрана вариация");
   });
 
-  it("сбой removeBg роняет только transparent-строку, семейство остаётся DONE", async () => {
+  it("сбой removeBg валит ассет: прозрачная версия — единственный результат", async () => {
     fal.runBriaRemoveBg.mockResolvedValue({ success: false, error: "HTTP 500" });
     await processAiReferenceAsset(OPTS);
-    const transparent = db.bundleAsset.upsert.mock.calls
-      .map((c) => c[0] as { where: { variantId_assetKey: { assetKey: string } }; create: { status: string; errorMessage: string | null } })
-      .find((c) => c.where.variantId_assetKey.assetKey === "email_transparent")!;
-    expect(transparent.create.status).toBe("FAILED");
-    expect(transparent.create.errorMessage).toContain("removeBg");
-    const parentDone = db.bundleAsset.update.mock.calls.some(
-      (c) => (c[0] as { data: { status?: string } }).data.status === "DONE",
-    );
-    expect(parentDone).toBe(true);
+    expect(parentDoneCall()).toBeUndefined();
+    const failCall = db.bundleAsset.update.mock.calls[0]![0] as {
+      data: { status: string; errorMessage: string };
+    };
+    expect(failCall.data.status).toBe("FAILED");
+    expect(failCall.data.errorMessage).toContain("removeBg");
   });
 
-  it("сбой текст-слоя деградирует родителя к базе без текста (overlayError в метаданных)", async () => {
-    renderTokenMock.mockRejectedValue(new Error("font missing"));
+  it("сбой аплоада прозрачной версии → FAILED", async () => {
+    cloud.uploadFromUrl.mockResolvedValue({ success: false, error: "cloudinary down" });
     await processAiReferenceAsset(OPTS);
-    const parentCall = db.bundleAsset.update.mock.calls.find(
-      (c) => (c[0] as { data: { status?: string } }).data.status === "DONE",
-    )![0] as { data: { imageUrl: string; metadata: { overlayError: string | null } } };
-    expect(parentCall.data.imageUrl).toBe("https://cdn/stored.png"); // notext-база
-    expect(parentCall.data.metadata.overlayError).toContain("font missing");
+    expect(parentDoneCall()).toBeUndefined();
+    const failCall = db.bundleAsset.update.mock.calls[0]![0] as {
+      data: { status: string; errorMessage: string };
+    };
+    expect(failCall.data.status).toBe("FAILED");
+    expect(failCall.data.errorMessage).toContain("transparent upload");
   });
 });
