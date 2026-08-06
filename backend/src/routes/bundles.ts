@@ -204,8 +204,15 @@ interface AssetPreviewMeta {
   textContrast: { white: number; dark: number } | null;
   retinaUrl: string | null;
   validator: { passed: boolean; attempts: number } | null;
-  /** Приёмка ai_reference (стадия B): бейдж «лучший из N» + причины (DI-R10). */
-  qa: { passed: boolean; attempts: number; reasons: string[] } | null;
+  /** Приёмка ai_reference (стадия B): бейдж «лучший из N» + причины (DI-R10).
+   *  healing — итог auto-коррекции (TASK safe-zone/auto-heal): сколько попыток
+   *  лечения было и стала ли вылеченная версия финальной. */
+  qa: {
+    passed: boolean;
+    attempts: number;
+    reasons: string[];
+    healing: { attempts: number; used: boolean } | null;
+  } | null;
 }
 
 function isPctBox(v: unknown): v is AssetPreviewMeta["safeZonePct"] {
@@ -243,21 +250,34 @@ export function assetPreviewMeta(raw: unknown): AssetPreviewMeta | null {
   };
 }
 
+/** reasons произвольной попытки из metadata.qa → проверенный string[]. */
+function attemptReasons(row: unknown): string[] {
+  if (!row || typeof row !== "object") return [];
+  const reasons = (row as Record<string, unknown>).reasons;
+  return Array.isArray(reasons) ? reasons.filter((r): r is string => typeof r === "string") : [];
+}
+
 /** metadata.qa пайплайна ai_reference → узкая проверенная проекция для CRM. */
 function projectQaMeta(raw: unknown): AssetPreviewMeta["qa"] {
   if (typeof raw !== "object" || raw === null) return null;
   const q = raw as Record<string, unknown>;
   if (typeof q.qaPassed !== "boolean") return null;
   const attempts = Array.isArray(q.attempts) ? q.attempts : [];
+  const healingRaw = q.healing as Record<string, unknown> | null | undefined;
+  const healingAttempts =
+    healingRaw && Array.isArray(healingRaw.attempts) ? healingRaw.attempts : null;
+  const healing = healingAttempts
+    ? { attempts: healingAttempts.length, used: healingRaw!.used === true }
+    : null;
+  // Причины — у фактического победителя: вылеченная попытка, если финал —
+  // результат лечения, иначе выбранная попытка генерации.
   const chosen =
-    typeof q.chosenAttempt === "number" ? (attempts[q.chosenAttempt] as unknown) : null;
-  const reasons =
-    chosen && typeof chosen === "object" && Array.isArray((chosen as Record<string, unknown>).reasons)
-      ? ((chosen as Record<string, unknown>).reasons as unknown[]).filter(
-          (r): r is string => typeof r === "string",
-        )
-      : [];
-  return { passed: q.qaPassed, attempts: attempts.length, reasons };
+    healing?.used && typeof healingRaw!.chosenAttempt === "number"
+      ? (healingAttempts![healingRaw!.chosenAttempt] as unknown)
+      : typeof q.chosenAttempt === "number"
+        ? (attempts[q.chosenAttempt] as unknown)
+        : null;
+  return { passed: q.qaPassed, attempts: attempts.length, reasons: attemptReasons(chosen), healing };
 }
 
 /** Bundle details for the Result screen (variants + assets + summary). */
@@ -306,10 +326,18 @@ bundlesRouter.get("/:id", async (req: Request, res: Response) => {
         assetTotal += 1;
         if (a.status === "DONE") assetDone += 1;
         if (a.approved) approvedCount += 1;
+        // Одно-ассетный ai_reference (TASK safe-zone/auto-heal): результат —
+        // прозрачная версия, подпись уточняется по metadata.transparent без
+        // правки конфига BundleType.
+        const isTransparent =
+          typeof a.metadata === "object" &&
+          a.metadata !== null &&
+          (a.metadata as Record<string, unknown>).transparent === true;
+        const baseLabel = labelOf.get(a.assetKey) ?? a.assetKey;
         return {
           id: a.id,
           assetKey: a.assetKey,
-          label: labelOf.get(a.assetKey) ?? a.assetKey,
+          label: isTransparent ? `${baseLabel} — прозрачный фон` : baseLabel,
           width: a.width,
           height: a.height,
           imageUrl: a.imageUrl,

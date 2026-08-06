@@ -748,3 +748,91 @@ adminRouter.delete("/prompt-presets/:id", async (req: Request, res: Response) =>
     res.status(404).json({ error: "not_found" });
   }
 });
+
+// ============================================================
+// Логи генераций ai_reference (TASK safe-zone/auto-heal, C2): read-only лента
+// для админа — попытки генерации, приёмка и auto-healing из BundleAsset.metadata.qa.
+// Отдельной таблицы нет: metadata и есть журнал, эндпоинт лишь проецирует его.
+// ============================================================
+
+const aiRefLogsSchema = z.object({
+  limit: z.coerce.number().int().min(1).max(100).default(30),
+  offset: z.coerce.number().int().min(0).default(0),
+});
+
+/** Попытка из metadata.qa → узкая строка лога (без tech-простыни). */
+function aiRefLogAttempt(row: unknown): { score: number; pass: boolean; reasons: string[] } {
+  const a = (row ?? {}) as Record<string, unknown>;
+  return {
+    score: typeof a.score === "number" ? a.score : 0,
+    pass: a.pass === true,
+    reasons: Array.isArray(a.reasons)
+      ? a.reasons.filter((r): r is string => typeof r === "string")
+      : [],
+  };
+}
+
+adminRouter.get("/ai-ref-logs", async (req: Request, res: Response) => {
+  const parsed = aiRefLogsSchema.safeParse(req.query);
+  if (!parsed.success) {
+    res.status(400).json({ error: "invalid_query" });
+    return;
+  }
+  const { limit, offset } = parsed.data;
+  const where = {
+    metadata: { path: ["specKey"], equals: "ai_reference" },
+  } satisfies Prisma.BundleAssetWhereInput;
+  const [rows, total] = await Promise.all([
+    prisma.bundleAsset.findMany({
+      where,
+      orderBy: { updatedAt: "desc" },
+      take: limit,
+      skip: offset,
+      select: {
+        id: true,
+        assetKey: true,
+        status: true,
+        imageUrl: true,
+        errorMessage: true,
+        metadata: true,
+        updatedAt: true,
+        variant: {
+          select: {
+            displayName: true,
+            bundle: { select: { id: true, name: true } },
+          },
+        },
+      },
+    }),
+    prisma.bundleAsset.count({ where }),
+  ]);
+
+  const logs = rows.map((r) => {
+    const meta = (r.metadata ?? {}) as Record<string, unknown>;
+    const qa = (meta.qa ?? {}) as Record<string, unknown>;
+    const healing = qa.healing as Record<string, unknown> | undefined;
+    return {
+      id: r.id,
+      assetKey: r.assetKey,
+      status: r.status.toLowerCase(),
+      imageUrl: r.imageUrl,
+      errorMessage: r.errorMessage,
+      updatedAt: r.updatedAt,
+      bundleId: r.variant.bundle.id,
+      bundleName: r.variant.bundle.name,
+      brandName: r.variant.displayName,
+      presetTitle: typeof meta.presetTitle === "string" ? meta.presetTitle : null,
+      qaPassed: qa.qaPassed === true,
+      chosenAttempt: typeof qa.chosenAttempt === "number" ? qa.chosenAttempt : null,
+      attempts: Array.isArray(qa.attempts) ? qa.attempts.map(aiRefLogAttempt) : [],
+      healing: healing
+        ? {
+            used: healing.used === true,
+            chosenAttempt: typeof healing.chosenAttempt === "number" ? healing.chosenAttempt : null,
+            attempts: Array.isArray(healing.attempts) ? healing.attempts.map(aiRefLogAttempt) : [],
+          }
+        : null,
+    };
+  });
+  res.json({ logs, total, hasMore: offset + rows.length < total });
+});
