@@ -56,8 +56,15 @@ export interface BundleAssetMeta {
   textContrast: { white: number; dark: number } | null;
   retinaUrl: string | null;
   validator: { passed: boolean; attempts: number } | null;
-  /** Приёмка ai_reference (DI-R10): бейдж «лучший из N» + причины отклонения. */
-  qa: { passed: boolean; attempts: number; reasons: string[] } | null;
+  /** Приёмка ai_reference (DI-R10): бейдж «лучший из N» + причины отклонения.
+   *  healing — итог AI-автокоррекции (TASK safe-zone/auto-heal): сколько
+   *  попыток лечения было и стала ли вылеченная версия финальной. */
+  qa: {
+    passed: boolean;
+    attempts: number;
+    reasons: string[];
+    healing: { attempts: number; used: boolean } | null;
+  } | null;
 }
 
 export interface BundleDetails {

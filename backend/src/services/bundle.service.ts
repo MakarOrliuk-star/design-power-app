@@ -17,9 +17,9 @@ export interface BundleTypeAsset {
   // "ai" (default): single multi-reference generation + canvas fit.
   // "layered" (D10 v2, email): background layer + transparent person/item
   // cutouts composited into their zone boxes by pixels — hard guarantee.
-  // "ai_reference" (TASK ai-reference): новая композиция целиком из 5–15
-  // референс-баннеров вариации (nano-banana-2 /edit) + приёмка VLM; выдаёт
-  // семейство из трёх ассетов (с текстом / _notext / _transparent).
+  // "ai_reference" (TASK ai-reference + safe-zone/auto-heal): новая композиция
+  // целиком из 5–15 референс-баннеров вариации (gpt-image-2 /edit) + приёмка
+  // VLM + auto-healing; выдаёт ОДИН ассет — прозрачную версию без текста.
   composeMode?: "ai" | "layered" | "ai_reference";
   // Versioned geometry (TASK email-composition, Phase 1): key into LayoutSpec;
   // the composition engine resolves the latest active version at render time.

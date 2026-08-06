@@ -313,14 +313,21 @@ function formatDateTime(iso: string | null): string {
                 </div>
               </div>
 
-              <!-- Приёмка ai_reference (DI-R10): ни одна из 3 попыток не
-                   прошла QA — показан лучший по score, решение за человеком. -->
+              <!-- Приёмка ai_reference (DI-R10 + TASK safe-zone/auto-heal, B4):
+                   ни генерация, ни AI-коррекция не прошли QA — показан лучший
+                   по score, решение за человеком. -->
               <p
                 v-if="a.status === 'done' && a.meta?.qa && !a.meta.qa.passed"
                 class="asset__qa"
                 :title="a.meta.qa.reasons.join('\n') || 'Причины не указаны'"
               >
-                ⚠ Приёмка не пройдена — лучший из {{ a.meta.qa.attempts }}
+                <template v-if="a.meta.qa.healing">
+                  ⚠ AI-коррекция не помогла ({{ a.meta.qa.healing.attempts }} поп.) — выбран
+                  лучший вариант; картинку можно использовать, если остальное устраивает
+                </template>
+                <template v-else>
+                  ⚠ Приёмка не пройдена — лучший из {{ a.meta.qa.attempts }}
+                </template>
                 <span v-if="a.meta.qa.reasons.length" class="asset__qa-reasons">
                   {{ a.meta.qa.reasons.join(" · ") }}
                 </span>

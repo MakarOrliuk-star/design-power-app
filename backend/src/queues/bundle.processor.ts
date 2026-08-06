@@ -920,9 +920,10 @@ export async function processRenderAssetJob(
     return;
   }
 
-  // Производный ключ семейства ai_reference ("email_notext"/"email_transparent"):
-  // Regenerate на нём перегенерирует РОДИТЕЛЯ — семейство обновляется целиком
-  // (одна композиция → три ассета, DI-R11).
+  // Legacy: производный ключ старой трёх-ассетной схемы ai_reference
+  // ("email_notext"/"email_transparent") из бандлов до TASK safe-zone/auto-heal.
+  // Regenerate на нём перегенерирует РОДИТЕЛЯ; новый пайплайн выдаёт один
+  // ассет и сам удаляет производные строки.
   const parentKey = parentOfDerivedKey(asset.assetKey);
   const parentConfig = parentKey ? typeAssets.find((a) => a.key === parentKey) : undefined;
   if (parentKey && parentConfig?.composeMode === "ai_reference") {

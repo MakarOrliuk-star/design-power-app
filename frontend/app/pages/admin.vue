@@ -1145,6 +1145,56 @@ function fmtLogDate(iso: string): string {
   return new Date(iso).toLocaleString("ru-RU");
 }
 
+// ---- Логи генераций ai_reference (TASK safe-zone/auto-heal, C2) ----
+// Read-only лента из BundleAsset.metadata.qa: попытки генерации, вердикты
+// приёмщика и AI-автокоррекция. Отдельной таблицы в БД нет — эндпоинт
+// /api/admin/ai-ref-logs проецирует metadata ассетов.
+interface AiRefLogAttempt {
+  score: number;
+  pass: boolean;
+  reasons: string[];
+}
+interface AiRefLogEntry {
+  id: string;
+  assetKey: string;
+  status: string;
+  imageUrl: string | null;
+  errorMessage: string | null;
+  updatedAt: string;
+  bundleId: string;
+  bundleName: string;
+  brandName: string;
+  presetTitle: string | null;
+  qaPassed: boolean;
+  chosenAttempt: number | null;
+  attempts: AiRefLogAttempt[];
+  healing: { used: boolean; chosenAttempt: number | null; attempts: AiRefLogAttempt[] } | null;
+}
+
+const aiRefLogs = ref<AiRefLogEntry[]>([]);
+const aiRefLogsTotal = ref(0);
+const aiRefLogsHasMore = ref(false);
+const aiRefLogsLoading = ref(false);
+const AI_REF_LOGS_PAGE = 30;
+
+async function loadAiRefLogs(reset = true) {
+  aiRefLogsLoading.value = true;
+  try {
+    const offset = reset ? 0 : aiRefLogs.value.length;
+    const res = await api<{ logs: AiRefLogEntry[]; total: number; hasMore: boolean }>(
+      "/api/admin/ai-ref-logs",
+      { query: { limit: AI_REF_LOGS_PAGE, offset } },
+    );
+    aiRefLogs.value = reset ? res.logs : [...aiRefLogs.value, ...res.logs];
+    aiRefLogsTotal.value = res.total;
+    aiRefLogsHasMore.value = res.hasMore;
+  } catch {
+    error.value = "Не удалось загрузить логи генераций AI Reference.";
+  } finally {
+    aiRefLogsLoading.value = false;
+  }
+}
+
 onMounted(() => {
   // MANAGER only reaches the Tournaments section — the ADMIN-only loads would
   // just 403 on /api/admin, so they are skipped entirely.
@@ -1157,6 +1207,7 @@ onMounted(() => {
     void loadDecor();
     void loadPatternSpecs();
     void loadBrandLogs();
+    void loadAiRefLogs();
   }
   void loadTournaments();
 });
@@ -1446,6 +1497,85 @@ onMounted(() => {
         @click="loadBrandLogs(false)"
       >
         {{ brandLogsLoading ? "Загрузка…" : "Показать ещё" }}
+      </button>
+    </section>
+
+    <!-- Логи генераций ai_reference (TASK safe-zone/auto-heal, C2) -->
+    <section v-if="auth.isAdmin" class="panel">
+      <h2>Логи генераций AI Reference</h2>
+      <p class="muted small">
+        Email-композиции (composeMode ai_reference): попытки генерации, score
+        приёмщика, причины отклонения и AI-автокоррекция. Данные из metadata
+        ассетов, обновляются при каждой генерации.
+      </p>
+
+      <div class="log-filter">
+        <button class="btn-primary" :disabled="aiRefLogsLoading" @click="loadAiRefLogs()">
+          {{ aiRefLogsLoading ? "Загрузка…" : "Обновить" }}
+        </button>
+        <span class="muted small">Всего записей: {{ aiRefLogsTotal }}</span>
+      </div>
+
+      <table class="table">
+        <thead>
+          <tr>
+            <th>Когда</th><th>Бандл</th><th>Бренд</th><th>Вариация</th>
+            <th>Итог</th><th>Попытки генерации</th><th>AI-коррекция</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr v-for="l in aiRefLogs" :key="l.id">
+            <td class="log-when">{{ fmtLogDate(l.updatedAt) }}</td>
+            <td>{{ l.bundleName }}</td>
+            <td>{{ l.brandName }}</td>
+            <td>{{ l.presetTitle || "—" }}</td>
+            <td>
+              <span v-if="l.status === 'failed'" class="log-old">✗ {{ l.errorMessage || "ошибка" }}</span>
+              <span v-else-if="l.qaPassed" class="log-new">✓ приёмка пройдена</span>
+              <span v-else class="log-old">⚠ warning — лучший из доступных</span>
+            </td>
+            <td class="log-cell">
+              <div
+                v-for="(a, i) in l.attempts"
+                :key="i"
+                class="log-diff"
+                :title="a.reasons.join('\n')"
+              >
+                {{ i + 1 }}. score {{ a.score }} {{ a.pass ? "✓" : "✗" }}
+                <b v-if="!l.healing?.used && i === l.chosenAttempt">← выбрана</b>
+                <span v-if="a.reasons.length" class="muted">{{ a.reasons.join(" · ") }}</span>
+              </div>
+              <span v-if="!l.attempts.length" class="muted">—</span>
+            </td>
+            <td class="log-cell">
+              <template v-if="l.healing">
+                <div
+                  v-for="(a, i) in l.healing.attempts"
+                  :key="i"
+                  class="log-diff"
+                  :title="a.reasons.join('\n')"
+                >
+                  {{ i + 1 }}. score {{ a.score }} {{ a.pass ? "✓" : "✗" }}
+                  <b v-if="l.healing.used && i === l.healing.chosenAttempt">← финал</b>
+                  <span v-if="a.reasons.length" class="muted">{{ a.reasons.join(" · ") }}</span>
+                </div>
+                <span v-if="!l.healing.used" class="muted">не помогла — оставлен лучший исходный</span>
+              </template>
+              <span v-else class="muted">—</span>
+            </td>
+          </tr>
+          <tr v-if="!aiRefLogs.length && !aiRefLogsLoading">
+            <td colspan="7" class="muted">Генераций ai_reference пока нет.</td>
+          </tr>
+        </tbody>
+      </table>
+      <button
+        v-if="aiRefLogsHasMore"
+        class="btn-primary"
+        :disabled="aiRefLogsLoading"
+        @click="loadAiRefLogs(false)"
+      >
+        {{ aiRefLogsLoading ? "Загрузка…" : "Показать ещё" }}
       </button>
     </section>
 
