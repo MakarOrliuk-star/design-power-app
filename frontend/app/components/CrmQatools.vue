@@ -48,16 +48,117 @@
     </div>
 
     <div v-if="activeTab === 'single'" class="auditor-card">
-      <div class="inputs-grid">
-        <div class="input-group">
-          <label>📅 Ссылка на Scheduled кампанию</label>
-          <input type="text" v-model="singleMainUrl" placeholder="https://drive.smartico.ai/2828#/j_audience_scheduled/" class="crm-input" :disabled="isLoading" v-tooltip="'Вставьте прямую ссылку на Scheduled кампанию из Smartico'" />
+      <div style="margin-bottom: 16px;">
+        <h4 style="margin-top: 0; margin-bottom: 12px; color: #1e293b;" class="dark:text-slate-100">🏗️ Конструктор аудита</h4>
+        <div style="display: flex; flex-direction: column; gap: 12px;">
+          
+          <!-- Динамический список задач -->
+          <div v-for="(task, index) in auditTasks" :key="index" style="display: flex; gap: 12px; align-items: flex-start;">
+            
+            <div style="width: 180px;">
+              <select v-model="task.type" class="crm-input" :disabled="isLoading">
+                <option value="campaign">🗺️ Кампания</option>
+                <option value="email">📧 Email</option>
+                <option value="push">🔔 Push / PWA</option>
+                <option value="sms">📱 SMS</option>
+                <option value="inbox">📥 Inbox</option>
+                <option value="popup">🎯 Pop-up</option>
+                <option value="label">🔤 Лейбл (Макрос)</option>
+              </select>
+            </div>
+
+            <div style="flex: 1;">
+              <input 
+                type="text" 
+                v-model="task.value" 
+                placeholder="Вставьте полную ссылку из Smartico..." 
+                class="crm-input" 
+                :disabled="isLoading" 
+              />
+            </div>
+            
+            <button 
+              @click="removeTask(index)" 
+              class="crm-btn crm-btn-danger" 
+              style="padding: 10px 14px; border-radius: 8px;"
+              :disabled="isLoading || auditTasks.length === 1"
+              v-tooltip="'Удалить элемент из проверки'"
+            >
+              ✕
+            </button>
+          </div>
         </div>
-        <div class="input-group">
-          <label>🎯 Ссылка на Journey кампанию</label>
-          <input type="text" v-model="singlePopUrl" placeholder="https://drive.smartico.ai/2828#/j_audience_head/" class="crm-input" :disabled="isLoading" v-tooltip="'Вставьте прямую ссылку на Journey кампанию из Smartico'" />
+
+        <!-- Кнопка добавления новой задачи -->
+        <button 
+          @click="addTask" 
+          class="crm-btn mt-4 dark:bg-slate-800 dark:border-slate-600 dark:text-blue-400" 
+          style="background: #f1f5f9; color: #3b82f6; border: 1px dashed #93c5fd; padding: 8px 16px; width: 100%; text-align: center; border-radius: 8px;"
+          :disabled="isLoading"
+        >
+          + Добавить элемент для проверки
+        </button>
+      </div>
+
+      <!-- НОВЫЙ БЛОК: Выбор шаблона -->
+      <div class="input-group mt-4">
+        <label>🛠️ Сверка с ожидаемыми условиями (Шаблон)</label>
+        <select v-model="templateChoice" class="crm-input" :disabled="isLoading" v-tooltip="'Выберите шаблон для автоматической сверки макросов'">
+          <option value="Без сверки">Без сверки (Только парсинг)</option>
+          <option value="Choose your Bonus">Choose your Bonus (Выбор из двух)</option>
+          <option value="Deposit bonus ladder">Deposit bonus ladder (Ступенчатый)</option>
+          <option value="Dep Promo Code x3">Dep Promo Code x3 (С промокодами)</option>
+          <option value="Bonus ladder">Bonus ladder (Только фриспины)</option>
+          <option value="Mid Month React">Mid Month React (Колесо + Бонус)</option>
+          <option value="Bets Mission">Bets Mission (Ставки на фриспины)</option>
+          <option value="Mega React">Mega React (Колесо + Реактивация)</option>
+        </select>
+      </div>
+
+      <!-- НОВЫЙ БЛОК: Текст оффера и Кнопка превью -->
+      <div class="input-group mt-4" v-if="templateChoice !== 'Без сверки'">
+        <label>📋 Данные из Jira / Таблицы для сверки</label>
+        <textarea 
+          v-model="rawTableData" 
+          rows="5" 
+          class="crm-textarea" 
+          placeholder="Вставьте скопированный текст условий оффера сюда..." 
+          :disabled="isLoading" 
+          v-tooltip="'Текст, который парсер превратит в ожидаемые значения для сверки с макросами'"
+        ></textarea>
+        
+      <!-- НОВЫЙ БЛОК: Выбор React / Reten (появляется только для Mega React) -->
+        <div class="input-group mt-4" v-if="templateChoice === 'Mega React'" style="background: #f8fafc; padding: 12px; border-radius: 8px; border: 1px solid #cbd5e1;">
+        <label style="color: #334155; margin-bottom: 8px;">🔍 Какую часть оффера сейчас проверяем?</label>
+        <div style="display: flex; gap: 20px;">
+          <label style="cursor: pointer; display: flex; align-items: center; gap: 6px; font-weight: bold; color: #0f172a;">
+            <input type="radio" v-model="megaType" value="react" name="megaType" style="transform: scale(1.2); accent-color: #3b82f6;"> Mega React (Колесо + Бонус)
+          </label>
+          <label style="cursor: pointer; display: flex; align-items: center; gap: 6px; font-weight: bold; color: #0f172a;">
+            <input type="radio" v-model="megaType" value="reten" name="megaType" style="transform: scale(1.2); accent-color: #10b981;"> Mega Reten (Лесенка)
+          </label>
         </div>
       </div>
+        
+        <button 
+          @click="testTemplateParser" 
+          class="crm-btn crm-btn-primary mt-2" 
+          :disabled="!rawTableData" 
+          style="padding: 6px 12px; font-size: 13px; width: auto; border-radius: 6px;"
+        >
+          👀 Проверить распознавание
+        </button>
+
+        <!-- Блок вывода результата (появляется только после нажатия) -->
+        <div 
+          v-if="templatePreviewData" 
+          class="mt-3" 
+          style="background: #1e293b; color: #a7f3d0; padding: 12px; border-radius: 8px; font-family: monospace; font-size: 13px; white-space: pre-wrap; overflow-x: auto; max-height: 250px; border: 1px solid #334155;"
+        >
+          {{ templatePreviewData }}
+        </div>
+      </div>
+
       <div class="settings-row mt-4" style="display: inline-flex; align-items: center; height: 52px; box-sizing: border-box; padding-right: 16px;">
         <label class="checkbox-label" style="margin: 0;" v-tooltip="'Активируйте для сбора реальной статистики прохождений по узлам Flow Map'">
           <input type="checkbox" v-model="useStats" :disabled="isLoading" />
@@ -72,7 +173,7 @@
           </div>
         </div>
       </div>
-      <button @click="triggerSingleAudit" class="crm-btn crm-btn-success run-btn mt-5" :disabled="isLoading || (!singleMainUrl && !singlePopUrl)">
+      <button @click="triggerSingleAudit" class="crm-btn crm-btn-success run-btn mt-5" :disabled="isLoading || auditTasks.filter(t => t.value.trim() !== '').length === 0">
         {{ isLoading ? 'Processing...' : '🚀 Запустить одиночную проверку' }}
       </button>
     </div>
@@ -456,8 +557,38 @@ const activeSubTab = ref('search');
 const savedTokens = ref({ env2: '', env5: '', env7: '', BO: '' });
 const tokenInputs = ref({ env2: '', env5: '', env7: '', BO: '' });
 
-const singleMainUrl = ref('');
-const singlePopUrl = ref('');
+// Состояние конструктора задач
+const auditTasks = ref([
+  { type: 'campaign', value: '' }
+]);
+
+function addTask() {
+  auditTasks.value.push({ type: 'campaign', value: '' });
+}
+
+function removeTask(index) {
+  if (auditTasks.value.length > 1) {
+    auditTasks.value.splice(index, 1);
+  }
+}
+
+function getTaskPlaceholder(type) {
+  const placeholders = {
+    'campaign': 'https://drive.smartico...#/j_audience_scheduled/1234',
+    'email': 'ID письма или полная ссылка',
+    'push': 'ID пуша или полная ссылка',
+    'sms': 'ID SMS или полная ссылка',
+    'inbox': 'ID Inbox или полная ссылка',
+    'popup': 'ID Pop-up или полная ссылка',
+    'label': 'Имя лейбла (например, crm2_brand_link)'
+  };
+  return placeholders[type] || 'Введите данные...';
+}
+
+const templateChoice = ref('Без сверки');
+const rawTableData = ref('');     
+const megaType = ref('react');
+const templatePreviewData = ref('');
 const massUrlsInput = ref('');
 const useStats = ref(false);
 const daysBack = ref(14);
@@ -600,37 +731,99 @@ watch(logs, async () => {
 // ==========================================
 // 🚀 ОСНОВНОЙ ПАЙПЛАЙН АУДИТА (СТРИМИНГ)
 // ==========================================
-async function executeAuditPipeline(urlList) {
+
+async function testTemplateParser() {
+  templatePreviewData.value = '⏳ Распознаю данные...';
+  try {
+    // Важно: здесь мы стучимся напрямую в Python (предполагаем, что он на порту 4000)
+    // Если твой python-роутер имеет префикс, возможно нужно будет указать /audit/preview
+    // Изменили /preview на /audit/preview
+    const response = await fetch('http://127.0.0.1:8000/api/single-report/preview', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        template_choice: templateChoice.value,
+        raw_table_data: rawTableData.value
+      })
+    });
+    
+    if (!response.ok) {
+      throw new Error(`HTTP Error: ${response.status}`);
+    }
+    
+    const data = await response.json();
+    
+    // JSON.stringify с параметром "2" красиво отформатирует ответ с отступами!
+    templatePreviewData.value = JSON.stringify(data, null, 2);
+  } catch (e) {
+    templatePreviewData.value = '❌ Ошибка при парсинге: ' + e.message;
+  }
+}
+
+async function executeAuditPipeline(payloadData) {
   isLoading.value = true;
   progress.value = 0;
   logs.value = [];
   finalHtml.value = '';
   tableResults.value = null;
 
-  const targetEnv = extractEnvFromUrl(urlList[0]);
-  const activeToken = savedTokens.value[targetEnv];
+  // Извлекаем все требуемые окружения из переданных ссылок
+  const requiredEnvs = new Set();
+  payloadData.forEach(item => {
+    const val = typeof item === 'object' ? item.value : item;
+    if (val) requiredEnvs.add(extractEnvFromUrl(val));
+  });
 
-  if (!activeToken) {
-    logs.value.push(`<span class="log-err">>> ❌ Missing authentication keys for targeted framework space ${targetEnv.toUpperCase()}</span>`);
+  // Проверяем наличие токенов для всех нужных окружений
+  let missingEnv = null;
+  for (const env of requiredEnvs) {
+    if (!savedTokens.value[env]) {
+      missingEnv = env;
+      break;
+    }
+  }
+
+  if (missingEnv) {
+    logs.value.push(`<span class="log-err">>> ❌ Ошибка: Нет сохраненного токена для окружения ${missingEnv.toUpperCase()}</span>`);
     isLoading.value = false;
     return;
   }
 
-  // 🚨 Динамически выбираем роут нашего Node.js прокси
-  const endpoint = activeTab.value === 'single' ? '/api/qa-tools/single-audit' : '/api/qa-tools/mass-audit';
+  // Fallback для старых эндпоинтов, берем токен от первой ссылки
+  const firstItemValue = activeTab.value === 'single' ? payloadData[0].value : payloadData[0];
+  const activeToken = savedTokens.value[extractEnvFromUrl(firstItemValue)];
+
+  const endpoint = activeTab.value === 'single' 
+    ? 'http://127.0.0.1:8000/api/single-report/generate' 
+    : '/api/qa-tools/mass-audit';
+
+  // Отправляем объект ВСЕХ токенов (tokens) + старый token для совместимости
+  const requestBody = activeTab.value === 'single'
+    ? {
+        tasks: payloadData,
+        token: activeToken,
+        tokens: savedTokens.value, // 🟢 ПЕРЕДАЕМ ВСЕ ТОКЕНЫ СРАЗУ
+        template_choice: templateChoice.value,
+        raw_table_data: rawTableData.value,
+        mega_type: megaType.value,
+        use_stats: useStats.value,
+        days_back: daysBack.value
+      }
+    : {
+        urls: payloadData,
+        main_url: payloadData[0], 
+        pop_url: payloadData[1] || '', 
+        token: activeToken,
+        tokens: savedTokens.value, // 🟢 ПЕРЕДАЕМ ВСЕ ТОКЕНЫ СРАЗУ
+        use_stats: useStats.value,
+        days_back: daysBack.value
+      };
 
   try {
     const response = await fetch(endpoint, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        urls: urlList, // Для массы
-        main_url: urlList[0], // Для одиночного
-        pop_url: urlList[1] || '', // Для одиночного
-        token: activeToken,
-        use_stats: useStats.value,
-        days_back: daysBack.value
-      })
+      body: JSON.stringify(requestBody)
     });
 
     if (!response.ok) throw new Error(`Gateway response runtime assertion failure: HTTP ${response.status}`);
@@ -658,7 +851,6 @@ async function executeAuditPipeline(urlList) {
               logs.value.push(`<span class="log-time">>></span> ${parsed.msg}`);
               if (parsed.percent) progress.value = parsed.percent;
             } else if (parsed.type === 'done') {
-              // 🚨 Теперь HTML отдается сразу, без второго запроса на скачивание!
               finalHtml.value = parsed.html_content;
               if (parsed.filename) reportFilename.value = parsed.filename;
               progress.value = 100;
@@ -683,10 +875,13 @@ async function executeAuditPipeline(urlList) {
 }
 
 function triggerSingleAudit() {
-  const targets = [];
-  if (singleMainUrl.value.trim()) targets.push(singleMainUrl.value.trim());
-  if (singlePopUrl.value.trim()) targets.push(singlePopUrl.value.trim());
-  if (targets.length) executeAuditPipeline(targets);
+  // Фильтруем пустые поля перед отправкой
+  const validTasks = auditTasks.value.filter(t => t.value.trim() !== '');
+  if (validTasks.length === 0) {
+    alert("Добавьте хотя бы один элемент для проверки!");
+    return;
+  }
+  executeAuditPipeline(validTasks);
 }
 
 function triggerMassAudit() {

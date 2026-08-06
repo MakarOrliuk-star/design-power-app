@@ -117,8 +117,16 @@ def run_standalone_audit(url, token, use_live_view=True, days_back=14, log_cb=No
             })
             logs_url = f"https://{boapi_host}/api/campaign_communication_log?{params}"
             
+            # 🚨 ФИКС WAF: Добавляем User-Agent, чтобы API Gateway не блокировал запросы как от бота
+            base_req_headers = {
+                "accept": "application/json", 
+                "authorization": token, 
+                "active_label_id": brand_id,
+                "user-agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36"
+            }
+            
             try:
-                res_logs = requests.get(logs_url, headers={"accept": "application/json", "authorization": token, "active_label_id": brand_id}, timeout=20)
+                res_logs = requests.get(logs_url, headers=base_req_headers, timeout=20)
                 if res_logs.ok:
                     logs_data = res_logs.json()
                     items = logs_data.get("result", logs_data) if isinstance(logs_data, dict) else logs_data
@@ -189,8 +197,12 @@ def run_standalone_audit(url, token, use_live_view=True, days_back=14, log_cb=No
                                 "params": {"resource_id": res_id, "engagement_uid": eng_uid, "secret": secret, "type": r_type, "engagement_id": eng_id, "sent_brand_id": sent_brand_id}
                             }
                             body_url = f"https://{boapi_host}/api/private-api?method=getResourceBody&lbl={brand_id}"
+                            
+                            post_headers = base_req_headers.copy()
+                            post_headers["content-type"] = "application/json"
+                            
                             try:
-                                body_res = requests.post(body_url, json=payload, headers={"accept": "application/json", "authorization": token, "active_label_id": brand_id, "content-type": "application/json"}, timeout=20)
+                                body_res = requests.post(body_url, json=payload, headers=post_headers, timeout=20)
                                 if body_res.ok:
                                     body_data = body_res.json()
                                     if act_id == 50:
@@ -492,6 +504,11 @@ async def generate_mass_report_stream(request: MassReportRequest):
                         '''
                     except Exception as e:
                         stream_logger(f"❌ Ошибка при обработке {current_url}: {e}", base_percent)
+                        
+                    # 🚨 ФИКС RATE LIMIT: Обязательная задержка между проверками кампаний, 
+                    # чтобы шлюз CRM не сбрасывал соединение из-за большого числа запросов.
+                    import time
+                    time.sleep(2.5)
                 
                 combined_html += '</div>'
                 
