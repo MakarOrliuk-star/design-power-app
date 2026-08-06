@@ -7,6 +7,8 @@ const db = vi.hoisted(() => ({
   bundleAsset: { findUnique: vi.fn(), findMany: vi.fn(), update: vi.fn(), updateMany: vi.fn() },
   brand: { findUnique: vi.fn() },
   promptTemplate: { findFirst: vi.fn() },
+  layoutSpec: { findFirst: vi.fn(), findUnique: vi.fn() },
+  normalizedLayer: { findUnique: vi.fn() },
 }));
 const fal = vi.hoisted(() => ({
   runPersonFal: vi.fn(),
@@ -16,7 +18,16 @@ const fal = vi.hoisted(() => ({
 const cloud = vi.hoisted(() => ({
   uploadFromUrl: vi.fn(),
   uploadFromUrlTransformed: vi.fn(),
+  uploadBuffer: vi.fn(),
   composeLayersUrl: vi.fn(() => "https://res.cloudinary/composed.png"),
+  // Pure URL math — kept real so the emitted @1x delivery URL is asserted for
+  // what it actually is, not for a stub.
+  withTransform: vi.fn((url: string, transform: string) => {
+    const marker = "/image/upload/";
+    const at = url.indexOf(marker);
+    if (at < 0) return url;
+    return `${url.slice(0, at + marker.length)}${transform}/${url.slice(at + marker.length)}`;
+  }),
   withRetry: vi.fn((fn: () => unknown) => fn()),
 }));
 const imageSize = vi.hoisted(() => ({
@@ -25,17 +36,33 @@ const imageSize = vi.hoisted(() => ({
 }));
 const queue = vi.hoisted(() => ({ addBulk: vi.fn() }));
 const recompute = vi.hoisted(() => vi.fn());
+const layerCache = vi.hoisted(() => ({ getOrCreateNormalizedLayer: vi.fn(), fetchBuffer: vi.fn() }));
+const engine = vi.hoisted(() => ({ composeAsset: vi.fn() }));
+const split = vi.hoisted(() => ({ splitLayerPieces: vi.fn() }));
+const validator = vi.hoisted(() => ({
+  validateComposedAsset: vi.fn(),
+  personLayerSanity: vi.fn(),
+}));
+// Задание 3, Фаза 6: scene-пайплайн живёт своим модулем и тестируется своим
+// файлом; здесь проверяется только МАРШРУТИЗАЦИЯ по флагу спеки.
+const scenePipeline = vi.hoisted(() => ({ renderSceneAsset: vi.fn() }));
 
 vi.mock("../src/lib/prisma.js", () => ({ prisma: db }));
 vi.mock("../src/lib/fal.js", () => fal);
 vi.mock("../src/lib/cloudinary.js", () => cloud);
 vi.mock("../src/lib/imageSize.js", () => imageSize);
+vi.mock("../src/services/layerCache.js", () => layerCache);
+vi.mock("../src/lib/composeEngine.js", () => engine);
+vi.mock("../src/lib/layerSplit.js", () => split);
+vi.mock("../src/lib/assetValidator.js", () => validator);
 vi.mock("../src/queues/index.js", () => ({ getBundleQueue: () => queue }));
 vi.mock("../src/queues/person.processor.js", () => ({
   buildPersonPromptMemoized: vi.fn(async (_b: string, brand: string, text: string) => `PP(${brand}): ${text}`),
 }));
 vi.mock("../src/services/bundle.service.js", () => ({ recomputeBundleStatus: recompute }));
+vi.mock("../src/services/scenePipeline.js", () => scenePipeline);
 
+import { EMAIL_HERO_V1, EMAIL_HERO_V2 } from "../src/services/layoutSpec.js";
 import {
   backgroundPrompt,
   buildBundleItemPrompt,
@@ -60,6 +87,22 @@ beforeEach(() => {
   imageSize.probeImageSize.mockReset();
   queue.addBulk.mockReset();
   recompute.mockReset();
+  layerCache.getOrCreateNormalizedLayer.mockReset();
+  layerCache.fetchBuffer.mockReset();
+  engine.composeAsset.mockReset();
+  split.splitLayerPieces.mockReset();
+  // Default: the item layer holds two separate props (hero + one prop).
+  split.splitLayerPieces.mockResolvedValue([
+    { png: Buffer.from("piece0"), width: 300, height: 400, area: 90000 },
+    { png: Buffer.from("piece1"), width: 120, height: 120, area: 12000 },
+  ]);
+  cloud.uploadBuffer.mockReset();
+  validator.validateComposedAsset.mockReset();
+  validator.personLayerSanity.mockReset();
+  // Defaults: sane layer, passing validation (tests override per case).
+  validator.personLayerSanity.mockReturnValue({ ok: true, reason: "" });
+  validator.validateComposedAsset.mockResolvedValue({ passed: true, checks: [], failedKeys: [] });
+  scenePipeline.renderSceneAsset.mockReset();
 });
 
 /**
@@ -223,15 +266,17 @@ describe("processPrepareVariantJob (stage A)", () => {
         // No layered assets in the type → no cutouts are produced.
         personCutoutId: null,
         itemCutoutId: null,
+        personLayerHash: null,
+        itemLayerHash: null,
       },
     });
-    expect(fal.runBriaRemoveBg).not.toHaveBeenCalled();
+    expect(layerCache.getOrCreateNormalizedLayer).not.toHaveBeenCalled();
     const jobs = queue.addBulk.mock.calls[0]![0] as Array<{ name: string; data: { assetId: string } }>;
     expect(jobs.map((j) => j.data.assetId)).toEqual(["a1", "a2", "a3"]);
     expect(jobs.every((j) => j.name === "render-asset")).toBe(true);
   });
 
-  it("produces transparent cutouts when the type has a layered asset (D10 v2)", async () => {
+  it("produces normalized cached layers when the type has a layered asset (Phase 2)", async () => {
     db.bundleBrandVariant.findUnique.mockResolvedValue({
       ...variantRow,
       bundle: {
@@ -246,36 +291,81 @@ describe("processPrepareVariantJob (stage A)", () => {
     fal.runPersonFal
       .mockResolvedValueOnce({ success: true, imageUrl: "https://fal/person.png" })
       .mockResolvedValueOnce({ success: true, imageUrl: "https://fal/item.png" });
-    fal.runBriaRemoveBg
-      .mockResolvedValueOnce({ success: true, imageUrl: "https://fal/person_cut.png" })
-      .mockResolvedValueOnce({ success: true, imageUrl: "https://fal/item_cut.png" });
     cloud.uploadFromUrl
       .mockResolvedValueOnce({ success: true, secure_url: "https://cdn/person.png", public_id: "b/person" })
       .mockResolvedValueOnce({ success: true, secure_url: "https://cdn/item.png", public_id: "b/item" });
-    cloud.uploadFromUrlTransformed
-      .mockResolvedValueOnce({ success: true, secure_url: "https://cdn/pcut.png", public_id: "b/cut_person" })
-      .mockResolvedValueOnce({ success: true, secure_url: "https://cdn/icut.png", public_id: "b/cut_item" });
+    layerCache.getOrCreateNormalizedLayer
+      .mockResolvedValueOnce({
+        ok: true,
+        hash: "hashP",
+        publicId: "layers/layer_p",
+        url: "https://cdn/layers/p.png",
+        width: 900,
+        height: 1400,
+        cached: false,
+      })
+      .mockResolvedValueOnce({
+        ok: true,
+        hash: "hashI",
+        publicId: "layers/layer_i",
+        url: "https://cdn/layers/i.png",
+        width: 800,
+        height: 800,
+        cached: true,
+      });
     db.bundleAsset.findMany.mockResolvedValue([{ id: "a1" }]);
     queue.addBulk.mockResolvedValue([]);
 
     await processPrepareVariantJob("bun1", "v1");
 
-    // Cutouts are made from the STORED person/item images.
-    expect(fal.runBriaRemoveBg.mock.calls.map((c) => c[0])).toEqual([
+    // Layers are normalized from the STORED person/item images.
+    expect(layerCache.getOrCreateNormalizedLayer.mock.calls.map((c) => c[0])).toEqual([
       "https://cdn/person.png",
       "https://cdn/item.png",
     ]);
-    // Stored cutouts are e_trim'ed so c_fit scales the SUBJECT, not the canvas.
-    expect(cloud.uploadFromUrlTransformed.mock.calls.map((c) => c[3])).toEqual(["e_trim", "e_trim"]);
     expect(db.bundleBrandVariant.update).toHaveBeenCalledWith({
       where: { id: "v1" },
       data: {
         personImageUrl: "https://cdn/person.png",
         itemImageUrl: "https://cdn/item.png",
-        personCutoutId: "b/cut_person",
-        itemCutoutId: "b/cut_item",
+        personCutoutId: "layers/layer_p",
+        itemCutoutId: "layers/layer_i",
+        personLayerHash: "hashP",
+        itemLayerHash: "hashI",
       },
     });
+  });
+
+  it("normalization rejects the cutout on every bounded attempt → variant FAILED with the reason", async () => {
+    db.bundleBrandVariant.findUnique.mockResolvedValue({
+      ...variantRow,
+      bundle: {
+        ...variantRow.bundle,
+        bundleType: {
+          assets: [{ key: "email", label: "Email", width: 1200, height: 600, composeMode: "layered" }],
+        },
+      },
+    });
+    db.brand.findUnique.mockResolvedValue({ imageModel: null, nanoRef: null });
+    db.promptTemplate.findFirst.mockResolvedValue(null);
+    // person, item, person-retry (Phase 4 auto-retry of the broken layer).
+    fal.runPersonFal.mockResolvedValue({ success: true, imageUrl: "https://fal/gen.png" });
+    cloud.uploadFromUrl.mockResolvedValue({ success: true, secure_url: "https://cdn/gen.png" });
+    layerCache.getOrCreateNormalizedLayer.mockResolvedValue({
+      ok: false,
+      reason: "empty layer: no subject pixels after alpha cleanup",
+    });
+
+    await processPrepareVariantJob("bun1", "v1");
+
+    expect(db.bundleAsset.updateMany).toHaveBeenCalledWith({
+      where: { variantId: "v1", status: { in: ["PENDING", "GENERATING"] } },
+      data: {
+        status: "FAILED",
+        errorMessage: expect.stringContaining("empty layer: no subject pixels"),
+      },
+    });
+    expect(queue.addBulk).not.toHaveBeenCalled();
   });
 
   it("marks the variant's pending assets FAILED when the person generation fails", async () => {
@@ -667,5 +757,447 @@ describe("processEditAssetJob (D9)", () => {
       where: { id: "a1" },
       data: { status: "FAILED", errorMessage: "edit: no source image" },
     });
+  });
+});
+
+/**
+ * BE Test — engine render path (Phase 3): spec + normalized layers → sharp
+ * composite. The engine itself is unit-tested in composeEngine.test.ts; here
+ * we verify orchestration, gating and fallbacks.
+ */
+describe("processRenderAssetJob — engine path (Phase 3)", () => {
+  const engineAsset = {
+    id: "a1",
+    bundleId: "bun1",
+    variantId: "v1",
+    assetKey: "email",
+    width: 1200,
+    height: 600,
+    variant: {
+      id: "v1",
+      brandName: "Betnella(Men)",
+      personImageUrl: "https://cdn/person.png",
+      itemImageUrl: "https://cdn/item.png",
+      personCutoutId: "layers/layer_p",
+      itemCutoutId: "layers/layer_i",
+      personLayerHash: "hp",
+      itemLayerHash: "hi",
+      bundle: {
+        id: "bun1",
+        neuralPrompt: "Weekend reload",
+        bundleType: {
+          assets: [
+            {
+              key: "email",
+              label: "Email",
+              width: 1200,
+              height: 600,
+              composeMode: "layered",
+              templateUrl: "https://cdn/bg.png",
+            },
+          ],
+        },
+      },
+    },
+  };
+  const specRow = { id: "ls1", key: "email.hero", version: 1, spec: EMAIL_HERO_V1, isActive: true };
+
+  it("renders via the engine: layers by hash, deterministic ids, metadata stored, no AI calls", async () => {
+    db.bundleAsset.findUnique.mockResolvedValue(engineAsset);
+    db.layoutSpec.findFirst.mockResolvedValue(specRow);
+    db.normalizedLayer.findUnique
+      .mockResolvedValueOnce({ url: "https://cdn/layers/p.png", width: 900, height: 1400 })
+      .mockResolvedValueOnce({ url: "https://cdn/layers/i.png", width: 800, height: 800 });
+    layerCache.fetchBuffer.mockResolvedValue(Buffer.from("img"));
+    engine.composeAsset.mockResolvedValue({
+      ok: true,
+      scales: [
+        { scale: 1, width: 1200, height: 600, png: Buffer.from("1x") },
+        { scale: 2, width: 2400, height: 1200, png: Buffer.from("2x") },
+      ],
+      metadata: {
+        specKey: "email.hero",
+        specVersion: 1,
+        luminance: 0.8,
+        recommendedTextColor: "#111111",
+        layers: { person: { x: 840, y: 72, w: 309, h: 480 }, item: null, decorPlaced: 0, decorSkipped: 0 },
+      },
+    });
+    cloud.uploadBuffer.mockResolvedValue({
+      success: true,
+      secure_url: "https://res.cloudinary.com/demo/image/upload/v1/bundles/bun1/v1_email_v1.png",
+    });
+
+    await processRenderAssetJob("bun1", "v1", "a1");
+
+    // Seed is derived from asset + spec version + layer hashes (determinism).
+    expect(engine.composeAsset.mock.calls[0]![4]).toBe("a1:v1:hp:hi");
+    // Only the canonical scale is rendered — no `_2x` twin anywhere (D-E7).
+    expect(engine.composeAsset.mock.calls[0]![0].canvas.scales).toEqual([1]);
+    expect(cloud.uploadBuffer).toHaveBeenCalledTimes(1);
+    expect(cloud.uploadBuffer.mock.calls[0]![1]).toBe("v1_email_v1");
+    expect(cloud.uploadBuffer.mock.calls[0]![2]).toBe("bundles/bun1");
+    expect(db.bundleAsset.update).toHaveBeenLastCalledWith({
+      where: { id: "a1" },
+      data: {
+        status: "DONE",
+        imageUrl: "https://res.cloudinary.com/demo/image/upload/v1/bundles/bun1/v1_email_v1.png",
+        metadata: expect.objectContaining({
+          retinaUrl: null,
+          specVersion: 1,
+          recommendedTextColor: "#111111",
+        }),
+        errorMessage: null,
+      },
+    });
+    // Никаких AI-вызовов и Cloudinary-overlay в движковом пути (DI-Q6, D-E4).
+    expect(fal.runPersonFal).not.toHaveBeenCalled();
+    expect(cloud.composeLayersUrl).not.toHaveBeenCalled();
+  });
+
+  it("флаг scenePipeline в активной спеке уводит рендер в scene-пайплайн (Фаза 6)", async () => {
+    db.bundleAsset.findUnique.mockResolvedValue(engineAsset);
+    db.layoutSpec.findFirst.mockResolvedValue({
+      ...specRow,
+      spec: { ...EMAIL_HERO_V1, scenePipeline: true },
+    });
+    db.brand.findUnique.mockResolvedValue({
+      id: "br1",
+      decorUrls: [{ url: "https://cdn/decor/a.png", concepts: ["coin"] }],
+    });
+    scenePipeline.renderSceneAsset.mockResolvedValue({
+      ok: true,
+      imageUrl: "https://cdn/scene.png",
+      metadata: { scenePipeline: true },
+    });
+
+    await processRenderAssetJob("bun1", "v1", "a1");
+
+    expect(scenePipeline.renderSceneAsset).toHaveBeenCalledWith(
+      expect.objectContaining({
+        bundleId: "bun1",
+        variantId: "v1",
+        assetId: "a1",
+        assetKey: "email",
+        brandName: "Betnella(Men)",
+        brandId: "br1",
+        campaignPrompt: "Weekend reload",
+        personLayerHash: "hp",
+        itemLayerHash: "hi",
+        canvas: { w: 1200, h: 600 },
+        // Сырые Json-колонки — тегированные записи доходят до пайплайна,
+        // а не режутся до строк по дороге (D-N9').
+        brandDecorRaw: [{ url: "https://cdn/decor/a.png", concepts: ["coin"] }],
+      }),
+    );
+    // Старый движок не вызывается — подмена этапа, а не дублирование.
+    expect(engine.composeAsset).not.toHaveBeenCalled();
+    expect(db.bundleAsset.update).toHaveBeenLastCalledWith({
+      where: { id: "a1" },
+      data: expect.objectContaining({ status: "DONE", imageUrl: "https://cdn/scene.png" }),
+    });
+  });
+
+  it("провал scene-пайплайна кладёт отчёт валидатора в метаданные FAILED-ассета", async () => {
+    db.bundleAsset.findUnique.mockResolvedValue(engineAsset);
+    db.layoutSpec.findFirst.mockResolvedValue({
+      ...specRow,
+      spec: { ...EMAIL_HERO_V1, scenePipeline: true },
+    });
+    db.brand.findUnique.mockResolvedValue({ id: "br1", decorUrls: null });
+    scenePipeline.renderSceneAsset.mockResolvedValue({
+      ok: false,
+      reason: "scene validation failed — decorCount: 2 при требовании ≥ 6.65",
+      metadata: { scenePipeline: true, validator: { passed: false } },
+    });
+
+    await processRenderAssetJob("bun1", "v1", "a1");
+
+    expect(db.bundleAsset.update).toHaveBeenLastCalledWith({
+      where: { id: "a1" },
+      data: expect.objectContaining({
+        status: "FAILED",
+        errorMessage: expect.stringContaining("decorCount"),
+        metadata: expect.objectContaining({ scenePipeline: true }),
+      }),
+    });
+  });
+
+  it("fails readable when the static background template is missing (DI-Q6)", async () => {
+    const noTemplate = structuredClone(engineAsset);
+    delete (noTemplate.variant.bundle.bundleType.assets[0] as Record<string, unknown>).templateUrl;
+    db.bundleAsset.findUnique.mockResolvedValue(noTemplate);
+    db.layoutSpec.findFirst.mockResolvedValue(specRow);
+
+    await processRenderAssetJob("bun1", "v1", "a1");
+
+    expect(engine.composeAsset).not.toHaveBeenCalled();
+    expect(db.bundleAsset.update).toHaveBeenLastCalledWith({
+      where: { id: "a1" },
+      // The reason names the spec version that demands the background, so the
+      // admin can see WHY a template is suddenly required.
+      data: {
+        status: "FAILED",
+        errorMessage: expect.stringContaining("email.hero@v1 requires a static background"),
+      },
+    });
+    // Фон НЕ генерится нейросетью даже при отсутствии шаблона (DI-Q6).
+    expect(fal.runPersonFal).not.toHaveBeenCalled();
+  });
+
+  it("transparent spec renders without any background template at all", async () => {
+    const noTemplate = structuredClone(engineAsset);
+    delete (noTemplate.variant.bundle.bundleType.assets[0] as Record<string, unknown>).templateUrl;
+    db.bundleAsset.findUnique.mockResolvedValue(noTemplate);
+    db.layoutSpec.findFirst.mockResolvedValue({ ...specRow, version: 2, spec: EMAIL_HERO_V2 });
+    db.normalizedLayer.findUnique
+      .mockResolvedValueOnce({ url: "https://cdn/layers/p.png", width: 900, height: 1400 })
+      .mockResolvedValueOnce({ url: "https://cdn/layers/i.png", width: 800, height: 800 });
+    layerCache.fetchBuffer.mockResolvedValue(Buffer.from("img"));
+    engine.composeAsset.mockResolvedValue({
+      ok: true,
+      scales: [
+        { scale: 1, width: 1200, height: 600, png: Buffer.from("1x") },
+        { scale: 2, width: 2400, height: 1200, png: Buffer.from("2x") },
+      ],
+      metadata: {
+        specKey: "email.hero",
+        specVersion: 2,
+        luminance: null,
+        recommendedTextColor: null,
+        layers: { person: { x: 840, y: 72, w: 309, h: 480 }, item: null, decorPlaced: 0, decorSkipped: 0 },
+      },
+    });
+    cloud.uploadBuffer.mockResolvedValue({
+      success: true,
+      secure_url: "https://res.cloudinary.com/demo/image/upload/v1/b/v1_email_v2.png",
+    });
+
+    await processRenderAssetJob("bun1", "v1", "a1");
+
+    // The engine is handed layers only — no background input, none downloaded.
+    expect(engine.composeAsset).toHaveBeenCalled();
+    expect(engine.composeAsset.mock.calls[0]![3].background).toBeUndefined();
+    expect(db.bundleAsset.update).toHaveBeenLastCalledWith({
+      where: { id: "a1" },
+      data: expect.objectContaining({
+        status: "DONE",
+        imageUrl: "https://res.cloudinary.com/demo/image/upload/v1/b/v1_email_v2.png",
+      }),
+    });
+  });
+
+  it("falls back to the legacy Cloudinary compose for pre-Phase 2 bundles (no layer hashes)", async () => {
+    const legacy = structuredClone(engineAsset);
+    (legacy.variant as Record<string, unknown>).personLayerHash = null;
+    (legacy.variant as Record<string, unknown>).itemLayerHash = null;
+    db.bundleAsset.findUnique.mockResolvedValue(legacy);
+    cloud.uploadFromUrlTransformed.mockResolvedValue({ success: true, public_id: "b/bg" });
+    cloud.uploadFromUrl.mockResolvedValue({ success: true, secure_url: "https://cdn/composed.png" });
+    imageSize.probeImageSize.mockResolvedValue({ width: 1200, height: 600 });
+
+    await processRenderAssetJob("bun1", "v1", "a1");
+
+    expect(engine.composeAsset).not.toHaveBeenCalled();
+    expect(db.layoutSpec.findFirst).not.toHaveBeenCalled();
+    expect(cloud.composeLayersUrl).toHaveBeenCalled();
+    expect(db.bundleAsset.update).toHaveBeenLastCalledWith({
+      where: { id: "a1" },
+      data: { status: "DONE", imageUrl: "https://cdn/composed.png", errorMessage: null },
+    });
+  });
+
+  it("fails readable when the asset config canvas contradicts the spec canvas", async () => {
+    const wrongCanvas = structuredClone(engineAsset);
+    (wrongCanvas.variant.bundle.bundleType.assets[0] as Record<string, unknown>).width = 1024;
+    (wrongCanvas.variant.bundle.bundleType.assets[0] as Record<string, unknown>).height = 512;
+    db.bundleAsset.findUnique.mockResolvedValue(wrongCanvas);
+    db.layoutSpec.findFirst.mockResolvedValue(specRow);
+
+    await processRenderAssetJob("bun1", "v1", "a1");
+
+    expect(engine.composeAsset).not.toHaveBeenCalled();
+    expect(db.bundleAsset.update).toHaveBeenLastCalledWith({
+      where: { id: "a1" },
+      data: { status: "FAILED", errorMessage: expect.stringContaining("canvas mismatch") },
+    });
+  });
+
+  const okCompose = () => ({
+    ok: true,
+    scales: [{ scale: 1, width: 1200, height: 600, png: Buffer.from("1x") }],
+    overlayMask: Buffer.from("mask"),
+    metadata: {
+      specKey: "email.hero",
+      specVersion: 1,
+      layers: { person: { x: 900, y: 72, w: 240, h: 480 }, item: null, decorPlaced: 1, decorSkipped: 0 },
+    },
+  });
+
+  function armEngineHappyMocks() {
+    db.layoutSpec.findFirst.mockResolvedValue(specRow);
+    db.normalizedLayer.findUnique
+      .mockResolvedValueOnce({ url: "https://cdn/layers/p.png", width: 900, height: 1400 })
+      .mockResolvedValueOnce({ url: "https://cdn/layers/i.png", width: 800, height: 800 });
+    layerCache.fetchBuffer.mockResolvedValue(Buffer.from("img"));
+    cloud.uploadBuffer.mockResolvedValue({ success: true, secure_url: "https://cdn/final.png" });
+  }
+
+  it("validation failure (subject/background) → FAILED with the check details + report kept in metadata (Phase 4)", async () => {
+    db.bundleAsset.findUnique.mockResolvedValue(engineAsset);
+    armEngineHappyMocks();
+    engine.composeAsset.mockResolvedValue(okCompose());
+    validator.validateComposedAsset.mockResolvedValue({
+      passed: false,
+      checks: [
+        {
+          key: "person-scale",
+          passed: false,
+          detail: "height 318px = 53% of canvas, want 74–86%",
+        },
+      ],
+      failedKeys: ["person-scale"],
+    });
+
+    await processRenderAssetJob("bun1", "v1", "a1");
+
+    // Deterministic failure → no re-seed attempts, no upload.
+    expect(engine.composeAsset).toHaveBeenCalledTimes(1);
+    expect(cloud.uploadBuffer).not.toHaveBeenCalled();
+    expect(db.bundleAsset.update).toHaveBeenLastCalledWith({
+      where: { id: "a1" },
+      data: {
+        status: "FAILED",
+        errorMessage: expect.stringContaining("person-scale: height 318px"),
+        metadata: expect.objectContaining({
+          validator: expect.objectContaining({ passed: false, attempts: 1 }),
+        }),
+      },
+    });
+  });
+
+  it("decor-layout violation → re-seed and re-compose, bounded (переподбор раскладки)", async () => {
+    const withDecor = structuredClone(engineAsset);
+    (withDecor.variant.bundle.bundleType.assets[0] as Record<string, unknown>).decorUrls = [
+      "https://cdn/decor1.png",
+    ];
+    db.bundleAsset.findUnique.mockResolvedValue(withDecor);
+    armEngineHappyMocks();
+    layerCache.getOrCreateNormalizedLayer.mockResolvedValue({
+      ok: true, hash: "hd", publicId: "layers/d", url: "https://cdn/layers/d.png", width: 100, height: 100, cached: true,
+    });
+    engine.composeAsset.mockResolvedValue(okCompose());
+    validator.validateComposedAsset
+      .mockResolvedValueOnce({
+        passed: false,
+        checks: [{ key: "safe-core-clean", passed: false, detail: "12 opaque px" }],
+        failedKeys: ["safe-core-clean"],
+      })
+      .mockResolvedValueOnce({ passed: true, checks: [], failedKeys: [] });
+
+    await processRenderAssetJob("bun1", "v1", "a1");
+
+    expect(engine.composeAsset).toHaveBeenCalledTimes(2);
+    // Second attempt got the re-seeded suffix.
+    expect(engine.composeAsset.mock.calls[1]![4]).toBe("a1:v1:hp:hi:r1");
+    expect(db.bundleAsset.update).toHaveBeenLastCalledWith({
+      where: { id: "a1" },
+      data: expect.objectContaining({
+        status: "DONE",
+        metadata: expect.objectContaining({
+          validator: expect.objectContaining({ passed: true, attempts: 2 }),
+        }),
+      }),
+    });
+  });
+});
+
+/**
+ * BE Test — person layer sanity auto-retry in stage A (Phase 4): a broken
+ * cutout is regenerated BEFORE any render, so every asset of the variant
+ * keeps using the same person.
+ */
+describe("processPrepareVariantJob — person layer sanity retry (Phase 4)", () => {
+  const layeredVariant = {
+    id: "v1",
+    bundleId: "bun1",
+    brandName: "Betnella(Men)",
+    bundle: {
+      id: "bun1",
+      neuralPrompt: "Weekend reload",
+      bundleType: {
+        assets: [{ key: "email", label: "Email", width: 1200, height: 600, composeMode: "layered" }],
+      },
+    },
+  };
+
+  it("insane person layer → one regeneration, variant stores the retried artifacts", async () => {
+    db.bundleBrandVariant.findUnique.mockResolvedValue(layeredVariant);
+    db.brand.findUnique.mockResolvedValue({ imageModel: null, nanoRef: null });
+    db.promptTemplate.findFirst.mockResolvedValue(null);
+    fal.runPersonFal
+      .mockResolvedValueOnce({ success: true, imageUrl: "https://fal/person1.png" }) // person attempt 1
+      .mockResolvedValueOnce({ success: true, imageUrl: "https://fal/item.png" }) // item
+      .mockResolvedValueOnce({ success: true, imageUrl: "https://fal/person2.png" }); // person retry
+    cloud.uploadFromUrl
+      .mockResolvedValueOnce({ success: true, secure_url: "https://cdn/person1.png" })
+      .mockResolvedValueOnce({ success: true, secure_url: "https://cdn/item.png" })
+      .mockResolvedValueOnce({ success: true, secure_url: "https://cdn/person2.png" });
+    layerCache.getOrCreateNormalizedLayer
+      .mockResolvedValueOnce({
+        ok: true, hash: "h-bad", publicId: "layers/bad", url: "u", width: 2000, height: 500, cached: false,
+      }) // landscape sliver → insane
+      .mockResolvedValueOnce({
+        ok: true, hash: "h-good", publicId: "layers/good", url: "u", width: 900, height: 1400, cached: false,
+      }) // retried person
+      .mockResolvedValueOnce({
+        ok: true, hash: "h-item", publicId: "layers/item", url: "u", width: 800, height: 800, cached: false,
+      }); // item
+    validator.personLayerSanity
+      .mockReturnValueOnce({ ok: false, reason: "person layer is landscape-shaped" })
+      .mockReturnValueOnce({ ok: true, reason: "" });
+    db.bundleAsset.findMany.mockResolvedValue([{ id: "a1" }]);
+    queue.addBulk.mockResolvedValue([]);
+
+    await processPrepareVariantJob("bun1", "v1");
+
+    // Person got regenerated once; the variant stores the RETRIED person url +
+    // the sane layer hash.
+    expect(fal.runPersonFal).toHaveBeenCalledTimes(3);
+    expect(db.bundleBrandVariant.update).toHaveBeenCalledWith({
+      where: { id: "v1" },
+      data: expect.objectContaining({
+        personImageUrl: "https://cdn/person2.png",
+        personCutoutId: "layers/good",
+        personLayerHash: "h-good",
+        itemLayerHash: "h-item",
+      }),
+    });
+  });
+
+  it("still insane after the bounded retries → variant FAILED with the reason", async () => {
+    db.bundleBrandVariant.findUnique.mockResolvedValue(layeredVariant);
+    db.brand.findUnique.mockResolvedValue({ imageModel: null, nanoRef: null });
+    db.promptTemplate.findFirst.mockResolvedValue(null);
+    fal.runPersonFal.mockResolvedValue({ success: true, imageUrl: "https://fal/person.png" });
+    cloud.uploadFromUrl.mockResolvedValue({ success: true, secure_url: "https://cdn/person.png" });
+    layerCache.getOrCreateNormalizedLayer.mockResolvedValue({
+      ok: true, hash: "h-bad", publicId: "layers/bad", url: "u", width: 2000, height: 500, cached: false,
+    });
+    validator.personLayerSanity.mockReturnValue({
+      ok: false,
+      reason: "person layer is landscape-shaped",
+    });
+
+    await processPrepareVariantJob("bun1", "v1");
+
+    expect(db.bundleAsset.updateMany).toHaveBeenCalledWith({
+      where: { variantId: "v1", status: { in: ["PENDING", "GENERATING"] } },
+      data: {
+        status: "FAILED",
+        errorMessage: expect.stringContaining("person layer is landscape-shaped"),
+      },
+    });
+    expect(queue.addBulk).not.toHaveBeenCalled();
   });
 });

@@ -3,8 +3,8 @@ import { cloudinaryConfigured } from "../env.js";
 import { uploadSmarticoAsset } from "../lib/smartico/uploadAsset.js";
 import { buildBrandMap, normalizeBrand } from "../lib/smartico/detect.js";
 import type { NormalizedBrand, TypeKey } from "../lib/smartico/detect.js";
-import { generateOutputs } from "../lib/smartico/generate.js";
-import type { OutputBlock, UrlMap } from "../lib/smartico/generate.js";
+import { generateOutputs, generateSafeZoneOutputs } from "../lib/smartico/generate.js";
+import type { OutputBlock, SafeZoneMeta, UrlMap } from "../lib/smartico/generate.js";
 import { stripGenderName } from "./bundle.service.js";
 
 /**
@@ -50,6 +50,36 @@ function genderOf(brandName: string): "men" | "women" | null {
   const m = /\((men|man|women|woman)\)\s*$/i.exec(brandName);
   if (!m) return null;
   return m[1]!.toLowerCase().startsWith("w") ? "women" : "men";
+}
+
+/**
+ * Safe-zone metadata of an engine-composed email hero (TASK email-composition,
+ * DI-Q9): the письмо is assembled in Smartico, so the geometry the text must
+ * respect travels with the images. Assets rendered by the legacy/ai path carry
+ * no `safeZonePct` and are simply skipped.
+ */
+function safeZoneOf(metadata: unknown): { zone: SafeZoneMeta; spec: string } | null {
+  if (typeof metadata !== "object" || metadata === null) return null;
+  const m = metadata as Record<string, unknown>;
+  const z = m.safeZonePct as Record<string, unknown> | null | undefined;
+  if (!z || ["x", "y", "w", "h"].some((k) => typeof z[k] !== "number")) return null;
+  const color = typeof m.recommendedTextColor === "string" ? m.recommendedTextColor : "#111111";
+  const contrastPair = m.textContrast as Record<string, unknown> | null | undefined;
+  const isDarkText = color.toLowerCase() !== "#ffffff";
+  const contrastRaw = contrastPair?.[isDarkText ? "dark" : "white"];
+  const specKey = typeof m.specKey === "string" ? m.specKey : "layout spec";
+  const specVersion = typeof m.specVersion === "number" ? m.specVersion : 1;
+  return {
+    zone: {
+      x: z.x as number,
+      y: z.y as number,
+      w: z.w as number,
+      h: z.h as number,
+      color,
+      contrast: typeof contrastRaw === "number" ? contrastRaw : 0,
+    },
+    spec: `${specKey}@v${specVersion}`,
+  };
 }
 
 async function fetchBuffer(url: string): Promise<Buffer | null> {
@@ -105,10 +135,16 @@ export async function sendBundleToSmartico(bundleId: string): Promise<SendBundle
   const brandMap = buildBrandMap(smarticoBrands.map((b) => b.name));
 
   // Upload every approved asset (MD5 dedup) and collect URLs per tone bucket.
-  const buckets = new Map<"men" | "women" | "all", { urls: UrlMap; brands: Map<string, NormalizedBrand> }>();
+  const buckets = new Map<
+    "men" | "women" | "all",
+    { urls: UrlMap; brands: Map<string, NormalizedBrand>; zones: Record<string, SafeZoneMeta> }
+  >();
   const hasGendered = approved.some((e) => e.gender !== null);
   const bucketKeys: Array<"men" | "women" | "all"> = hasGendered ? ["men", "women"] : ["all"];
-  for (const key of bucketKeys) buckets.set(key, { urls: {}, brands: new Map() });
+  for (const key of bucketKeys) buckets.set(key, { urls: {}, brands: new Map(), zones: {} });
+  // Spec the emitted safe-zone block was measured against (all email assets of
+  // one bundle render from the same active version).
+  let specLabel = "";
 
   const usedTypes = new Set<TypeKey>();
 
@@ -150,11 +186,17 @@ export async function sendBundleToSmartico(bundleId: string): Promise<SendBundle
         ? [gender]
         : ["men", "women"]
       : ["all"];
+    const safe = type === "email" ? safeZoneOf(asset.metadata) : null;
+    if (safe) specLabel = safe.spec;
+
     for (const target of targets) {
       const bucket = buckets.get(target)!;
       bucket.brands.set(base, normalized);
       const slot = (bucket.urls[base] ??= {});
       slot[type] = { default: outcome.url, KO: null };
+      // Tone variants of one brand share a base name; the later one wins —
+      // the zone is spec geometry, so they agree apart from the colour hint.
+      if (safe) bucket.zones[base] = safe.zone;
     }
   }
 
@@ -166,6 +208,19 @@ export async function sendBundleToSmartico(bundleId: string): Promise<SendBundle
     const bucket = buckets.get(key)!;
     if (bucket.brands.size === 0) continue;
     const blocks = generateOutputs(bucket.urls, types, [...bucket.brands.values()]);
+    // Geometry travels next to the images (DI-Q9): the fallback zone is the
+    // spec constant every brand of the bucket rendered with.
+    const firstZone = Object.values(bucket.zones)[0];
+    if (firstZone) {
+      blocks.push(
+        ...generateSafeZoneOutputs(
+          bucket.zones,
+          [...bucket.brands.values()],
+          firstZone,
+          specLabel || "email layout spec",
+        ),
+      );
+    }
     const prefix = LABEL[key];
     for (const block of blocks) {
       outputs.push(prefix ? { ...block, title: `${prefix} — ${block.title}` } : block);

@@ -67,6 +67,30 @@ export async function runPersonFal(
 }
 
 /**
+ * GPT Image 2 (`openai/gpt-image-2/edit`) — модель режима ai_reference (A-7).
+ * A/B-тест 2026-08-05 (scripts/ab-position-test.ts): на одинаковых рефах и
+ * промпте держит safe-зону 96–97% белого против 89–93% у nano-banana-2.
+ * Бонусы против banana: произвольный точный канвас (сразу 1200×600, без
+ * Bria-достройки), до 16 референсов. Минусы: дороже и медленнее (принято).
+ */
+export async function runGptImage2Edit(opts: {
+  prompt: string;
+  imageUrls: string[];
+  width: number;
+  height: number;
+}): Promise<FalRunResult> {
+  if (!opts.imageUrls.length) return { success: false, error: "no image_urls" };
+  return callFalSync("openai/gpt-image-2/edit", {
+    prompt: opts.prompt,
+    image_urls: opts.imageUrls,
+    image_size: { width: opts.width, height: opts.height },
+    quality: "high",
+    num_images: 1,
+    output_format: "png",
+  });
+}
+
+/**
  * Upscale an existing image via `fal-ai/seedvr/upscale/image` (SeedVR2). Used
  * right after the Edit stage, before the result is stored in Cloudinary, so edited
  * images are delivered at higher resolution. Returns the upscaled image URL.
@@ -150,6 +174,66 @@ export async function runBriaEraser(imageUrl: string, maskUrl: string): Promise<
     mask_url: maskUrl,
     mask_type: "manual",
   });
+}
+
+// ------------------------------------------------------------------
+// VLM (TASK ai-reference, стадия B «Приемщик», DI-R9)
+// ------------------------------------------------------------------
+
+export interface FalVisionResult {
+  success: boolean;
+  /** Текстовый ответ модели (поле `output` эндпоинта). */
+  output?: string;
+  error?: string;
+}
+
+/**
+ * Модель приёмки. openrouter/router/vision маршрутизирует в любой VLM;
+ * Gemini Flash — дефолт из доков fal (цена/скорость). Переопределяется env
+ * без деплоя схемы (тот же приём, что TYPO_FONT_STACK в typography3d.ts).
+ */
+export const DEFAULT_VLM_MODEL = process.env.VLM_QA_MODEL ?? "google/gemini-2.5-flash";
+
+/**
+ * Vision-запрос через `openrouter/router/vision` (fal.ai Vision API): несколько
+ * изображений + промпт → текст. Ответ здесь НЕ картинка, поэтому у вызова свой
+ * разбор (`output`), а не callFalSync/extractFalImageUrl. Ретраи как у
+ * callFalSync: 5xx/429/сеть — до 3 попыток, остальное — fail fast.
+ */
+export async function runVisionQa(opts: {
+  prompt: string;
+  imageUrls: string[];
+  systemPrompt?: string;
+  model?: string;
+}): Promise<FalVisionResult> {
+  if (opts.imageUrls.length === 0) return { success: false, error: "no image_urls" };
+  const endpoint = "https://fal.run/openrouter/router/vision";
+  const payload = JSON.stringify({
+    model: opts.model ?? DEFAULT_VLM_MODEL,
+    prompt: opts.prompt,
+    image_urls: opts.imageUrls,
+    ...(opts.systemPrompt ? { system_prompt: opts.systemPrompt } : {}),
+  });
+  let lastError = "unknown";
+  for (let attempt = 1; attempt <= 3; attempt++) {
+    try {
+      const res = await fetch(endpoint, { method: "POST", headers: authHeaders(), body: payload });
+      const text = await res.text();
+      if (res.status === 200 || res.status === 201) {
+        const parsed = JSON.parse(text) as { output?: unknown };
+        if (typeof parsed.output === "string" && parsed.output.trim()) {
+          return { success: true, output: parsed.output };
+        }
+        return { success: false, error: `no output in vision response: ${text.slice(0, 160)}` };
+      }
+      lastError = `HTTP ${res.status}: ${text.slice(0, 160)}`;
+      if (!(res.status >= 500 || res.status === 429)) return { success: false, error: lastError };
+    } catch (e) {
+      lastError = String(e);
+    }
+    if (attempt < 3) await sleep(Math.min(8000, 1000 * 2 ** (attempt - 1)));
+  }
+  return { success: false, error: lastError };
 }
 
 /** Extract the generated image URL from a fal response (handles known shapes). */

@@ -6,6 +6,10 @@ import { cloudinaryConfigured } from "../env.js";
 import { uploadBase64, withRetry } from "../lib/cloudinary.js";
 import { MODEL_KEYS, MODEL_OPTIONS } from "../lib/falModels.js";
 import { createBrand } from "../services/brand.service.js";
+import { layoutSpecSchema, createLayoutSpecVersion } from "../services/layoutSpec.js";
+import { clampStyleProfile } from "../lib/styleProfile.js";
+import { parseDecorEntries, decorEntryUrls } from "../lib/decorLibrary.js";
+import { Prisma } from "../../generated/prisma/client.js";
 
 // All routes here are mounted behind loadUser + requireAdmin (see index.ts).
 export const adminRouter: Router = Router();
@@ -455,7 +459,16 @@ const bundleTypeAssetSchema = z.object({
       z.object({ x: z.number(), y: z.number(), w: z.number(), h: z.number() }),
     )
     .optional(),
-  composeMode: z.enum(["ai", "layered"]).optional(),
+  // "ai_reference" — композиция из референсов вариации (TASK ai-reference):
+  // включение/откат режима = правка данных из админки, без деплоя.
+  composeMode: z.enum(["ai", "layered", "ai_reference"]).optional(),
+  // Versioned geometry reference (Phase 1): render resolves the latest active
+  // LayoutSpec with this key. Absent → legacy zones/composeMode path.
+  layoutSpecKey: z.string().min(1).max(60).optional(),
+  // Static decor cutout URLs the engine scatters into decor bands (Phase 3).
+  decorUrls: z.array(z.string().url()).max(20).optional(),
+  // Golden composite for the validator's SSIM check (Phase 4/6).
+  goldenUrl: z.string().url().optional(),
 });
 
 const bundleTypeSchema = z.object({
@@ -520,6 +533,151 @@ adminRouter.patch("/bundle-types/:id", async (req: Request, res: Response) => {
   } catch {
     res.status(404).json({ error: "not_found" });
   }
+});
+
+// ============================================================
+// Layout specs (TASK email-composition, Phase 1) — versioned geometry.
+// Rows are immutable: POST creates the NEXT version for the key; PATCH only
+// toggles isActive (rollback = deactivate the newer version). Editing needs
+// no code deploy — the render path resolves the latest active version.
+// ============================================================
+
+adminRouter.get("/layout-specs", async (_req: Request, res: Response) => {
+  const layoutSpecs = await prisma.layoutSpec.findMany({
+    orderBy: [{ key: "asc" }, { version: "desc" }],
+  });
+  res.json({ layoutSpecs });
+});
+
+const createLayoutSpecSchema = z.object({
+  key: z.string().min(1).max(60),
+  spec: z.unknown(),
+});
+
+adminRouter.post("/layout-specs", async (req: Request, res: Response) => {
+  const parsed = createLayoutSpecSchema.safeParse(req.body);
+  if (!parsed.success) {
+    res.status(400).json({ error: "invalid_body", details: parsed.error.flatten().fieldErrors });
+    return;
+  }
+  const specParsed = layoutSpecSchema.safeParse(parsed.data.spec);
+  if (!specParsed.success) {
+    // `issues` с полным путём поля, а не только flatten по первому сегменту:
+    // спека Задания 2 глубоко вложена (scatter.layers[0].sizePct,
+    // background.glowPlate.radius, safe.levels.ambience.coveragePct), и без
+    // пути редактор в админке не поймёт, что именно он сломал.
+    res.status(400).json({
+      error: "invalid_spec",
+      details: specParsed.error.flatten(),
+      issues: specParsed.error.issues.map((i) => ({
+        path: i.path.join("."),
+        message: i.message,
+      })),
+    });
+    return;
+  }
+  const created = await createLayoutSpecVersion(
+    parsed.data.key,
+    specParsed.data,
+    req.user?.email,
+  );
+  res.status(201).json({ layoutSpec: created });
+});
+
+adminRouter.patch("/layout-specs/:id", async (req: Request, res: Response) => {
+  const id = req.params.id;
+  if (typeof id !== "string" || !id) {
+    res.status(400).json({ error: "id_required" });
+    return;
+  }
+  const parsed = z.object({ isActive: z.boolean() }).safeParse(req.body);
+  if (!parsed.success) {
+    res.status(400).json({ error: "invalid_body", details: parsed.error.flatten().fieldErrors });
+    return;
+  }
+  try {
+    const updated = await prisma.layoutSpec.update({
+      where: { id },
+      data: { isActive: parsed.data.isActive },
+    });
+    res.json({ layoutSpec: updated });
+  } catch {
+    res.status(404).json({ error: "not_found" });
+  }
+});
+
+// ---- Style-profile «казино-дизайнера» (DV-E1, ограничение 4) ----
+// Ручной override профиля brand-variant'а. Тот же кламп, что у модели и у
+// рендера: координат в профиле нет и быть не может, значения вне коридоров
+// отбрасываются. `profile: null` снимает override — следующий prepare-variant
+// снова спросит модель. Применяется при следующем рендере ассета
+// (перегенерация из CRM), в сохранённые картинки задним числом не лезет.
+adminRouter.patch("/bundle-variants/:id/style-profile", async (req: Request, res: Response) => {
+  const id = req.params.id;
+  if (typeof id !== "string" || !id) {
+    res.status(400).json({ error: "id_required" });
+    return;
+  }
+  const parsed = z
+    .object({ profile: z.record(z.unknown()).nullable() })
+    .safeParse(req.body);
+  if (!parsed.success) {
+    res.status(400).json({ error: "invalid_body", details: parsed.error.flatten().fieldErrors });
+    return;
+  }
+
+  const variant = await prisma.bundleBrandVariant.findUnique({
+    where: { id },
+    include: { bundle: { select: { bundleType: { select: { assets: true } } } } },
+  });
+  if (!variant) {
+    res.status(404).json({ error: "not_found" });
+    return;
+  }
+
+  let value: Prisma.InputJsonValue | typeof Prisma.DbNull = Prisma.DbNull;
+  if (parsed.data.profile !== null) {
+    // Кламп против ЭФФЕКТИВНОЙ библиотеки декора — той же, из которой рендер
+    // потом соберёт кадр: библиотека бренда (DV-C2′), а без неё — общая по
+    // layered-слотам типа бандла.
+    const brand = await prisma.brand.findUnique({
+      where: { name: variant.brandName },
+      select: { decorUrls: true },
+    });
+    // D-N9': библиотека бренда хранит и строки, и тегированные записи —
+    // фильтр «только строки» терял бы автосохранённую нарезку листа.
+    const brandUrls = decorEntryUrls(parseDecorEntries(brand?.decorUrls));
+    const typeAssets = variant.bundle.bundleType.assets as unknown as Array<{
+      composeMode?: string;
+      decorUrls?: string[];
+    }>;
+    const slotUrls: string[] = [];
+    for (const a of typeAssets) {
+      if (a.composeMode !== "layered") continue;
+      for (const url of a.decorUrls ?? []) {
+        if (!slotUrls.includes(url)) slotUrls.push(url);
+      }
+    }
+    const libraryUrls = brandUrls.length > 0 ? brandUrls : slotUrls;
+    const clamped = clampStyleProfile(parsed.data.profile, { libraryUrls });
+    if (!clamped) {
+      res.status(400).json({
+        error: "invalid_profile",
+        details:
+          "ни одно поле не прошло кламп (glowHex #RRGGBB; typoMaterial из пресетов; " +
+          "tokens ≤ 3 по ≤ 14 символов; density 0..1; decorUrls из библиотеки слота)",
+      });
+      return;
+    }
+    value = { ...clamped, source: "manual" } as unknown as Prisma.InputJsonValue;
+  }
+
+  const updated = await prisma.bundleBrandVariant.update({
+    where: { id },
+    data: { styleProfile: value },
+    select: { id: true, brandName: true, styleProfile: true },
+  });
+  res.json({ variant: updated });
 });
 
 const promptPresetSchema = z.object({
@@ -589,4 +747,92 @@ adminRouter.delete("/prompt-presets/:id", async (req: Request, res: Response) =>
   } catch {
     res.status(404).json({ error: "not_found" });
   }
+});
+
+// ============================================================
+// Логи генераций ai_reference (TASK safe-zone/auto-heal, C2): read-only лента
+// для админа — попытки генерации, приёмка и auto-healing из BundleAsset.metadata.qa.
+// Отдельной таблицы нет: metadata и есть журнал, эндпоинт лишь проецирует его.
+// ============================================================
+
+const aiRefLogsSchema = z.object({
+  limit: z.coerce.number().int().min(1).max(100).default(30),
+  offset: z.coerce.number().int().min(0).default(0),
+});
+
+/** Попытка из metadata.qa → узкая строка лога (без tech-простыни). */
+function aiRefLogAttempt(row: unknown): { score: number; pass: boolean; reasons: string[] } {
+  const a = (row ?? {}) as Record<string, unknown>;
+  return {
+    score: typeof a.score === "number" ? a.score : 0,
+    pass: a.pass === true,
+    reasons: Array.isArray(a.reasons)
+      ? a.reasons.filter((r): r is string => typeof r === "string")
+      : [],
+  };
+}
+
+adminRouter.get("/ai-ref-logs", async (req: Request, res: Response) => {
+  const parsed = aiRefLogsSchema.safeParse(req.query);
+  if (!parsed.success) {
+    res.status(400).json({ error: "invalid_query" });
+    return;
+  }
+  const { limit, offset } = parsed.data;
+  const where = {
+    metadata: { path: ["specKey"], equals: "ai_reference" },
+  } satisfies Prisma.BundleAssetWhereInput;
+  const [rows, total] = await Promise.all([
+    prisma.bundleAsset.findMany({
+      where,
+      orderBy: { updatedAt: "desc" },
+      take: limit,
+      skip: offset,
+      select: {
+        id: true,
+        assetKey: true,
+        status: true,
+        imageUrl: true,
+        errorMessage: true,
+        metadata: true,
+        updatedAt: true,
+        variant: {
+          select: {
+            displayName: true,
+            bundle: { select: { id: true, name: true } },
+          },
+        },
+      },
+    }),
+    prisma.bundleAsset.count({ where }),
+  ]);
+
+  const logs = rows.map((r) => {
+    const meta = (r.metadata ?? {}) as Record<string, unknown>;
+    const qa = (meta.qa ?? {}) as Record<string, unknown>;
+    const healing = qa.healing as Record<string, unknown> | undefined;
+    return {
+      id: r.id,
+      assetKey: r.assetKey,
+      status: r.status.toLowerCase(),
+      imageUrl: r.imageUrl,
+      errorMessage: r.errorMessage,
+      updatedAt: r.updatedAt,
+      bundleId: r.variant.bundle.id,
+      bundleName: r.variant.bundle.name,
+      brandName: r.variant.displayName,
+      presetTitle: typeof meta.presetTitle === "string" ? meta.presetTitle : null,
+      qaPassed: qa.qaPassed === true,
+      chosenAttempt: typeof qa.chosenAttempt === "number" ? qa.chosenAttempt : null,
+      attempts: Array.isArray(qa.attempts) ? qa.attempts.map(aiRefLogAttempt) : [],
+      healing: healing
+        ? {
+            used: healing.used === true,
+            chosenAttempt: typeof healing.chosenAttempt === "number" ? healing.chosenAttempt : null,
+            attempts: Array.isArray(healing.attempts) ? healing.attempts.map(aiRefLogAttempt) : [],
+          }
+        : null,
+    };
+  });
+  res.json({ logs, total, hasMore: offset + rows.length < total });
 });

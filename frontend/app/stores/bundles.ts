@@ -20,6 +20,9 @@ export interface BundleTypeAssetMeta {
   label: string;
   width: number;
   height: number;
+  /** "ai" | "layered" | "ai_reference" (TASK ai-reference) — включает в
+   *  мастере обязательный выбор вариации и бейджи референсов у брендов. */
+  composeMode?: string;
 }
 
 export interface BundleTypeMeta {
@@ -42,12 +45,36 @@ export interface BrandGroup {
   variants: Array<{ name: string; displayName: string }>;
 }
 
+/** Composition metadata of an engine-rendered asset (TASK email-composition):
+ *  the safe zone the email text lands in, plus how it should be coloured. */
+export interface BundleAssetMeta {
+  specKey: string;
+  specVersion: number;
+  safeZonePct: { x: number; y: number; w: number; h: number };
+  recommendedTextColor: string | null;
+  luminance: number | null;
+  textContrast: { white: number; dark: number } | null;
+  retinaUrl: string | null;
+  validator: { passed: boolean; attempts: number } | null;
+  /** Приёмка ai_reference (DI-R10): бейдж «лучший из N» + причины отклонения.
+   *  healing — итог AI-автокоррекции (TASK safe-zone/auto-heal): сколько
+   *  попыток лечения было и стала ли вылеченная версия финальной. */
+  qa: {
+    passed: boolean;
+    attempts: number;
+    reasons: string[];
+    healing: { attempts: number; used: boolean } | null;
+  } | null;
+}
+
 export interface BundleDetails {
   id: string;
   name: string;
   status: BundleStatusKey;
   plannedSendAt: string | null;
   neuralPrompt: string;
+  presetId: string | null;
+  presetTitle: string | null;
   brandNames: string[];
   createdAt: string;
   bundleType: { key: string; title: string; assets: BundleTypeAssetMeta[] };
@@ -56,6 +83,9 @@ export interface BundleDetails {
     brandName: string;
     displayName: string;
     approvedCount: number;
+    /** Style-profile «казино-дизайнера» (DV-E1): стиль сцены — данные, не
+     *  координаты. Редактируется админом; null = профиля нет (фолбэк движка). */
+    styleProfile: Record<string, unknown> | null;
     assets: Array<{
       id: string;
       assetKey: string;
@@ -66,6 +96,7 @@ export interface BundleDetails {
       status: "pending" | "generating" | "done" | "failed";
       approved: boolean;
       errorMessage: string | null;
+      meta: BundleAssetMeta | null;
     }>;
   }>;
   summary: { variantCount: number; assetTotal: number; assetDone: number; approvedCount: number };
@@ -193,6 +224,7 @@ export const useBundlesStore = defineStore("bundles", () => {
     neuralPrompt: string;
     brandNames: string[];
     bundleTypeKey: string;
+    presetId?: string | null;
   }): Promise<string | null> {
     launching.value = true;
     launchError.value = null;
@@ -205,6 +237,7 @@ export const useBundlesStore = defineStore("bundles", () => {
           neuralPrompt: form.neuralPrompt,
           brandNames: form.brandNames,
           bundleTypeKey: form.bundleTypeKey,
+          presetId: form.presetId ?? null,
         },
       });
       await api(`/api/bundles/${created.bundle.id}/generate`, { method: "POST" });
@@ -212,12 +245,46 @@ export const useBundlesStore = defineStore("bundles", () => {
       return created.bundle.id;
     } catch (err) {
       const status = (err as { statusCode?: number })?.statusCode;
-      launchError.value = status === 503 ? "queue_unavailable" : "launch_failed";
+      // Гейт ai_reference (TASK ai-reference): сервер объясняет, ЧЕГО не
+      // хватает — вариации или референсов у конкретных брендов.
+      const code = (err as { data?: { error?: string } })?.data?.error;
+      launchError.value =
+        code === "preset_required" || code === "refs_missing"
+          ? code
+          : status === 503
+            ? "queue_unavailable"
+            : "launch_failed";
       // The draft may already exist — refresh so the user sees it either way.
       await fetchList();
       return null;
     } finally {
       launching.value = false;
+    }
+  }
+
+  // ---- Референсы вариации (TASK ai-reference): бейджи «7/15» в мастере ----
+  const refCounts = ref<Record<string, number>>({});
+  const refCountsMin = ref(5);
+  const refCountsPresetId = ref<string | null>(null);
+
+  async function fetchRefCounts(presetId: string | null) {
+    refCountsPresetId.value = presetId;
+    if (!presetId) {
+      refCounts.value = {};
+      return;
+    }
+    try {
+      const res = await api<{ counts: Record<string, number>; min: number }>(
+        "/api/bundles/ref-counts",
+        { query: { presetId } },
+      );
+      // Пользователь мог успеть переключить вариацию, пока летел запрос.
+      if (refCountsPresetId.value === presetId) {
+        refCounts.value = res.counts;
+        refCountsMin.value = res.min;
+      }
+    } catch {
+      if (refCountsPresetId.value === presetId) refCounts.value = {};
     }
   }
 
@@ -403,6 +470,9 @@ export const useBundlesStore = defineStore("bundles", () => {
     launching,
     launchError,
     createAndGenerate,
+    refCounts,
+    refCountsMin,
+    fetchRefCounts,
     selected,
     selectedLoading,
     fetchDetails,

@@ -85,6 +85,11 @@ model Brand {
   // otherwise a MODEL_REGISTRY key (e.g. "xai/grok-imagine-image"). The endpoint
   // (/edit vs text-to-image) and request body are derived from the registry.
   imageModel        String?
+  // Библиотека декора БРЕНДА (Задание 2, DV-C2′ — заказчик 2026-07-28:
+  // «для каждого бренда своя библиотека»): string[] нормализованных URL.
+  // Непустая перекрывает общую библиотеку слота; пустая/null — бренд берёт
+  // общую (фолбэк). Перекраска под палитру кадра (П8) работает в обоих случаях.
+  decorUrls         Json?
   // Ownership (TASK super-designer): the user who created the brand. Legacy
   // brands are null ("nobody's") — editable only via the admin panel. A
   // super-designer may edit/delete/test ONLY brands where createdById = self.
@@ -469,6 +474,29 @@ model UserTournamentPromptOverride {
   @@id([userId, elementId, mode])
 }
 
+/// Audit trail for the «Edit Tournament pack» window (TASK tournament-pack):
+/// a super-designer edits the SAME global data the admin panel owns, so every
+/// mutation is logged with full before/after snapshots. entityId carries no FK
+/// — the log must outlive a hard-deleted category. entityType: ELEMENT (the
+/// snapshot includes its BASE/VIP prompts) | CATEGORY (includes every element,
+/// so a hard delete stays recoverable by hand) | SYSTEM (the global wrapper).
+/// Rollback exists for ELEMENT only and writes its own ROLLBACK entry.
+model TournamentChangeLog {
+  id         String   @id @default(cuid())
+  entityType String // ELEMENT | CATEGORY | SYSTEM
+  entityId   String? // no FK — the log must outlive the entity
+  entityName String
+  userId     String?
+  userEmail  String
+  action     String // CREATE | UPDATE | DELETE | ROLLBACK
+  before     Json
+  after      Json
+  createdAt  DateTime @default(now())
+
+  @@index([entityType, entityId, createdAt])
+  @@index([createdAt])
+}
+
 /// Single-row global DES counter (seeded id=1, value=100000). Incremented
 /// atomically (UPDATE ... RETURNING) BEFORE each ZIP download, so the first
 /// issued archive is DES-100001 (per the spec's own example).
@@ -535,6 +563,11 @@ model Bundle {
   brandNames    Json // string[] of base brand names
   bundleTypeId  String
   bundleType    BundleType   @relation(fields: [bundleTypeId], references: [id])
+  /// Chosen variation for the ai_reference compose mode (TASK ai-reference):
+  /// required at generate time when the bundle type has an ai_reference asset,
+  /// null for layered/scene bundles. SetNull so bundles survive preset deletes.
+  presetId      String?
+  preset        NeuralPromptPreset? @relation(fields: [presetId], references: [id], onDelete: SetNull)
   createdById   String?
   createdBy     User?        @relation(fields: [createdById], references: [id], onDelete: SetNull)
   createdAt     DateTime     @default(now())
@@ -564,6 +597,17 @@ model BundleBrandVariant {
   // layer compositor references overlays by public id, not URL.
   personCutoutId String?
   itemCutoutId   String?
+  /// sha256 of the SOURCE image bytes each cutout was normalized from
+  /// (Phase 2): links the variant to the NormalizedLayer cache rows and lets
+  /// the composition engine (Phase 3) look up bbox dimensions.
+  personLayerHash String?
+  itemLayerHash   String?
+  /// Style-profile «казино-дизайнера» (DV-E1): данные, не координаты —
+  /// hue плашки, материал типографики, токены, плотность рассыпки, выбор
+  /// декора. Один вызов модели на brand-variant в stage A, результат живёт
+  /// здесь: повторный рендер того же бандла берёт сохранённый профиль.
+  /// `source: "manual"` — ручной override из админки, stage A его не трёт.
+  styleProfile    Json?
 
   assets BundleAsset[]
 
@@ -585,6 +629,10 @@ model BundleAsset {
   status       BundleAssetStatus @default(PENDING)
   approved     Boolean           @default(false)
   errorMessage String?
+  /// Composition metadata for the email template + debugging (Phase 3):
+  /// spec key/version, seed, safe-zone %, luminance/contrast, recommended
+  /// text color, layer bboxes, retina URL. Written by the engine render path.
+  metadata     Json?
   createdAt    DateTime          @default(now())
   updatedAt    DateTime          @updatedAt
 
@@ -592,7 +640,68 @@ model BundleAsset {
   @@index([bundleId])
 }
 
+/// Cache of normalized transparent layers keyed by the sha256 of the SOURCE
+/// image bytes (TASK email-composition, Phase 2). Re-running stage A on the
+/// same source skips background removal + normalization + upload entirely;
+/// `publicId` is deterministic (layer_<hash>), so Cloudinary never grows
+/// duplicates. width/height are the alpha-bbox pixel dimensions the
+/// composition engine scales from (fit by subject bbox, not by file — RC1).
+model NormalizedLayer {
+  id         String   @id @default(cuid())
+  sourceHash String   @unique
+  publicId   String
+  url        String
+  width      Int
+  height     Int
+  createdAt  DateTime @default(now())
+}
+
+/// Versioned layout spec for deterministic asset composition (TASK
+/// email-composition, Phase 1). Geometry is data, not code: zones, anchors,
+/// fit heights, baseline, safe-zone and decor rules live in `spec` (validated
+/// by layoutSpecSchema at runtime). Rows are immutable — editing from the
+/// admin creates the NEXT version; old bundles keep the version they used.
+model LayoutSpec {
+  id        String   @id @default(cuid())
+  key       String // e.g. "email.hero" (also planned: "push.hero", "popup.hero")
+  version   Int
+  spec      Json
+  isActive  Boolean  @default(true)
+  createdAt DateTime @default(now())
+  createdBy String? // admin email snapshot, informational
+
+  @@unique([key, version])
+  @@index([key, isActive])
+}
+
+/// Pattern spec — числовые коридоры паттерна, ДОБЫТЫЕ из корпуса эталонов
+/// (Задание 3, Фаза 1; `D-C1`). Отличие от LayoutSpec принципиальное: layout
+/// описывает, ЧТО мы хотим построить, а pattern — что ИЗМЕРЕНО у дизайнеров.
+/// Строки неизменяемы: добавили эталон — перезапустили майнер, получили новую
+/// версию. Правка порогов из админки создаёт следующую версию, без деплоя.
+///
+/// `corpusHash` — sha256 по отсортированным хэшам файлов корпуса. По нему
+/// видно, что спека действительно соответствует тому набору эталонов, из
+/// которого её добыли. Даты внутри `spec` НЕТ намеренно: TASK §4.1 требует
+/// побайтовой воспроизводимости, и `createdAt` живёт здесь, а не в JSON.
+model PatternSpec {
+  id         String   @id @default(cuid())
+  key        String // "pattern.email" | "pattern.push" | "pattern.popup"
+  version    Int
+  spec       Json // PatternSpec из lib/patternMiner.ts
+  corpusHash String
+  isActive   Boolean  @default(true)
+  createdAt  DateTime @default(now())
+  createdBy  String? // admin email snapshot, informational
+
+  @@unique([key, version])
+  @@index([key, isActive])
+}
+
 /// Global admin-editable Neural prompt suggestions shown on textarea focus (D8).
+/// Since TASK ai-reference a preset doubles as a "вариация": ai_reference
+/// bundles must pick one, and its per-brand reference banners live in
+/// VariationReference rows below.
 model NeuralPromptPreset {
   id        String   @id @default(cuid())
   title     String
@@ -600,6 +709,31 @@ model NeuralPromptPreset {
   order     Int      @default(0)
   isActive  Boolean  @default(true)
   createdAt DateTime @default(now())
+
+  references VariationReference[]
+  bundles    Bundle[]
+}
+
+/// Reference email banner for the ai_reference compose mode (TASK ai-reference,
+/// DI-R3/R5): finished 1200×600 banners uploaded per (variation × base brand).
+/// 5..15 per pair are allowed at rest; generation requires >= 5 and sends the
+/// first 14 by sortOrder (nano-banana-2 /edit hard limit). Deliberately NOT
+/// tied to BrandNanoRef — that table serves the person-layer pipeline.
+model VariationReference {
+  id          String   @id @default(cuid())
+  presetId    String
+  preset      NeuralPromptPreset @relation(fields: [presetId], references: [id], onDelete: Cascade)
+  brandName   String // BASE brand name, same values as Bundle.brandNames entries
+  imageUrl    String // Cloudinary secure_url
+  publicId    String // Cloudinary public_id (for delete)
+  width       Int
+  height      Int
+  sortOrder   Int      @default(0) // admin order = priority when trimming to 14
+  createdById String?
+  createdAt   DateTime @default(now())
+
+  @@unique([presetId, brandName, publicId])
+  @@index([presetId, brandName])
 }
 
 /// One "Send to Smartico" run (D6): approved assets → Cloudinary + generated

@@ -19,7 +19,9 @@
     "prisma:studio": "prisma studio",
     "prisma:seed": "tsx prisma/seed.ts",
     "test": "vitest run",
-    "test:watch": "vitest"
+    "test:watch": "vitest",
+    "check:fonts": "tsx scripts/check-fonts.ts",
+    "contact-sheet": "tsx scripts/contact-sheet.ts"
   },
   "keywords": [],
   "author": "",
@@ -41,6 +43,7 @@
     "node-cron": "^4.2.1",
     "pg": "^8.21.0",
     "prisma": "^7.8.0",
+    "sharp": "0.35.3",
     "tsx": "^4.22.4",
     "yauzl": "^3.4.0",
     "zod": "^3.24.1"

@@ -6,10 +6,13 @@ import { env, assertApiProductionConfig } from "./env.js";
 import { healthRouter } from "./routes/health.js";
 import { authRouter } from "./routes/auth.js";
 import { adminRouter } from "./routes/admin.js";
+import { decorRouter } from "./routes/decor.js";
+import { patternSpecAdminRouter } from "./routes/patternSpecAdmin.js";
 import { catalogRouter } from "./routes/catalog.js";
 import { generateRouter } from "./routes/generate.js";
 import { tournamentRouter } from "./routes/tournament.js";
 import { tournamentAdminRouter } from "./routes/tournamentAdmin.js";
+import { tournamentPackRouter } from "./routes/tournamentPack.js";
 import { myBrandsRouter } from "./routes/myBrands.js";
 import {
   loadUser,
@@ -21,6 +24,7 @@ import {
   requireZone,
 } from "./middleware/auth.js";
 import { bundlesRouter } from "./routes/bundles.js";
+import { crmAdminRouter } from "./routes/crmAdmin.js";
 import { calculatorRouter } from "./routes/calculator.js";
 import { auditorRouter } from "./routes/auditor.js";
 import { crmRouter } from "./routes/crm.js";
@@ -50,6 +54,12 @@ app.get("/", (_req, res) => {
 
 app.use("/health", healthRouter);
 app.use("/auth", authRouter);
+// Библиотека декора (Задание 2, Фаза 2). Монтируется ДО `/api/admin`: префикс
+// у adminRouter более общий, и он перехватил бы запрос первым.
+app.use("/api/admin/decor", loadUser, requireAdmin, decorRouter);
+// Pattern-спеки (Задание 3): майнер по корпусу эталонов из админки. Тоже до
+// общего /api/admin — иначе его перехватит adminRouter.
+app.use("/api/admin/pattern-specs", loadUser, requireAdmin, patternSpecAdminRouter);
 app.use("/api/admin", loadUser, requireAdmin, adminRouter);
 // Zone guards: Design (DESIGNER) vs CRM (CRM); ADMIN passes both (see requireZone).
 app.use("/api/catalog", loadUser, requireAuth, requireZone("DESIGNER"), catalogRouter);
@@ -60,7 +70,12 @@ app.use("/api/qa-tools", loadUser, requireAuth, requireZone("CRM"), qatoolsRoute
 app.use("/api/crm", loadUser, requireAuth, requireZone("CRM"), crmRouter);
 // Image Bundles (TASK crm-bundle): CRM_SUPER / ADMIN / MANAGER only (D4).
 app.use("/api/bundles", loadUser, requireAuth, requireCrmSuper, bundlesRouter);
+// CRM-админка (TASK ai-reference, DI-R12): вариации + референсы для CRM_SUPER.
+app.use("/api/crm-admin", loadUser, requireAuth, requireCrmSuper, crmAdminRouter);
 app.use("/api/tournament-admin", loadUser, requireAuth, requireAdminOrManager, tournamentAdminRouter);
+// «Edit Tournament pack» (TASK tournament-pack): the same tournament data as the
+// admin panel, but audited + rollback-able, for SUPER_DESIGNER / ADMIN / MANAGER.
+app.use("/api/tournament-pack", loadUser, requireAuth, requireSuperDesigner, tournamentPackRouter);
 app.use("/api/tournament", loadUser, requireAuth, requireZone("DESIGNER"), tournamentRouter);
 // Super-designer surface (own-brand CRUD + brand test runs).
 app.use("/api/my-brands", loadUser, requireAuth, requireSuperDesigner, myBrandsRouter);

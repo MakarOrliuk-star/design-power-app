@@ -12,6 +12,8 @@ import { sendBundleToSmartico } from "../services/bundleSmartico.service.js";
 import type { BundleTypeAsset } from "../services/bundle.service.js";
 import { canApproveAsset } from "../services/bundleStatus.js";
 import type { BundleAssetStatus } from "../services/bundleStatus.js";
+import { derivedAssetKeys, derivedAssetLabel } from "../services/aiReferencePipeline.js";
+import { refCountsByBrand, MIN_REFS_FOR_GENERATION } from "../services/variationRefs.js";
 
 // Image Bundles API (TASK crm-bundle, R-PLAN §7). Mounted behind loadUser +
 // requireAuth + requireCrmSuper (see index.ts) — CRM_SUPER / ADMIN / MANAGER
@@ -29,6 +31,9 @@ const createSchema = z.object({
   neuralPrompt: z.string().max(MAX_PROMPT).optional(),
   bundleTypeKey: z.string().optional(), // defaults to the first active type
   brandNames: z.array(z.string().trim().min(1)).max(500).optional(),
+  // Вариация для ai_reference (TASK ai-reference): обязательность проверяет
+  // launchGeneration (preset_required), на черновике поле свободное.
+  presetId: z.string().min(1).max(64).nullish(),
 });
 
 const patchSchema = z.object({
@@ -36,7 +41,17 @@ const patchSchema = z.object({
   plannedSendAt: z.string().datetime({ offset: true }).nullable().optional(),
   neuralPrompt: z.string().max(MAX_PROMPT).optional(),
   brandNames: z.array(z.string().trim().min(1)).max(500).optional(),
+  presetId: z.string().min(1).max(64).nullable().optional(),
 });
+
+/** presetId из запроса → существует ли активный пресет (404-гейт до записи). */
+async function presetExists(presetId: string): Promise<boolean> {
+  const preset = await prisma.neuralPromptPreset.findUnique({
+    where: { id: presetId },
+    select: { id: true },
+  });
+  return Boolean(preset);
+}
 
 const approveSchema = z.object({
   assetIds: z.array(z.string().min(1)).min(1).max(500),
@@ -69,6 +84,21 @@ bundlesRouter.get("/meta", async (_req: Request, res: Response) => {
     listBundleBrands(),
   ]);
   res.json({ bundleTypes: types, presets, brands });
+});
+
+/**
+ * Счётчики референсов вариации по базовым брендам (TASK ai-reference):
+ * бейджи «7/15» и блокировка брендов с < min в мастере. Роут объявлен ДО
+ * `/:id`, иначе его перехватит параметрический матч.
+ */
+bundlesRouter.get("/ref-counts", async (req: Request, res: Response) => {
+  const presetId = typeof req.query.presetId === "string" ? req.query.presetId.trim() : "";
+  if (!presetId) {
+    res.status(400).json({ error: "preset_id_required" });
+    return;
+  }
+  const counts = await refCountsByBrand(presetId);
+  res.json({ counts, min: MIN_REFS_FOR_GENERATION });
 });
 
 /** Project list: search + status tabs + pagination + per-status counts. */
@@ -142,6 +172,10 @@ bundlesRouter.post("/", async (req: Request, res: Response) => {
     res.status(400).json({ error: "unknown_bundle_type" });
     return;
   }
+  if (parsed.data.presetId && !(await presetExists(parsed.data.presetId))) {
+    res.status(404).json({ error: "preset_not_found" });
+    return;
+  }
   const bundle = await prisma.bundle.create({
     data: {
       name: parsed.data.name,
@@ -149,12 +183,102 @@ bundlesRouter.post("/", async (req: Request, res: Response) => {
       neuralPrompt: parsed.data.neuralPrompt ?? "",
       brandNames: parsed.data.brandNames ?? [],
       bundleTypeId: bundleType.id,
+      presetId: parsed.data.presetId ?? null,
       createdById: req.user!.sub,
     },
     select: { id: true, name: true, status: true },
   });
   res.status(201).json({ bundle: { ...bundle, status: bundle.status.toLowerCase() } });
 });
+
+/** Composition metadata the CRM preview needs (TASK email-composition, Фаза 5).
+ *  `BundleAsset.metadata` is free-form Json written by the engine, so the route
+ *  projects a narrow, checked shape instead of forwarding raw rows; legacy
+ *  assets (no engine render) simply get `null`. */
+interface AssetPreviewMeta {
+  specKey: string;
+  specVersion: number;
+  safeZonePct: { x: number; y: number; w: number; h: number };
+  recommendedTextColor: string | null;
+  luminance: number | null;
+  textContrast: { white: number; dark: number } | null;
+  retinaUrl: string | null;
+  validator: { passed: boolean; attempts: number } | null;
+  /** Приёмка ai_reference (стадия B): бейдж «лучший из N» + причины (DI-R10).
+   *  healing — итог auto-коррекции (TASK safe-zone/auto-heal): сколько попыток
+   *  лечения было и стала ли вылеченная версия финальной. */
+  qa: {
+    passed: boolean;
+    attempts: number;
+    reasons: string[];
+    healing: { attempts: number; used: boolean } | null;
+  } | null;
+}
+
+function isPctBox(v: unknown): v is AssetPreviewMeta["safeZonePct"] {
+  if (typeof v !== "object" || v === null) return false;
+  const b = v as Record<string, unknown>;
+  return ["x", "y", "w", "h"].every((k) => typeof b[k] === "number" && Number.isFinite(b[k]));
+}
+
+export function assetPreviewMeta(raw: unknown): AssetPreviewMeta | null {
+  if (typeof raw !== "object" || raw === null) return null;
+  const m = raw as Record<string, unknown>;
+  if (!isPctBox(m.safeZonePct)) return null;
+  const contrast = m.textContrast as Record<string, unknown> | null | undefined;
+  const validator = m.validator as Record<string, unknown> | null | undefined;
+  return {
+    specKey: typeof m.specKey === "string" ? m.specKey : "",
+    specVersion: typeof m.specVersion === "number" ? m.specVersion : 0,
+    safeZonePct: m.safeZonePct,
+    recommendedTextColor:
+      typeof m.recommendedTextColor === "string" ? m.recommendedTextColor : null,
+    luminance: typeof m.luminance === "number" ? m.luminance : null,
+    textContrast:
+      contrast && typeof contrast.white === "number" && typeof contrast.dark === "number"
+        ? { white: contrast.white, dark: contrast.dark }
+        : null,
+    retinaUrl: typeof m.retinaUrl === "string" ? m.retinaUrl : null,
+    validator:
+      validator && typeof validator.passed === "boolean"
+        ? {
+            passed: validator.passed,
+            attempts: typeof validator.attempts === "number" ? validator.attempts : 1,
+          }
+        : null,
+    qa: projectQaMeta(m.qa),
+  };
+}
+
+/** reasons произвольной попытки из metadata.qa → проверенный string[]. */
+function attemptReasons(row: unknown): string[] {
+  if (!row || typeof row !== "object") return [];
+  const reasons = (row as Record<string, unknown>).reasons;
+  return Array.isArray(reasons) ? reasons.filter((r): r is string => typeof r === "string") : [];
+}
+
+/** metadata.qa пайплайна ai_reference → узкая проверенная проекция для CRM. */
+function projectQaMeta(raw: unknown): AssetPreviewMeta["qa"] {
+  if (typeof raw !== "object" || raw === null) return null;
+  const q = raw as Record<string, unknown>;
+  if (typeof q.qaPassed !== "boolean") return null;
+  const attempts = Array.isArray(q.attempts) ? q.attempts : [];
+  const healingRaw = q.healing as Record<string, unknown> | null | undefined;
+  const healingAttempts =
+    healingRaw && Array.isArray(healingRaw.attempts) ? healingRaw.attempts : null;
+  const healing = healingAttempts
+    ? { attempts: healingAttempts.length, used: healingRaw!.used === true }
+    : null;
+  // Причины — у фактического победителя: вылеченная попытка, если финал —
+  // результат лечения, иначе выбранная попытка генерации.
+  const chosen =
+    healing?.used && typeof healingRaw!.chosenAttempt === "number"
+      ? (healingAttempts![healingRaw!.chosenAttempt] as unknown)
+      : typeof q.chosenAttempt === "number"
+        ? (attempts[q.chosenAttempt] as unknown)
+        : null;
+  return { passed: q.qaPassed, attempts: attempts.length, reasons: attemptReasons(chosen), healing };
+}
 
 /** Bundle details for the Result screen (variants + assets + summary). */
 bundlesRouter.get("/:id", async (req: Request, res: Response) => {
@@ -164,6 +288,7 @@ bundlesRouter.get("/:id", async (req: Request, res: Response) => {
     where: { id },
     include: {
       bundleType: { select: { key: true, title: true, assets: true } },
+      preset: { select: { id: true, title: true } },
       variants: {
         orderBy: { brandName: "asc" },
         include: { assets: { orderBy: { assetKey: "asc" } } },
@@ -176,8 +301,20 @@ bundlesRouter.get("/:id", async (req: Request, res: Response) => {
   }
 
   const typeAssets = bundle.bundleType.assets as unknown as BundleTypeAsset[];
-  const orderOf = new Map(typeAssets.map((a, i) => [a.key, i]));
-  const labelOf = new Map(typeAssets.map((a) => [a.key, a.label]));
+  // Производные ключи семейства ai_reference идут сразу за родителем:
+  // email → email_notext → email_transparent (порядок экрана результата).
+  const orderOf = new Map<string, number>();
+  const labelOf = new Map<string, string>();
+  typeAssets.forEach((a, i) => {
+    orderOf.set(a.key, i * 10);
+    labelOf.set(a.key, a.label);
+    if (a.composeMode === "ai_reference") {
+      derivedAssetKeys(a.key).forEach((key, j) => {
+        orderOf.set(key, i * 10 + j + 1);
+        labelOf.set(key, derivedAssetLabel(a.label, key));
+      });
+    }
+  });
 
   let assetTotal = 0;
   let assetDone = 0;
@@ -189,22 +326,36 @@ bundlesRouter.get("/:id", async (req: Request, res: Response) => {
         assetTotal += 1;
         if (a.status === "DONE") assetDone += 1;
         if (a.approved) approvedCount += 1;
+        // Одно-ассетный ai_reference (TASK safe-zone/auto-heal): результат —
+        // прозрачная версия, подпись уточняется по metadata.transparent без
+        // правки конфига BundleType.
+        const isTransparent =
+          typeof a.metadata === "object" &&
+          a.metadata !== null &&
+          (a.metadata as Record<string, unknown>).transparent === true;
+        const baseLabel = labelOf.get(a.assetKey) ?? a.assetKey;
         return {
           id: a.id,
           assetKey: a.assetKey,
-          label: labelOf.get(a.assetKey) ?? a.assetKey,
+          label: isTransparent ? `${baseLabel} — прозрачный фон` : baseLabel,
           width: a.width,
           height: a.height,
           imageUrl: a.imageUrl,
           status: a.status.toLowerCase(),
           approved: a.approved,
           errorMessage: a.errorMessage,
+          // Engine renders carry the safe-zone/luminance metadata the CRM
+          // preview overlays; ai-mode and pre-engine assets carry null.
+          meta: assetPreviewMeta(a.metadata),
         };
       });
     return {
       id: v.id,
       brandName: v.brandName,
       displayName: v.displayName,
+      // Style-profile «казино-дизайнера» (DV-E1) — данные стиля, не координаты.
+      // Отдаётся как есть: редактор в CRM (админ) показывает и правит его же.
+      styleProfile: v.styleProfile ?? null,
       assets,
       approvedCount: assets.filter((a) => a.approved).length,
     };
@@ -217,6 +368,8 @@ bundlesRouter.get("/:id", async (req: Request, res: Response) => {
       status: bundle.status.toLowerCase(),
       plannedSendAt: bundle.plannedSendAt,
       neuralPrompt: bundle.neuralPrompt,
+      presetId: bundle.presetId,
+      presetTitle: bundle.preset?.title ?? null,
       brandNames: (bundle.brandNames as string[]) ?? [],
       createdAt: bundle.createdAt,
       updatedAt: bundle.updatedAt,
@@ -256,17 +409,31 @@ bundlesRouter.patch("/:id", async (req: Request, res: Response) => {
     return;
   }
 
+  if (parsed.data.presetId && !(await presetExists(parsed.data.presetId))) {
+    res.status(404).json({ error: "preset_not_found" });
+    return;
+  }
+
   const data: Record<string, unknown> = {};
   if (parsed.data.name !== undefined) data.name = parsed.data.name;
   if (parsed.data.plannedSendAt !== undefined)
     data.plannedSendAt = parsed.data.plannedSendAt ? new Date(parsed.data.plannedSendAt) : null;
   if (parsed.data.neuralPrompt !== undefined) data.neuralPrompt = parsed.data.neuralPrompt;
   if (parsed.data.brandNames !== undefined) data.brandNames = parsed.data.brandNames;
+  if (parsed.data.presetId !== undefined) data.presetId = parsed.data.presetId;
 
   const updated = await prisma.bundle.update({
     where: { id: bundle.id },
     data,
-    select: { id: true, name: true, status: true, plannedSendAt: true, neuralPrompt: true, brandNames: true },
+    select: {
+      id: true,
+      name: true,
+      status: true,
+      plannedSendAt: true,
+      neuralPrompt: true,
+      brandNames: true,
+      presetId: true,
+    },
   });
   res.json({ bundle: { ...updated, status: updated.status.toLowerCase() } });
 });
@@ -293,8 +460,16 @@ bundlesRouter.post("/:id/generate", async (req: Request, res: Response) => {
     return;
   }
   if (!result.ok) {
-    const codes = { already_generating: 409, no_brands: 400, queue_unavailable: 503 } as const;
-    res.status(codes[result.error]).json({ error: result.error });
+    const codes = {
+      already_generating: 409,
+      no_brands: 400,
+      queue_unavailable: 503,
+      preset_required: 400,
+      refs_missing: 422,
+    } as const;
+    res
+      .status(codes[result.error])
+      .json({ error: result.error, ...(result.missingRefs ? { missingRefs: result.missingRefs } : {}) });
     return;
   }
   res.status(202).json({ ok: true, variantCount: result.variantCount, assetCount: result.assetCount });
@@ -310,8 +485,16 @@ bundlesRouter.post("/:id/regenerate-all", async (req: Request, res: Response) =>
     return;
   }
   if (!result.ok) {
-    const codes = { already_generating: 409, no_brands: 400, queue_unavailable: 503 } as const;
-    res.status(codes[result.error]).json({ error: result.error });
+    const codes = {
+      already_generating: 409,
+      no_brands: 400,
+      queue_unavailable: 503,
+      preset_required: 400,
+      refs_missing: 422,
+    } as const;
+    res
+      .status(codes[result.error])
+      .json({ error: result.error, ...(result.missingRefs ? { missingRefs: result.missingRefs } : {}) });
     return;
   }
   res.status(202).json({ ok: true });
