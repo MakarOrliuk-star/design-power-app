@@ -735,10 +735,8 @@ watch(logs, async () => {
 async function testTemplateParser() {
   templatePreviewData.value = '⏳ Распознаю данные...';
   try {
-    // Важно: здесь мы стучимся напрямую в Python (предполагаем, что он на порту 4000)
-    // Если твой python-роутер имеет префикс, возможно нужно будет указать /audit/preview
-    // Изменили /preview на /audit/preview
-    const response = await fetch('http://127.0.0.1:8000/api/single-report/preview', {
+    // 🟢 ФИКС: Используем относительный путь, чтобы запрос прошел через Railway Proxy
+    const response = await fetch('/api/single-report/preview', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
@@ -793,8 +791,9 @@ async function executeAuditPipeline(payloadData) {
   const firstItemValue = activeTab.value === 'single' ? payloadData[0].value : payloadData[0];
   const activeToken = savedTokens.value[extractEnvFromUrl(firstItemValue)];
 
+  // 🟢 ФИКС: Убрали хардкод 127.0.0.1. Теперь все запросы идут через маршрутизатор сервера.
   const endpoint = activeTab.value === 'single' 
-    ? 'http://127.0.0.1:8000/api/single-report/generate' 
+    ? '/api/single-report/generate' 
     : '/api/qa-tools/mass-audit';
 
   // Отправляем объект ВСЕХ токенов (tokens) + старый token для совместимости
