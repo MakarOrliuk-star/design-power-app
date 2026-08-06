@@ -78,6 +78,7 @@ qatoolsRouter.post("/single-audit", (req, res) => proxyStream(req, res, "/api/si
 qatoolsRouter.post("/mass-audit", (req, res) => proxyStream(req, res, "/api/mass-report/generate"));
 
 // 2. Обычные маршруты (Brands & Labels)
+qatoolsRouter.post("/single-preview", (req, res) => proxyJson(req, res, "/api/single-report/preview"));
 qatoolsRouter.post("/brands/search-campaigns", (req, res) => proxyJson(req, res, "/api/brands/search-campaigns"));
 qatoolsRouter.post("/brands/bulk-labels", (req, res) => proxyJson(req, res, "/api/brands/bulk-labels"));
 qatoolsRouter.post("/brands/resolve-links", (req, res) => proxyJson(req, res, "/api/brands/resolve-links"));
