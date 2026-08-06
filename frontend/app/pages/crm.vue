@@ -12,7 +12,7 @@ const { theme, toggle: toggleTheme } = useTheme();
 
 // Only services with real logic are openable (and favoritable). The "soon"
 // tiles are disabled placeholders — see SERVICES below.
-type ServiceKey = "calculator" | "bonuscalc" | "auditor" | "smartico" | "prioritycalc" | "qatools" | "bundles" | "sms";
+type ServiceKey = "calculator" | "bonuscalc" |  "smartico" | "prioritycalc" | "qatools" | "bundles" | "sms";
 const activeService = ref<null | ServiceKey>(null);
 
 const route = useRoute();
@@ -23,7 +23,6 @@ const router = useRouter();
 const OPENABLE = new Set<ServiceKey>([
   "calculator",
   "bonuscalc",
-  "auditor",
   "smartico",
   "prioritycalc",
   "qatools",
@@ -75,15 +74,6 @@ const SERVICES: Service[] = [
     desc: "Расчёт костов, вейджеров и комиссий для Free Spins, Deposit Bonus и Hybrid.",
     icon: "🎯",
     iconBg: "#fef3c7",
-    footer: "Запустить сервис →",
-    soon: false,
-  },
-  {
-    key: "auditor",
-    title: "Массовый аудит",
-    desc: "Сканирование маркетинговых кампаний Smartico, генерация Flow Map и выгрузка интерактивных HTML-отчётов.",
-    icon: "🔎",
-    iconBg: "#eff6ff",
     footer: "Запустить сервис →",
     soon: false,
   },
@@ -159,7 +149,6 @@ const SERVICES: Service[] = [
 const SERVICE_TITLES: Record<ServiceKey, string> = {
   calculator: "Валютный калькулятор",
   bonuscalc: "Калькулятор Бонусов",
-  auditor: "Массовый аудит",
   smartico: "Unique Image Smartico",
   prioritycalc: "Калькулятор Приоритетов",
   qatools: "QA tools",
@@ -366,7 +355,6 @@ onMounted(() => {
         <div class="service-body">
           <CrmCalculator v-if="activeService === 'calculator'" />
           <CrmBonusCalculator v-else-if="activeService === 'bonuscalc'" />
-          <CrmAuditor v-else-if="activeService === 'auditor'" />
           <CrmSmartico v-else-if="activeService === 'smartico'" :drive-return="driveReturn" />
           <PriorityCalculator v-else-if="activeService === 'prioritycalc'" />
           <CrmQatools v-else-if="activeService === 'qatools'" />

@@ -15,7 +15,6 @@ export const crmRouter: Router = Router();
 const VALID_SERVICE_KEYS = new Set([
   "calculator",
   "bonuscalc",
-  "auditor",
   "smartico",
   "chrome_extensions",
   "prioritycalc",

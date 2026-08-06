@@ -26,7 +26,6 @@ import {
 import { bundlesRouter } from "./routes/bundles.js";
 import { crmAdminRouter } from "./routes/crmAdmin.js";
 import { calculatorRouter } from "./routes/calculator.js";
-import { auditorRouter } from "./routes/auditor.js";
 import { crmRouter } from "./routes/crm.js";
 import { smarticoRouter } from "./routes/smartico.js";
 import { startSmarticoWorker, stopSmarticoWorker } from "./queues/smartico.worker.js";
@@ -66,7 +65,6 @@ app.use("/api/admin", loadUser, requireAdmin, adminRouter);
 // Zone guards: Design (DESIGNER) vs CRM (CRM); ADMIN passes both (see requireZone).
 app.use("/api/catalog", loadUser, requireAuth, requireZone("DESIGNER"), catalogRouter);
 app.use("/api/calculator", loadUser, requireAuth, requireZone("CRM"), calculatorRouter);
-app.use("/api/auditor", loadUser, requireAuth, requireZone("CRM"), auditorRouter);
 app.use("/api/smartico", loadUser, requireAuth, requireZone("CRM"), smarticoRouter);
 app.use("/api/qa-tools", loadUser, requireAuth, requireZone("CRM"), qatoolsRouter);
 app.use("/api/crm", loadUser, requireAuth, requireZone("CRM"), crmRouter);
