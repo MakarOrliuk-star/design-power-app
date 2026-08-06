@@ -99,6 +99,8 @@ async def run_backoffice_stream(payload: BackofficeAuditRequest):
             base_bonuses = await fetch_base_bonuses("welcome")
             
         valid_b_count = 0
+        local_geos = set() # Сюда соберем страны со СВОИМ локальным оффером
+        
         for b in base_bonuses:
             # 1. Пропускаем внешние
             if b.get("external", False): continue
@@ -117,17 +119,22 @@ async def run_backoffice_stream(payload: BackofficeAuditRequest):
             if not isinstance(l_aff, list): l_aff = [l_aff]
             if any(a is not None and str(a).strip() != "" for a in l_aff): continue
             
-            # Бонус прошел жесткий фильтр! Забираем его ГЕО
+            # Бонус прошел жесткий фильтр! Сохраняем его ГЕО как "Локальные"
             valid_b_count += 1
             c_list = b.get("countryList", [])
-            if not c_list:
-                dynamic_geos.add("ALL")
-            else:
-                for c in c_list:
-                    dynamic_geos.add(c.upper())
+            for c in c_list:
+                local_geos.add(c.upper())
+
+        # Вычисляем страны, у которых НЕТ своего оффера (они пойдут по фолбэку)
+        all_possible_geos = set(GEO_TO_LOCALES.keys()) - {"ALL"}
+        global_geos_only = all_possible_geos - local_geos
+        
+        # Формируем итоговую очередь: 'ALL' + страны без локальных бонусов
+        dynamic_geos = set(["ALL"])
+        dynamic_geos.update(global_geos_only)
                     
         target_geos = list(dynamic_geos)
-        yield yield_log(f"🌍 Успешно отфильтровано базовых бонусов: {valid_b_count} шт.")
+        yield yield_log(f"🌍 Исключено локальных ГЕО: {len(local_geos)} шт. В очередь добавлено Глобальных ГЕО: {len(global_geos_only)} шт.")
     elif len(raw_geos) > 1:
         target_geos = raw_geos
         mode_name = "МУЛЬТИ-ГЕО РЕЖИМ"
