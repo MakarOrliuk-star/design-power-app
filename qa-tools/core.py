@@ -17,6 +17,7 @@ class GeneralCore:
         self.drive_host = drive_host
         
         self.system_name = str(os.getenv("SYSTEM_NAME", "CRM"))
+        self.categorized_labels = defaultdict(set)
         
         # 👇 СИСТЕМА ЦВЕТНЫХ БЕЙДЖЕЙ 👇
         self.badge_map = {}
@@ -117,7 +118,7 @@ class GeneralCore:
         name = label_name.lower().replace("{{label.", "").replace("}}", "")
         
         # 🛑 0. СТОП-СЛОВА (Структурные элементы и тексты)
-        stop_words = ["preheader", "h1", "h2", "h3", "greeting", "content", "subject", "text", "img", "image", "button", "link", "url", "icon", "utm", "term", "terms", "tnc", "policy", "rule"]
+        stop_words = ["preheader", "h1", "h2", "h3", "greeting", "content", "subject", "text", "img", "image", "button", "link", "url", "icon", "utm", "term", "terms", "tnc", "policy", "rule", "use_code", "usecode", "color", "bg", "background", "title", "sub_title", "subtitle", "font", "radius", "valign"]
         if any(word in name for word in stop_words):
             return None, None
             
@@ -1704,7 +1705,7 @@ class GeneralCore:
                     
                 if li_parts:
                     settings_html = "".join(li_parts)
-                    modal_html_blocks.append(f"<div style='margin-bottom: 10px;'><b style='color: #334155; font-size: 14px;'>⚙️ Node Settings</b><div style='margin-top: 6px; background: #f8fafc; border: 1px solid #e2e8f0; border-left: 4px solid #64748b; padding: 8px; border-radius: 4px; font-size: 12px; color: #334155;'>{settings_html}</div></div>")
+                    modal_html_blocks.append(f"<div style='margin-bottom: 10px;'><b style='color: #334155; font-size: 14px;'>⚙️ Caps/Opt-out</b><div style='margin-top: 6px; background: #f8fafc; border: 1px solid #e2e8f0; border-left: 4px solid #64748b; padding: 8px; border-radius: 4px; font-size: 12px; color: #334155;'>{settings_html}</div></div>")
 
             if "saw_template_id" in details and "mini game" in n_low:
                 t_id = details["saw_template_id"]
@@ -2023,7 +2024,7 @@ class GeneralCore:
             <div style="margin: 10px 20px 20px 20px; font-family: sans-serif;">
                 <details style="background: #f8fafc; padding: 15px; border-radius: 8px; border: 1px solid #e2e8f0; box-shadow: inset 0 1px 3px rgba(0,0,0,0.02);" open>
                     <summary style="cursor:pointer; font-weight:bold; color:#334155; font-size:15px; outline:none; user-select:none;">
-                        🗺️ Интерактивная карта (Flow Builder Map) <span style="font-size:13px; font-weight:normal; color:#64748b; margin-left:15px;">Нажмите, чтобы свернуть/развернуть</span>
+                        🗺️ Flow map <span style="font-size:13px; font-weight:normal; color:#64748b; margin-left:15px;">Нажмите, чтобы свернуть/развернуть</span>
                     </summary>
                     <div style="margin-top: 20px;">
                         {flow_trees}
@@ -2146,10 +2147,13 @@ class GeneralCore:
         
         clean_lbl = self.normalize_label_name(label_name)
         if not clean_lbl: return ""
+        
+        global_err_cats = set()
 
         # 🤖 УМНЫЙ АНАЛИЗАТОР НАЗВАНИЯ
         lbl_type_id, lbl_type_name = self.guess_label_category(label_name)
         if lbl_type_name:
+            self.categorized_labels[lbl_type_name].add(clean_lbl)
             custom_badge += f"<span style='background:#f3e8ff; color:#7e22ce; padding:2px 8px; border-radius:12px; font-size:11px; font-weight:bold; border:1px solid #e9d5ff;' title='Определено по названию макроса'>🤖 {lbl_type_name}</span>"
         
         data = data or labels_store.get(label_name) or labels_store.get(clean_lbl)
@@ -2276,7 +2280,7 @@ class GeneralCore:
             if dup_errs:
                 errs_joined = "<br>".join([f"<span>• {e}</span>" for e in dup_errs])
                 data_details_dup = " | ".join([re.sub(r'<[^>]+>', '', e) for e in dup_errs]).replace('"', '&quot;').replace("'", "&#39;")
-                warnings_html += f"<div class='copyable-error critical-error-flag' data-macro='{esc(label_name)}' data-brand='Global' data-lang='JS Syntax' data-details='{data_details_dup}' style='background: #fef2f2; border: 1px solid #fca5a5; color: #b91c1c; padding: 10px 14px; border-radius: 8px; font-size: 13px; margin-bottom: 12px;'><div style='font-weight:bold; margin-bottom:4px;'>🛑 Критическая ошибка (Синтаксис JS): Код перезапишет сам себя!</div>{errs_joined}</div>"
+                warnings_html += f"<div class='copyable-error critical-error-flag' data-macro='{esc(label_name)}' data-url='{esc(label_url)}' data-brand='Global' data-lang='JS Syntax' data-details='{data_details_dup}' style='background: #fef2f2; border: 1px solid #fca5a5; color: #b91c1c; padding: 10px 14px; border-radius: 8px; font-size: 13px; margin-bottom: 12px;'><div style='font-weight:bold; margin-bottom:4px;'>🛑 Критическая ошибка (Синтаксис JS): Код перезапишет сам себя!</div>{errs_joined}</div>"
 
             global_sims = 0
             global_crit_count = 0
@@ -2472,9 +2476,15 @@ class GeneralCore:
                     # ⚡️ КАТЕГОРИЗАТОР ОШИБОК ДЛЯ ПЛАШЕК
                     err_cats = set()
                     joined_errs = " ".join(clean_errs).lower()
-                    if any(x in joined_errs for x in ["длина", "превышен лимит", "двойная смс", "симв."]): err_cats.add("Длина")
-                    if any(x in joined_errs for x in ["макросов", "отсутствуют", "лишние", "лейблов"]): err_cats.add("Макросы")
-                    if any(x in joined_errs for x in ["сломанные", "опечатка", "скобки", "решеток", "знаков @", "пробел", "слипся", "ошибка типа"]): err_cats.add("Синтаксис")
+                    if any(x in joined_errs for x in ["длина", "превышен лимит", "двойная смс", "симв."]): 
+                        err_cats.add("Длина")
+                        global_err_cats.add("Длина")
+                    if any(x in joined_errs for x in ["макросов", "отсутствуют", "лишние", "лейблов", "совпадает", "расхождение"]): 
+                        err_cats.add("Макросы")
+                        global_err_cats.add("Макросы")
+                    if any(x in joined_errs for x in ["сломанные", "опечатка", "скобки", "решеток", "знаков @", "пробел", "слипся", "ошибка типа", "синтаксис"]): 
+                        err_cats.add("Синтаксис")
+                        global_err_cats.add("Синтаксис")
                     if "ucs-2" in joined_errs: err_cats.add("Кодировка")
                     err_title = ", ".join(sorted(list(err_cats))) if err_cats else "Дефекты"
                     
@@ -2505,7 +2515,7 @@ class GeneralCore:
                     crit_flag = "critical-error-flag" if crit_errs else ""
 
                     pill_html = f"""
-                    <details class="sim-pill {pill_class} {copy_class} {crit_flag}" data-macro='{esc(label_name)}' data-brand='{esc(brand_name)}' data-lang='{esc(lang_key)}' data-details="{data_details}">
+                    <details class="sim-pill {pill_class} {copy_class} {crit_flag}" data-macro='{esc(label_name)}' data-url='{esc(label_url)}' data-brand='{esc(brand_name)}' data-lang='{esc(lang_key)}' data-details="{data_details}">
                         <summary>
                             <b>{esc(lang_key)}</b> <span style="font-weight:normal; opacity:0.8;">{summary_text}</span>
                             <span class="custom-tooltip">{hover_text}</span>
@@ -2562,6 +2572,12 @@ class GeneralCore:
             if crit_errs or warn_errs:
                 clean_errs = [re.sub(r'<[^>]+>', '', e) for e in (crit_errs + warn_errs)]
                 data_details = " | ".join(clean_errs).replace('"', '&quot;').replace("'", "&#39;")
+                
+                joined_errs = data_details.lower()
+                if any(x in joined_errs for x in ["длина", "превышен лимит", "двойная смс", "симв."]): global_err_cats.add("Длина")
+                if any(x in joined_errs for x in ["макросов", "отсутствуют", "лишние", "лейблов", "совпадает", "расхождение"]): global_err_cats.add("Макросы")
+                if any(x in joined_errs for x in ["сломанные", "опечатка", "скобки", "решеток", "знаков @", "пробел", "слипся", "ошибка типа", "синтаксис"]): global_err_cats.add("Синтаксис")
+                if not global_err_cats: global_err_cats.add("Синтаксис")
                 
                 err_html_lines = []
                 if crit_errs:
@@ -2650,9 +2666,9 @@ class GeneralCore:
                 err_html = "".join(err_html_lines)
                 
                 if crit_errs:
-                    val_display += f"<div class='copyable-error critical-error-flag' data-macro='{esc(label_name)}' data-brand='Variation' data-lang='{esc(cond_str)}' data-details='{data_details}' style='background: #fef2f2; border: 1px solid #fca5a5; color: #b91c1c; padding: 10px 14px; border-radius: 8px; font-size: 13px; margin-top: 8px; margin-bottom: 8px;'>{err_html}</div>"
+                    val_display += f"<div class='copyable-error critical-error-flag' data-macro='{esc(label_name)}' data-url='{esc(label_url)}' data-brand='Variation' data-lang='{esc(cond_str)}' data-details='{data_details}' style='background: #fef2f2; border: 1px solid #fca5a5; color: #b91c1c; padding: 10px 14px; border-radius: 8px; font-size: 13px; margin-top: 8px; margin-bottom: 8px;'>{err_html}</div>"
                 else:
-                    val_display += f"<div class='copyable-error' data-macro='{esc(label_name)}' data-brand='Variation' data-lang='{esc(cond_str)}' data-details='{data_details}' style='background: #fff3cd; border: 1px solid #f39c12; color: #856404; padding: 10px 14px; border-radius: 8px; font-size: 13px; margin-top: 8px; margin-bottom: 8px;'>{err_html}</div>"
+                    val_display += f"<div class='copyable-error' data-macro='{esc(label_name)}' data-url='{esc(label_url)}' data-brand='Variation' data-lang='{esc(cond_str)}' data-details='{data_details}' style='background: #fff3cd; border: 1px solid #f39c12; color: #856404; padding: 10px 14px; border-radius: 8px; font-size: 13px; margin-top: 8px; margin-bottom: 8px;'>{err_html}</div>"
             
             c_up = cond_str.upper()
             
@@ -2697,10 +2713,15 @@ class GeneralCore:
 
         vars_rows = "".join(vars_rows_list)
 
+        # Устанавливаем Data-URL для всех блоков с ошибками (выполняем replace в уже сгенерированных строках)
+        warnings_html = warnings_html.replace("data-brand='Global'", f"data-url='{esc(label_url)}' data-brand='Global'")
+        vars_rows = vars_rows.replace("data-brand='Variation'", f"data-url='{esc(label_url)}' data-brand='Variation'")
+
         if label_mismatch_warnings:
+            global_err_cats.add("Макросы")
             clean_mismatches = [re.sub(r'<[^>]+>', '', m) for m in label_mismatch_warnings]
             data_details = " | ".join(clean_mismatches).replace('"', '&quot;').replace("'", "&#39;")
-            warnings_html += f"<div class='copyable-error critical-error-flag' data-macro='{esc(label_name)}' data-brand='Global' data-lang='Default Mismatch' data-details='{data_details}' style='background: #fef2f2; border: 1px solid #fca5a5; color: #b91c1c; padding: 10px 14px; border-radius: 8px; font-size: 13px; font-weight: bold; margin-bottom: 8px;'>🚨 Расхождение с Default Value:<br>{'<br>'.join(label_mismatch_warnings)}</div>"
+            warnings_html += f"<div class='copyable-error critical-error-flag' data-macro='{esc(label_name)}' data-url='{esc(label_url)}' data-brand='Global' data-lang='Default Mismatch' data-details='{data_details}' style='background: #fef2f2; border: 1px solid #fca5a5; color: #b91c1c; padding: 10px 14px; border-radius: 8px; font-size: 13px; font-weight: bold; margin-bottom: 8px;'>🚨 Расхождение с Default Value:<br>{'<br>'.join(label_mismatch_warnings)}</div>"
 
         scrollable_warnings = f"<div style='margin-bottom: 16px;'>{warnings_html}</div>" if warnings_html else ""
 
@@ -2731,23 +2752,42 @@ class GeneralCore:
         
         copy_btns = ""
         if has_any_errors:
-            copy_btns += "<div style='display:flex; gap:10px; margin-bottom:12px; flex-wrap:wrap;'>"
-            if has_critical:
-                copy_btns += "<button onclick='viewLocalErrors(this, event, true)' class='px-3 py-1.5 bg-red-50 hover:bg-red-100 text-red-700 border border-red-200 text-xs font-bold rounded transition-colors' style='cursor:pointer;'>👁️ View Critical</button>"
-                copy_btns += "<button onclick='copyLocalErrors(this, event, true)' class='px-3 py-1.5 bg-red-600 hover:bg-red-700 text-white text-xs font-bold rounded shadow-sm transition-colors' style='cursor:pointer; border:none;'>🚨 Copy Critical</button>"
-            copy_btns += "<button onclick='viewLocalErrors(this, event, false)' class='px-3 py-1.5 bg-slate-100 hover:bg-slate-200 text-slate-700 border border-slate-300 text-xs font-bold rounded transition-colors' style='cursor:pointer;'>👁️ View All Errors</button>"
-            copy_btns += "<button onclick='copyLocalErrors(this, event, false)' class='px-3 py-1.5 bg-slate-700 hover:bg-slate-800 text-white text-xs font-bold rounded shadow-sm transition-colors' style='cursor:pointer; border:none;'>📋 Copy All Errors</button>"
-            copy_btns += "</div>"
+            copy_btns += "<div style='display:flex; gap:10px; margin-bottom:12px; flex-wrap:wrap; align-items:center;' class='error-controls-panel'>\n"
+            copy_btns += """
+            <div style="position:relative;" class="custom-dropdown-container">
+                <button onclick="this.nextElementSibling.style.display = this.nextElementSibling.style.display === 'none' ? 'flex' : 'none';" class="px-3 py-1.5 bg-slate-700 hover:bg-slate-800 text-white text-xs font-bold rounded shadow-sm transition-colors" style="cursor:pointer; border:none; display:flex; align-items:center; gap:6px;">📋 Копировать <span style="font-size:10px;">▼</span></button>
+                <div class="dropdown-menu" style="display:none; position:absolute; top:100%; left:0; margin-top:4px; background:#fff; border:1px solid #cbd5e1; border-radius:6px; padding:10px; width:220px; z-index:1000; box-shadow:0 4px 12px rgba(0,0,0,0.15); flex-direction:column; gap:8px;">
+                    <label style="font-size:12px; cursor:pointer; display:flex; gap:6px; align-items:center; margin:0; color:#334155;"><input type="checkbox" class="cb-copy-syntax" checked style="margin:0;"> Синтаксис / Опечатки</label>
+                    <label style="font-size:12px; cursor:pointer; display:flex; gap:6px; align-items:center; margin:0; color:#334155;"><input type="checkbox" class="cb-copy-length" checked style="margin:0;"> Длина / Лимиты</label>
+                    <label style="font-size:12px; cursor:pointer; display:flex; gap:6px; align-items:center; margin:0; color:#334155;"><input type="checkbox" class="cb-copy-macro" checked style="margin:0;"> Макросы / Несовпадения</label>
+                    <hr style="margin:4px 0; border:none; border-top:1px solid #e2e8f0;">
+                    <label style="font-size:12px; cursor:pointer; display:flex; gap:6px; align-items:center; margin:0; color:#b91c1c; font-weight:bold;"><input type="checkbox" class="cb-copy-crit" style="margin:0;"> Только критические</label>
+                    <button onclick="copyLocalErrors(this, event)" class="mt-2 px-3 py-1.5 bg-blue-600 hover:bg-blue-700 text-white text-xs font-bold rounded transition-colors w-full" style="border:none; cursor:pointer;">Скопировать</button>
+                </div>
+            </div>
             
+            <div style="position:relative;" class="custom-dropdown-container">
+                <button onclick="this.nextElementSibling.style.display = this.nextElementSibling.style.display === 'none' ? 'flex' : 'none';" class="px-3 py-1.5 bg-slate-100 hover:bg-slate-200 text-slate-700 border border-slate-300 text-xs font-bold rounded transition-colors" style="cursor:pointer; display:flex; align-items:center; gap:6px;">👁️ Фильтр ошибок <span style="font-size:10px;">▼</span></button>
+                <div class="dropdown-menu" style="display:none; position:absolute; top:100%; left:0; margin-top:4px; background:#fff; border:1px solid #cbd5e1; border-radius:6px; padding:10px; width:220px; z-index:1000; box-shadow:0 4px 12px rgba(0,0,0,0.15); flex-direction:column; gap:8px;">
+                    <label style="font-size:12px; cursor:pointer; display:flex; gap:6px; align-items:center; margin:0; color:#334155;"><input type="checkbox" class="cb-disp-syntax" checked onchange="updateErrorDisplay(this)" style="margin:0;"> Синтаксис / Опечатки</label>
+                    <label style="font-size:12px; cursor:pointer; display:flex; gap:6px; align-items:center; margin:0; color:#334155;"><input type="checkbox" class="cb-disp-length" checked onchange="updateErrorDisplay(this)" style="margin:0;"> Длина / Лимиты</label>
+                    <label style="font-size:12px; cursor:pointer; display:flex; gap:6px; align-items:center; margin:0; color:#334155;"><input type="checkbox" class="cb-disp-macro" checked onchange="updateErrorDisplay(this)" style="margin:0;"> Макросы / Несовпадения</label>
+                </div>
+            </div>
+            """
+            copy_btns += "</div>"
+        
         type_badge = f"<span style='background:#e2e8f0; color:#475569; padding:2px 8px; border-radius:12px; font-size:11px; margin-left:10px; font-weight:bold;'>🏷️ {esc(tag_type_name)}</span>"
 
         if nested_labels:
             type_badge += f"<span style='background:#fdfefe; color:#64748b; padding:2px 8px; border-radius:12px; font-size:11px; margin-left:6px; font-weight:bold; border:1px dashed #cbd5e1;' title='Содержит другие макросы внутри'>🪆 Вложенных: {len(nested_labels)}</span>"
 
+        cats_str = ", ".join(sorted(list(global_err_cats))) if global_err_cats else "Дефекты"
+        
         if has_critical:
-            type_badge += "<span style='background:#fef2f2; color:#b91c1c; padding:2px 8px; border-radius:12px; font-size:11px; margin-left:6px; font-weight:bold; border:1px solid #fca5a5;'>🛑 Есть ошибки</span>"
+            type_badge += f"<span style='background:#fef2f2; color:#b91c1c; padding:2px 8px; border-radius:12px; font-size:11px; margin-left:6px; font-weight:bold; border:1px solid #fca5a5;'>🛑 Проблемы: {cats_str}</span>"
         elif has_any_errors:
-            type_badge += "<span style='background:#fffbeb; color:#b45309; padding:2px 8px; border-radius:12px; font-size:11px; margin-left:6px; font-weight:bold; border:1px solid #fde68a;'>⚠️ Есть замечание</span>"
+            type_badge += f"<span style='background:#fffbeb; color:#b45309; padding:2px 8px; border-radius:12px; font-size:11px; margin-left:6px; font-weight:bold; border:1px solid #fde68a;'>⚠️ Замечания: {cats_str}</span>"
         else:
             type_badge += "<span style='background:#dcfce7; color:#15803d; padding:2px 8px; border-radius:12px; font-size:11px; margin-left:6px; font-weight:bold; border:1px solid #86efac;'>✅ Ошибок нет</span>"
 
@@ -3500,11 +3540,11 @@ class GeneralCore:
                 # 🟢 СЛОВАРЬ ОБЯЗАТЕЛЬНЫХ ПРАВИЛ ПРОМО 🟢
                 expected_rules = {
                     "email": [
-                        "Core: smartico email status (internal) | is not one of | (BLOCKED, BOUNCED, BROKEN)",
+                        f"Core: {self.system_name.lower()} email status (internal) | is not one of | (BLOCKED, BOUNCED, BROKEN)",
                         "Core: State based segments | is not one of | (Brazil. No open emails 90+ days)",
                         "Scartesu Email Validation Status | = | (VALID)",
                         "Scartesu User Tags | is not one of | (CLOSED PER GP, UNSUBSCRIBED)",
-                        "Core: is email opted out (Smartico) | = | False",
+                        f"Core: is email opted out ({self.system_name}) | = | False",
                         "Core: Is email opted out on integrated PAM | = | False"
                     ],
                     "push pwa": [
@@ -3880,7 +3920,6 @@ class GeneralCore:
         
         settings_groups = {}
         for item in data.get('settings_registry', []) or []:
-            # 🟢 ФИКС: Игнорируем одиночные коммуникации в блоке Node Settings
             node_id = str(item.get('node_id') or item.get('id', ''))
             if "standalone_" in node_id:
                 continue
@@ -3976,7 +4015,7 @@ class GeneralCore:
 
         settings_block_html = f"""
         <div class="card">
-            <h2 class="text-xl font-bold mb-5 flex items-center gap-2 border-b border-slate-100 dark:border-slate-700 pb-3"> ⚙️ Node Settings</h2>
+            <h2 class="text-xl font-bold mb-5 flex items-center gap-2 border-b border-slate-100 dark:border-slate-700 pb-3"> ⚙️ Caps/Opt-out </h2>
             <div class="searchable-content flex flex-col gap-4">{settings_html}</div>
             <div style="margin-top: 20px; padding-top: 15px; border-top: 2px solid #e2e8f0; text-align: right;">
                 <label style="cursor: pointer; display: inline-flex; align-items: center; gap: 8px; font-size: 14px; font-weight: bold; color: #1e293b; background: #f1f5f9; padding: 8px 16px; border-radius: 8px; border: 1px solid #cbd5e1; transition: 0.2s;" onmouseover="this.style.background='#e2e8f0'" onmouseout="this.style.background='#f1f5f9'">
@@ -4900,16 +4939,241 @@ class GeneralCore:
         </div>
         """ if flows else ""
 
+        # --- СВОДКА ПО КАТЕГОРИЯМ (ДЛЯ СРАВНЕНИЯ ЗНАЧЕНИЙ) ---
+        cat_summary_html = ""
+        if hasattr(self, 'categorized_labels') and self.categorized_labels:
+            labels_store = data.get("labels_data", {})
+            cat_html_parts = []
+            
+            # 🟢 Вспомогательные функции для матрицы
+            def normalize_macro_value(val, category):
+                val_str = str(val).strip()
+                if not val_str: return ""
+                if category.lower() in ["promo code", "slot name", "dynamic amount"]:
+                    return val_str
+                
+                m_auto = re.search(r'automatic_promo_currency[^\d]*(\d+)', val_str)
+                if m_auto:
+                    return f"{m_auto.group(1)} EUR (Auto)"
+                    
+                v_up = val_str.upper()
+                has_currency = any(x in v_up for x in ["€", "EUR", "R$", "BRL", "$", "USD", "RSD", "CZK", "HUF", "COP", "PEN"])
+                has_fs = any(x in v_up for x in ["FS", "SPIN", "FREE"])
+                has_pct = "%" in v_up
+                has_bet = "BET" in v_up
+                
+                if has_currency or has_fs or has_pct or has_bet or val_str.replace('.','',1).isdigit():
+                    m_num = re.search(r'(\d+(?:[.,]\d+)?)', val_str)
+                    num = m_num.group(1) if m_num else ""
+                    curr = ""
+                    if "€" in v_up or "EUR" in v_up: curr = "EUR"
+                    elif "R$" in v_up or "BRL" in v_up: curr = "BRL"
+                    elif "$" in v_up or "USD" in v_up: curr = "USD"
+                    elif "RSD" in v_up: curr = "RSD"
+                    elif "CZK" in v_up: curr = "CZK"
+                    elif "HUF" in v_up: curr = "HUF"
+                    elif "COP" in v_up: curr = "COP"
+                    elif "PEN" in v_up: curr = "PEN"
+                    
+                    extra = ""
+                    if "HIGH BET" in v_up: extra = " High Bet"
+                    elif "FS" in v_up or "SPIN" in v_up or "FREE" in v_up: extra = " FS"
+                    elif "%" in v_up: extra = "%"
+                    
+                    if num: return f"{num} {curr}{extra}".strip()
+                return val_str
+
+            def parse_condition_to_tiers(cond):
+                cond_up = str(cond).upper()
+                if cond_up in ["NOT SET", "ALL USERS", "NONE", "()", "UNKNOWN"]:
+                    return [("ALL_USERS", "All Users", 100, "")]
+                    
+                b_map = [
+                    ("RKMDAYLI_VIP 4_10", "VIP 4", 10), ("RKMDAYLI_VIP 3_9", "VIP 3", 9),
+                    ("RKMDAYLI_VIP 2_8", "VIP 2", 8), ("RKMDAYLI_VIP 1_7", "VIP 1", 7),
+                    ("RKMDAYLI_VERY HIGH_6", "TIER 6", 6), ("RKMDAYLI_HIGH_5", "TIER 5", 5),
+                    ("RKMDAYLI_MEDIUM_4", "TIER 4", 4), ("RKMDAYLI_LOW_3", "TIER 3", 3),
+                    ("RKMDAYLI_VERY LOW_2", "TIER 2", 2), ("RKMDAYLI_BOTTOM_1", "TIER 1", 1)
+                ]
+                
+                tiers = [(tag, name, weight) for tag, name, weight in b_map if tag in cond_up]
+                if not tiers: tiers.append(("OTHER", "Custom", -1))
+                    
+                extras = []
+                c_m = re.search(r"COUNTRY[^()]*\(([^)]+)\)", cond_up)
+                if c_m: 
+                    pref = "NOT " if "NOT" in cond_up[max(0, c_m.start()-15):c_m.start()] else ""
+                    extras.append(f"Geo: {pref}{c_m.group(1).strip()}")
+                
+                cur_m = re.search(r"CURRENCY[^()]*\(([^)]+)\)", cond_up)
+                if cur_m:
+                    pref = "NOT " if "NOT" in cond_up[max(0, cur_m.start()-15):cur_m.start()] else ""
+                    extras.append(f"Cur: {pref}{cur_m.group(1).strip()}")
+                    
+                extra_str = " + ".join(extras)
+                if not extras and tiers[0][0] == "OTHER":
+                    cl = re.sub(r'<[^>]+>', '', str(cond)).strip()
+                    extra_str = cl[:60] + "..." if len(cl) > 60 else cl
+                    
+                return [(t[0], t[1], t[2], extra_str) for t in tiers]
+
+            def get_group_id(w):
+                if w in [1, 2, 3, 4]: return 1
+                if w in [5, 6]: return 2
+                if w == 7: return 3
+                if w in [8, 9, 10]: return 4
+                return w
+
+            def format_combined_tiers(t_keys, group_id):
+                weights = sorted([tk[0] for tk in t_keys])
+                if group_id == 1 and weights == [1, 2, 3, 4]: return "TIER 1 - 4"
+                if group_id == 2 and weights == [5, 6]: return "TIER 5 - 6"
+                if group_id == 4 and weights == [8, 9, 10]: return "VIP 2 - 4"
+                
+                names = [tk[1] for tk in sorted(t_keys, key=lambda x: x[0])]
+                return ", ".join(names)
+
+            for cat_name, labels_set in sorted(self.categorized_labels.items()):
+                if cat_name in ["Dynamic Amount", "End Date", "Slot Name", "Wager"]: 
+                    continue
+                    
+                labels_list = sorted(list(labels_set))
+                if not labels_list: continue
+
+                defaults = {}
+                vars_by_tier = defaultdict(dict)
+                all_tiers = set()
+
+                for lbl in labels_list:
+                    m_data = labels_store.get(lbl)
+                    
+                    # 🟢 ФИКС: Если мы не скачали этот макрос (например, он был только на картинке поп-апа), скачаем сейчас
+                    if not isinstance(m_data, dict):
+                        fetched = self.get_label_data_with_variations(lbl)
+                        if fetched:
+                            m_data = fetched
+                            labels_store[lbl] = m_data
+
+                    if isinstance(m_data, dict):
+                        raw_def = str(m_data.get("default", ""))
+                        defaults[lbl] = (normalize_macro_value(raw_def, cat_name), raw_def)
+                        
+                        real_variations = []
+                        for v in m_data.get("variations", []):
+                            cond = str(v.get("variation_condition_readable") or v.get("conditions_readable") or "Unknown").strip()
+                            if cond.lower() not in ["not set", "all users", "none", "()", "unknown"]:
+                                real_variations.append(v)
+                                
+                        active_vars = [v for v in real_variations if v.get("status_name", "").lower() == "active" or v.get("status_id") == 1]
+                        if not active_vars and real_variations:
+                            active_vars = real_variations
+                            
+                        for v in active_vars:
+                            raw_cond = str(v.get("variation_condition_readable") or v.get("conditions_readable") or "Unknown")
+                            if raw_cond.lower() in ["not set", "all users", "none", "()", "unknown"]:
+                                continue
+                                
+                            raw_val = str(v.get("tag_value", ""))
+                            norm_v = normalize_macro_value(raw_val, cat_name)
+                            
+                            parsed_tiers = parse_condition_to_tiers(raw_cond)
+                            for t_tag, t_name, t_weight, t_extra in parsed_tiers:
+                                t_key = (t_weight, t_name, t_extra)
+                                vars_by_tier[t_key][lbl] = (norm_v, raw_val)
+                                all_tiers.add(t_key)
+
+                th_html = "<th style='padding:10px 16px; border-bottom:1px solid #e2e8f0; width:20%; min-width:180px;'>Тир / Условие</th>"
+                for lbl in labels_list:
+                    th_html += f"<th style='padding:10px 16px; border-bottom:1px solid #e2e8f0; min-width:140px;' title='{esc(lbl)}'>{esc(lbl)}</th>"
+
+                rows = f"<tr onmouseover=\"this.style.background='#f1f5f9'\" onmouseout=\"this.style.background='transparent'\">"
+                rows += f"<td style='font-family:monospace; font-weight:bold; color:#475569; border-bottom:1px solid #e2e8f0; padding:12px; vertical-align:top; background:#f8fafc;'>DEFAULT VALUE</td>"
+                for lbl in labels_list:
+                    if lbl in defaults:
+                        norm_d, raw_d = defaults[lbl]
+                        display_d = f"<span title='Original: {esc(raw_d)}'>{esc(norm_d)}</span>" if norm_d else "<i style='color:#94a3b8;'>Пусто</i>"
+                    else:
+                        display_d = "<i style='color:#94a3b8;'>Нет данных</i>"
+                    rows += f"<td style='white-space:pre-wrap; font-family:monospace; font-size:13px; font-weight:bold; color:#1e293b; border-bottom:1px solid #e2e8f0; padding:12px; vertical-align:top;'>{display_d}</td>"
+                rows += "</tr>"
+
+                sorted_tiers = sorted(list(all_tiers), key=lambda x: (-x[0], x[1], x[2]))
+                
+                # 🟢 ГРУППИРОВКА СТРОК С ОДИНАКОВЫМИ ЗНАЧЕНИЯМИ 🟢
+                merged_rows = defaultdict(list)
+                for t_key in sorted_tiers:
+                    t_weight, t_name, t_extra = t_key
+                    row_vals = tuple(vars_by_tier[t_key].get(lbl, (None, None))[0] for lbl in labels_list)
+                    group_id = get_group_id(t_weight)
+                    sig = (t_extra, group_id, row_vals)
+                    merged_rows[sig].append(t_key)
+
+                # Рендерим сгруппированные строки
+                for sig, t_keys in merged_rows.items():
+                    t_extra, group_id, row_vals = sig
+                    combined_name = format_combined_tiers(t_keys, group_id)
+                    is_positive_weight = any(tk[0] >= 0 for tk in t_keys)
+                    
+                    tier_badge = f"<span style='background:#e2e8f0; color:#334155; padding:2px 8px; border-radius:12px; font-size:11px; font-weight:bold;'>{combined_name}</span>" if is_positive_weight else f"<span style='background:#f1f5f9; color:#64748b; padding:2px 8px; border-radius:12px; font-size:11px; font-weight:bold;'>{combined_name}</span>"
+                    extra_html = f"<div style='margin-top:4px; font-size:10px; color:#64748b; font-family:monospace;'>{esc(t_extra)}</div>" if t_extra else ""
+                    
+                    rows += f"<tr onmouseover=\"this.style.background='#f1f5f9'\" onmouseout=\"this.style.background='transparent'\">"
+                    rows += f"<td style='border-bottom:1px solid #e2e8f0; padding:12px; vertical-align:top; word-break: break-word;'>{tier_badge}{extra_html}</td>"
+                    
+                    # Для вывода значений берем первую попавшуюся t_key из группы (ведь значения у них идентичны)
+                    rep_key = t_keys[0]
+                    for lbl in labels_list:
+                        if lbl in vars_by_tier[rep_key]:
+                            norm_v, raw_v = vars_by_tier[rep_key][lbl]
+                            display_v = f"<span title='Original: {esc(raw_v)}'>{esc(norm_v)}</span>"
+                            bg_color = ""
+                        else:
+                            display_v = "<i style='color:#94a3b8; font-size:11px;'>-</i>"
+                            bg_color = "background:#fafafa;"
+                        rows += f"<td style='white-space:pre-wrap; font-family:monospace; font-size:13px; font-weight:bold; color:#0f172a; border-bottom:1px solid #e2e8f0; padding:12px; vertical-align:top; {bg_color}'>{display_v}</td>"
+                    rows += "</tr>"
+
+                cat_html_parts.append(f'''
+                <div style="margin-bottom: 20px; border: 1px solid #e2e8f0; border-radius: 8px; background: #fff; box-shadow: 0 1px 3px rgba(0,0,0,0.05);">
+                    <h4 style="margin:0; padding: 12px 16px; background: #f8fafc; border-bottom: 1px solid #e2e8f0; color: #0f172a; font-size: 15px; display:flex; align-items:center; gap:8px; border-radius: 8px 8px 0 0;">🏷️ {esc(cat_name)} <span style='background:#e2e8f0; color:#475569; padding:2px 8px; border-radius:12px; font-size:11px;'>{len(labels_list)} макросов</span></h4>
+                    <div style="overflow-x:auto;">
+                        <table style="width:100%; text-align:left; border-collapse:collapse; font-size:13px;">
+                            <thead>
+                                <tr style="background:#f1f5f9; color:#475569; font-size:11px; text-transform:uppercase;">
+                                    {th_html}
+                                </tr>
+                            </thead>
+                            <tbody>{rows}</tbody>
+                        </table>
+                    </div>
+                </div>
+                ''')
+            
+            if cat_html_parts:
+                cat_summary_html = f'''
+                <section id="sec-cat-summary" class="scroll-mt-36">
+                    <details style="background: #ffffff; border: 1px solid #e2e8f0; border-radius: 8px; box-shadow: 0 1px 3px rgba(0,0,0,0.05);">
+                        <summary style="cursor: pointer; padding: 16px; font-size: 18px; font-weight: bold; color: #1e293b; background: #f8fafc; border-bottom: 1px solid #e2e8f0; border-radius: 8px; display: flex; align-items: center; gap: 8px; outline: none; list-style: none;">
+                            📋 Сводка по категориям макросов (Сравнение каналов) <span style="font-size: 13px; font-weight: normal; color: #64748b; margin-left: auto;">Нажмите, чтобы развернуть</span>
+                        </summary>
+                        <div class="flex flex-col gap-4 p-6" style="background: #f1f5f9; border-radius: 0 0 8px 8px;">
+                            {''.join(cat_html_parts)}
+                        </div>
+                    </details>
+                </section>
+                '''
+
         # Собираем ссылки для навигации с новым дизайном (под табы)
         nav_links = ""
         link_cls = "px-4 py-2.5 rounded-md text-sm font-semibold text-slate-600 hover:text-slate-900 hover:bg-slate-100 transition-colors whitespace-nowrap"
         if links_block_html: nav_links += f'<a href="#sec-general" class="{link_cls}">📍 General & Segments</a>'
         if flow_html: nav_links += f'<a href="#sec-map" class="{link_cls}">📸 Flow Map</a>'
-        if mc_html_normal: nav_links += f'<a href="#sec-logic" class="{link_cls}">🔀 Multi-Check Logic</a>'
+        if mc_html_normal: nav_links += f'<a href="#sec-logic" class="{link_cls}">🔀 Nodes settings</a>'
         if cond_block_html: nav_links += f'<a href="#sec-profile" class="{link_cls}">🕵️‍♂️ Profile Checks</a>'
         if wait_block_html: nav_links += f'<a href="#sec-funnel" class="{link_cls}">⏳ Wait For Events</a>'
-        if settings_block_html: nav_links += f'<a href="#sec-settings" class="{link_cls}">⚙️ Node Settings</a>'
+        if settings_block_html: nav_links += f'<a href="#sec-settings" class="{link_cls}">⚙️ Caps/Opt-out</a>'
         nav_links += f'<a href="#sec-content" class="{link_cls}">🔬 Content Analysis</a>'
+        if cat_summary_html: nav_links += f'<a href="#sec-cat-summary" class="{link_cls}">📋 Labels Summary</a>'
 
         html_content = f"""
         <!DOCTYPE html>
@@ -5080,7 +5344,7 @@ class GeneralCore:
                     {f'''<section id="sec-map" class="scroll-mt-36">
                         <div class="card !mb-0 !p-0 overflow-hidden">
                             <div class="px-6 py-4 bg-slate-50 border-b border-slate-200 font-bold text-lg text-slate-800 flex justify-between items-center">
-                                📸 Интерактивная карта
+                                📸 Flow map
                             </div>
                             <div class="p-6">
                                 {flow_html}
@@ -5089,7 +5353,7 @@ class GeneralCore:
                     </section>''' if flow_html else ''}
 
                     {f'''<section id="sec-logic" class="scroll-mt-36">
-                        <h2 class="text-2xl font-bold mb-6 text-slate-800 border-b border-slate-200 pb-2">🔀 Multi-Check Logic</h2>
+                        <h2 class="text-2xl font-bold mb-6 text-slate-800 border-b border-slate-200 pb-2">🔀 Nodes settings</h2>
                         <div id="mc-normal" class="flex flex-col">{mc_html_normal}</div>
                         <div id="mc-diff" class="flex flex-col" style="display: none;">{mc_html_diff}</div>
                     </section>''' if mc_html_normal else ''}
@@ -5110,21 +5374,169 @@ class GeneralCore:
                         <h2 class="text-2xl font-bold mb-6 text-slate-800 border-b border-slate-200 pb-2">🔬 Content Analysis</h2>
                         <div class="flex flex-col">{nodes_html}</div>
                     </section>
+                    {cat_summary_html}
                 </div>
             </main>
             
             <button id="back-to-top" class="fixed bottom-8 right-8 bg-[#3b82f6] text-white w-12 h-12 rounded-full shadow-lg hidden hover:bg-blue-600 transition-all z-50 text-xl font-bold flex items-center justify-center border border-blue-400">↑</button>
 
-            <div id="errors-view-modal" style="display:none; position:fixed; top:0; left:0; width:100%; height:100%; background:rgba(15, 23, 42, 0.6); z-index:999999; align-items:center; justify-content:center; backdrop-filter: blur(2px);">
-                <div style="background:#fff; padding:25px; border-radius:12px; width:1000px; max-width:95%; max-height:85vh; overflow-y:auto; position:relative; box-shadow:0 10px 25px rgba(0,0,0,0.2); font-family: 'Inter', sans-serif;">
-                    <button onclick="document.getElementById('errors-view-modal').style.display='none'" style="position:absolute; top:15px; right:15px; cursor:pointer; border:none; background:none; font-size:22px; color:#64748b;">&times;</button>
-                    <h3 id="errors-modal-title" style="margin-top:0; color:#0f172a; border-bottom:2px solid #e2e8f0; padding-bottom:10px; font-size: 20px;">Ошибки</h3>
-                    <div id="errors-modal-body" style="margin-top: 15px; overflow-x: auto;"></div>
-                </div>
-            </div>
-
             <script>
                 document.addEventListener('DOMContentLoaded', () => {{
+                    // Внедряем CSS для скрытия фильтром
+                    if (!document.getElementById('custom-filter-styles')) {{
+                        const style = document.createElement('style');
+                        style.id = 'custom-filter-styles';
+                        // 🟢 ФИКС: Усиливаем вес селектора, чтобы он 100% перебивал любые !important у плашек
+                        style.innerHTML = '.hidden-by-filter, details.sim-pill.hidden-by-filter, div.hidden-by-filter, span.hidden-by-filter {{ display: none !important; }}';
+                        document.head.appendChild(style);
+                    }}
+
+                    window.extractGroupedErrors = function(btn) {{
+                        const container = btn.closest('.error-controls-panel');
+                        const parentContext = container.closest('details') || container.parentElement;
+                        
+                        const showSyntax = container.querySelector('.cb-copy-syntax').checked;
+                        const showLength = container.querySelector('.cb-copy-length').checked;
+                        const showMacro = container.querySelector('.cb-copy-macro').checked;
+                        const onlyCritical = container.querySelector('.cb-copy-crit').checked;
+                        
+                        let errorBlocks = parentContext.querySelectorAll(onlyCritical ? '.critical-error-flag' : '.copyable-error');
+                        if (errorBlocks.length === 0) return null;
+                        
+                        let grouped = {{}};
+                        
+                        errorBlocks.forEach(block => {{
+                            const macro = block.getAttribute('data-macro') || '-';
+                            const url = block.getAttribute('data-url') || '';
+                            const brand = block.getAttribute('data-brand') || 'Global';
+                            const lang = block.getAttribute('data-lang') || '-';
+                            const doc = new DOMParser().parseFromString(block.getAttribute('data-details') || '', "text/html");
+                            const textDetails = doc.documentElement.textContent;
+                            
+                            const errors = textDetails.split(' | ');
+                            errors.forEach(e => {{
+                                const lower = e.toLowerCase();
+                                const isSyntax = lower.includes('опечатка') || lower.includes('скобк') || lower.includes('пробел') || lower.includes('слипся') || lower.includes('синтаксис') || lower.includes('нечетное') || lower.includes('запрещенное') || lower.includes('перезапишет') || lower.includes('тип');
+                                const isLength = lower.includes('длина') || lower.includes('лимит') || lower.includes('двойная') || lower.includes('симв.');
+                                const isMacro = lower.includes('отсутствуют') || lower.includes('лишние') || lower.includes('не совпадает') || lower.includes('расхождение') || lower.includes('ожидалось');
+                                
+                                const catSyntax = isSyntax || (!isLength && !isMacro);
+                                
+                                let keep = false;
+                                if (catSyntax && showSyntax) keep = true;
+                                if (isLength && showLength) keep = true;
+                                if (isMacro && showMacro) keep = true;
+                                
+                                if (keep) {{
+                                    // 🟢 УМНАЯ ОЧИСТКА: Удаляем динамическое количество символов (~88 симв.) чтобы сгруппировать ошибку
+                                    let cleanErr = e.replace(/:?\s*~\d+\s*симв\.?\s*/g, ' ').replace(/\s+/g, ' ').trim();
+                                    
+                                    if (!grouped[macro]) grouped[macro] = {{ url: url, brands: {{}} }};
+                                    if (!grouped[macro].brands[brand]) grouped[macro].brands[brand] = {{}};
+                                    if (!grouped[macro].brands[brand][cleanErr]) grouped[macro].brands[brand][cleanErr] = [];
+                                    
+                                    if (!grouped[macro].brands[brand][cleanErr].includes(lang)) {{
+                                        grouped[macro].brands[brand][cleanErr].push(lang);
+                                    }}
+                                }}
+                            }});
+                        }});
+                        
+                        return Object.keys(grouped).length > 0 ? grouped : null;
+                    }};
+
+                    window.copyLocalErrors = function(btn, event) {{
+                        event.preventDefault();
+                        const grouped = window.extractGroupedErrors(btn);
+                        if (!grouped) {{ alert("Нет ошибок по выбранным фильтрам."); return; }}
+                        
+                        let textResult = "";
+                        for (const [macro, data] of Object.entries(grouped)) {{
+                            textResult += `Лейбл: ${{macro}}\nСсылка: ${{data.url}}\n\n`;
+                            
+                            for (const [brand, bData] of Object.entries(data.brands)) {{
+                                textResult += `Бренд: ${{brand}}\n`;
+                                for (const [errText, langs] of Object.entries(bData)) {{
+                                    const uniqLangs = [...new Set(langs)].sort();
+                                    textResult += `Локали: ${{uniqLangs.join(', ')}}\nОшибки:\n• ${{errText}}\n\n`;
+                                }}
+                            }}
+                            textResult += `----------------------------------------\n\n`;
+                        }}
+                        
+                        const originalText = btn.innerHTML;
+                        if (navigator.clipboard && navigator.clipboard.writeText) {{
+                            navigator.clipboard.writeText(textResult.trim()).then(() => {{
+                                btn.innerHTML = "✅ Скопировано!"; setTimeout(() => btn.innerHTML = originalText, 2000);
+                            }}).catch(err => alert("Ошибка копирования: " + err));
+                        }} else {{
+                            const textArea = document.createElement("textarea");
+                            textArea.value = textResult.trim(); document.body.appendChild(textArea); textArea.select();
+                            try {{ document.execCommand('copy'); btn.innerHTML = "✅ Скопировано!"; setTimeout(() => btn.innerHTML = originalText, 2000); }} catch (e) {{ alert("Ошибка"); }}
+                            document.body.removeChild(textArea);
+                        }}
+                        
+                        const menu = btn.closest('.dropdown-menu');
+                        if (menu) menu.style.display = 'none';
+                    }};
+
+                    window.updateErrorDisplay = function(cb) {{
+                        const container = cb.closest('.error-controls-panel');
+                        const parentContext = container.closest('details') || container.parentElement;
+                        
+                        const showSyntax = container.querySelector('.cb-disp-syntax').checked;
+                        const showLength = container.querySelector('.cb-disp-length').checked;
+                        const showMacro = container.querySelector('.cb-disp-macro').checked;
+                        
+                        const errorBlocks = parentContext.querySelectorAll('.copyable-error, .critical-error-flag');
+                        
+                        errorBlocks.forEach(block => {{
+                            const doc = new DOMParser().parseFromString(block.getAttribute('data-details') || '', "text/html");
+                            const textDetails = doc.documentElement.textContent;
+                            const errors = textDetails.split(' | ');
+                            
+                            let hasVisibleError = false;
+                            errors.forEach(e => {{
+                                const lower = e.toLowerCase();
+                                const isSyntax = lower.includes('опечатка') || lower.includes('скобк') || lower.includes('пробел') || lower.includes('слипся') || lower.includes('синтаксис') || lower.includes('нечетное') || lower.includes('запрещенное') || lower.includes('перезапишет') || lower.includes('тип');
+                                const isLength = lower.includes('длина') || lower.includes('лимит') || lower.includes('двойная') || lower.includes('симв.');
+                                const isMacro = lower.includes('отсутствуют') || lower.includes('лишние') || lower.includes('не совпадает') || lower.includes('расхождение') || lower.includes('ожидалось');
+                                
+                                const catSyntax = isSyntax || (!isLength && !isMacro);
+                                
+                                if (catSyntax && showSyntax) hasVisibleError = true;
+                                if (isLength && showLength) hasVisibleError = true;
+                                if (isMacro && showMacro) hasVisibleError = true;
+                            }});
+                            
+                            if (hasVisibleError) {{
+                                block.classList.remove('hidden-by-filter');
+                            }} else {{
+                                block.classList.add('hidden-by-filter');
+                            }}
+                        }});
+
+                        // Скрываем пустые плашки брендов, если все их ошибки были отфильтрованы
+                        const brandBlocks = parentContext.querySelectorAll('.brand-has-errors, .brand-perfect');
+                        brandBlocks.forEach(b => {{
+                            const visibleErrors = b.querySelectorAll('.copyable-error:not(.hidden-by-filter), .critical-error-flag:not(.hidden-by-filter)');
+                            const totalErrors = b.querySelectorAll('.copyable-error, .critical-error-flag');
+                            
+                            if (visibleErrors.length > 0 || totalErrors.length === 0) {{
+                                b.classList.remove('hidden-by-filter');
+                            }} else {{
+                                b.classList.add('hidden-by-filter');
+                            }}
+                        }});
+                    }};
+
+                    // Закрытие выпадающих списков при клике вне их области
+                    document.addEventListener('click', function(e) {{
+                        if (!e.target.closest('.custom-dropdown-container')) {{
+                            document.querySelectorAll('.dropdown-menu').forEach(menu => menu.style.display = 'none');
+                        }}
+                    }});
+
                     // Toggle All Pills
                     document.getElementById('toggleAllPills')?.addEventListener('change', (e) => {{
                         document.body.classList.toggle('show-all-pills', e.target.checked);
@@ -5175,105 +5587,36 @@ class GeneralCore:
                             }}).forEach(row => tbody.appendChild(row));
                         }});
                     }});
-                    
-                    window.copyLocalErrors = function(btn, event, onlyCritical) {{
-                        event.preventDefault();
-                        const detailsNode = btn.closest('details');
-                        let errorBlocks;
-                        if (onlyCritical) {{
-                            errorBlocks = detailsNode.querySelectorAll('.critical-error-flag');
-                        }} else {{
-                            errorBlocks = detailsNode.querySelectorAll('.copyable-error');
-                        }}
-                        if (errorBlocks.length === 0) return;
-                        let tsv = "Лейбл\\tБренд\\tЯзык/Условие\\tДетали ошибки\\n";
-                        errorBlocks.forEach(block => {{
-                            const macro = block.getAttribute('data-macro') || '-';
-                            const brand = block.getAttribute('data-brand') || 'Global';
-                            const lang = block.getAttribute('data-lang') || '-';
-                            const doc = new DOMParser().parseFromString(block.getAttribute('data-details') || '', "text/html");
-                            tsv += `${{macro}}\\t${{brand}}\\t${{lang}}\\t${{doc.documentElement.textContent}}\\n`;
-                        }});
-                        const originalText = btn.innerHTML;
-                        if (navigator.clipboard && navigator.clipboard.writeText) {{
-                            navigator.clipboard.writeText(tsv)
-                                .then(() => {{
-                                    btn.innerHTML = "✅ Copied!";
-                                    setTimeout(() => btn.innerHTML = originalText, 2000);
-                                }})
-                                .catch(err => {{ alert("Ошибка копирования: " + err); }});
-                        }} else {{
-                            const textArea = document.createElement("textarea");
-                            textArea.value = tsv; document.body.appendChild(textArea); textArea.select();
-                            try {{ 
-                                document.execCommand('copy'); 
-                                btn.innerHTML = "✅ Copied!"; 
-                                setTimeout(() => btn.innerHTML = originalText, 2000); 
-                            }} catch (e) {{ alert("Ошибка"); }}
-                            document.body.removeChild(textArea);
-                        }}
-                    }};
 
-                    // ОТОБРАЖЕНИЕ ОШИБОК В ТАБЛИЦЕ (MODAL)
-                    window.viewLocalErrors = function(btn, event, onlyCritical) {{
-                        event.preventDefault();
-                        const detailsNode = btn.closest('details');
-                        let errorBlocks;
-                        if (onlyCritical) {{
-                            errorBlocks = detailsNode.querySelectorAll('.critical-error-flag');
-                        }} else {{
-                            errorBlocks = detailsNode.querySelectorAll('.copyable-error');
-                        }}
-                        
-                        if (errorBlocks.length === 0) return;
-                        
-                        let tHtml = "<table style='width:100%; border-collapse:collapse; font-size:13px; text-align:left; border:1px solid #e2e8f0;'>";
-                        tHtml += "<thead><tr style='background:#f8fafc; border-bottom:2px solid #cbd5e1; color:#334155;'>";
-                        tHtml += "<th style='padding:10px; border-right:1px solid #e2e8f0; width:20%;'>Лейбл</th>";
-                        tHtml += "<th style='padding:10px; border-right:1px solid #e2e8f0; width:15%;'>Бренд</th>";
-                        tHtml += "<th style='padding:10px; border-right:1px solid #e2e8f0; width:25%;'>Язык / Условие</th>";
-                        tHtml += "<th style='padding:10px; width:40%;'>Детали ошибки</th></tr></thead><tbody>";
-                        
-                        errorBlocks.forEach(block => {{
-                            const macro = block.getAttribute('data-macro') || '-';
-                            const brand = block.getAttribute('data-brand') || 'Global';
-                            const lang = block.getAttribute('data-lang') || '-';
-                            const doc = new DOMParser().parseFromString(block.getAttribute('data-details') || '', "text/html");
-                            
-                            // Заменяем разделитель ' | ' на красивые переносы строки с точками
-                            const detailsText = doc.documentElement.textContent;
-                            const detailsHtml = detailsText.replace(/ \\| /g, '<br>• ');
-                            
-                            tHtml += "<tr style='border-bottom:1px solid #e2e8f0; background:#fff;' onmouseover=\\"this.style.background='#f1f5f9'\\" onmouseout=\\"this.style.background='#fff'\\">";
-                            tHtml += "<td style='padding:10px; border-right:1px solid #e2e8f0; font-family:monospace; color:#dc2626;'>" + macro + "</td>";
-                            tHtml += "<td style='padding:10px; border-right:1px solid #e2e8f0; font-weight:bold; color:#1e293b;'>" + brand + "</td>";
-                            tHtml += "<td style='padding:10px; border-right:1px solid #e2e8f0; color:#475569; font-family:monospace;'>" + lang + "</td>";
-                            tHtml += "<td style='padding:10px; color:#b91c1c; font-weight:500;'>• " + detailsHtml + "</td></tr>";
-                        }});
-                        
-                        tHtml += "</tbody></table>";
-                        
-                        document.getElementById('errors-modal-title').innerText = onlyCritical ? '🚨 Критические ошибки' : '⚠️ Все найденные ошибки';
-                        document.getElementById('errors-modal-body').innerHTML = tHtml;
-                        document.getElementById('errors-view-modal').style.display = 'flex';
-                    }};
-
-                    // Закрытие таблицы при клике вне окна
-                    document.getElementById('errors-view-modal').addEventListener('click', function(e) {{
-                        if(e.target === this) this.style.display = 'none';
-                    }});
-
-                    // АВТО-ЗАКРЫТИЕ СПОЙЛЕРОВ
+                    // АВТО-ЗАКРЫТИЕ СПОЙЛЕРОВ И АВТО-ПРОВЕРКА
                     document.querySelectorAll('details').forEach(details => {{
                         const closeBtn = document.createElement('button');
-                        closeBtn.innerHTML = '⬆️ Свернуть';
-                        closeBtn.className = 'mt-3 px-3 py-1.5 bg-slate-100 hover:bg-slate-200 text-slate-600 rounded text-xs font-semibold w-full text-center transition-colors shadow-sm';
+                        closeBtn.innerHTML = '✅ Свернуть и отметить как проверенное';
+                        closeBtn.className = 'mt-3 px-3 py-1.5 bg-slate-100 hover:bg-emerald-100 text-slate-600 hover:text-emerald-700 hover:border-emerald-300 rounded text-xs font-semibold w-full text-center transition-colors border border-slate-200 shadow-sm';
                         closeBtn.addEventListener('click', (e) => {{
                             e.preventDefault();
+                            
+                            // Автоматически отмечаем чекбокс "Проверено" (и триггерим эвент, чтобы перекрасилась плашка)
+                            const cb = details.querySelector('input[type="checkbox"].sync-cb, input[type="checkbox"].general-cb');
+                            if (cb && !cb.checked) {{
+                                cb.checked = true;
+                                cb.dispatchEvent(new Event('change', {{ bubbles: true }}));
+                            }}
+                            
                             const y = details.getBoundingClientRect().top + window.scrollY - 150;
                             window.scrollTo({{top: y, behavior: 'smooth'}});
                             setTimeout(() => details.removeAttribute('open'), 150);
                         }});
+                        const contentContainer = Array.from(details.children).find(child => child.tagName.toLowerCase() === 'div');
+                        if (contentContainer) contentContainer.appendChild(closeBtn);
+                        else details.appendChild(closeBtn);
+                    }});
+                        
+                        const contentContainer = Array.from(details.children).find(child => child.tagName.toLowerCase() === 'div');
+                        if (contentContainer) contentContainer.appendChild(closeBtn);
+                        else details.appendChild(closeBtn);
+                    }});
+                        
                         const contentContainer = Array.from(details.children).find(child => child.tagName.toLowerCase() === 'div');
                         if (contentContainer) contentContainer.appendChild(closeBtn);
                         else details.appendChild(closeBtn);
