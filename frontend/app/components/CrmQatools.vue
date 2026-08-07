@@ -71,7 +71,7 @@
               <input 
                 type="text" 
                 v-model="task.value" 
-                placeholder="Вставьте полную ссылку из Smartico..." 
+                placeholder="Вставьте полную ссылку из CRM..." 
                 class="crm-input" 
                 :disabled="isLoading" 
               />
@@ -180,7 +180,7 @@
 
     <div v-if="activeTab === 'mass'" class="auditor-card">
       <div class="input-group">
-        <label>🔗 Ссылки на кампании в Smartico. Одно окружение, по одной в строку.</label>
+        <label>🔗 Ссылки на кампании. Одно окружение, по одной в строку.</label>
         <textarea v-model="massUrlsInput" rows="6" placeholder="Можно вставлять как Scheduled так и Journey кампании" class="crm-textarea" :disabled="isLoading" v-tooltip="'Вставьте список URL-адресов кампаний для массовой проверки (каждый URL с новой строки)'"></textarea>
       </div>
       <div class="settings-row mt-4" style="display: inline-flex; align-items: center; height: 52px; box-sizing: border-box; padding-right: 16px;">
@@ -227,7 +227,7 @@
         <div class="inputs-grid">
           <div class="input-group">
             <label>Окружение</label>
-            <select v-model="labelEnv" class="crm-input" v-tooltip="'Выберите окружение Smartico.'">
+            <select v-model="labelEnv" class="crm-input" v-tooltip="'Выберите окружение.'">
               <option value="env2">ENV 2</option>
               <option value="env5">ENV 5</option>
               <option value="env7">ENV 7</option>
@@ -574,7 +574,7 @@ function removeTask(index) {
 
 function getTaskPlaceholder(type) {
   const placeholders = {
-    'campaign': 'https://drive.smartico...#/j_audience_scheduled/1234',
+    'campaign': 'https://drive.system...#/j_audience_scheduled/1234',
     'email': 'ID письма или полная ссылка',
     'push': 'ID пуша или полная ссылка',
     'sms': 'ID SMS или полная ссылка',
@@ -654,7 +654,7 @@ const reportFilename = ref('Report.html');
 onMounted(() => {
   // 1. Загрузка токенов с проверкой времени жизни (TTL)
   ['env2', 'env5', 'env7', 'BO'].forEach(env => {
-    const storageKey = env === 'BO' ? 'bo_auth_token' : `smartico_token_${env}`;
+    const storageKey = env === 'BO' ? 'bo_auth_token' : `crm_token_${env}`;
     const rawData = localStorage.getItem(storageKey);
     if (rawData) {
       try {
@@ -697,7 +697,7 @@ function saveToken(env) {
   if (tokenInputs.value[env].trim()) {
     const tokenValue = tokenInputs.value[env].trim();
     savedTokens.value[env] = tokenValue;
-    const storageKey = env === 'BO' ? 'bo_auth_token' : `smartico_token_${env}`;
+    const storageKey = env === 'BO' ? 'bo_auth_token' : `crm_token_${env}`;
     
     // Считаем время жизни: BO = 24 часа, остальные = 48 часов
     const ttlHours = env === 'BO' ? 24 : 48;
@@ -714,7 +714,7 @@ function saveToken(env) {
 function clearToken(env) {
   savedTokens.value[env] = '';
   tokenInputs.value[env] = '';
-  const storageKey = env === 'BO' ? 'bo_auth_token' : `smartico_token_${env}`;
+  const storageKey = env === 'BO' ? 'bo_auth_token' : `crm_token_${env}`;
   localStorage.removeItem(storageKey);
 }
 

@@ -113,7 +113,7 @@ def test_general_info(tasks, tokens, expected_data=None, progress_cb=None):
     for t in tasks:
         if "http" in t.value:
             base_url = t.value
-            brand_match = re.search(r'smartico\.ai/(\d+)', t.value) or re.search(r'/(\d+)(?:#|/|$)', t.value)
+            brand_match = re.search(rf'{re.escape(SYSTEM_DOMAIN)}/(\d+)', t.value) or re.search(r'/(\d+)(?:#|/|$)', t.value)
             if brand_match:
                 brand_id = brand_match.group(1)
                 if "drive-7" in t.value: first_env = "env7"
@@ -125,7 +125,7 @@ def test_general_info(tasks, tokens, expected_data=None, progress_cb=None):
         log("<span style='color: #ef4444;'>❌ ОШИБКА: В конструктор не передано ни одной валидной ссылки! Вставляйте полные ссылки.</span>", 0)
         raise HTTPException(status_code=400, detail="Не найден Brand ID. Используйте полные ссылки.")
 
-    system_domain = os.getenv("SYSTEM_DOMAIN", "smartico.ai")
+    system_domain = SYSTEM_DOMAIN
 
     if first_env == "env7":
         DRIVE_HOST = f"drive-7.{system_domain}"
@@ -215,7 +215,7 @@ def test_general_info(tasks, tokens, expected_data=None, progress_cb=None):
                 continue
 
             # 🟢 ДИНАМИЧЕСКОЕ ПЕРЕКЛЮЧЕНИЕ ОКРУЖЕНИЯ ДЛЯ КАЖДОЙ ССЫЛКИ НА ЛЕТУ
-            b_match = re.search(r'smartico\.ai/(\d+)', t_val) or re.search(r'/(\d+)(?:#|/|$)', t_val)
+            b_match = re.search(rf'{re.escape(SYSTEM_DOMAIN)}/(\d+)', t_val) or re.search(r'/(\d+)(?:#|/|$)', t_val)
             if b_match:
                 new_brand = b_match.group(1)
                 new_env = "env2"
@@ -286,7 +286,7 @@ def test_general_info(tasks, tokens, expected_data=None, progress_cb=None):
                 if "interactive_flow" not in report_data:
                     report_data["interactive_flow"] = []
                     
-                camp_label = "🗺️ Journey (Поп-ап)" if is_pop else "📅 Scheduled (Основная)"
+                camp_label = "🗺️ Journey " if is_pop else "📅 Scheduled "
                 map_title = f"<div style='margin: 15px 20px -5px 20px; font-weight: bold; color: #334155; font-size: 15px; text-transform: uppercase;'>{camp_label} (ID: {camp_id})</div>"
                 
                 report_data["interactive_flow"].append(map_title + api.build_flow_html(f_nodes, f_trans))
@@ -443,7 +443,7 @@ def test_general_info(tasks, tokens, expected_data=None, progress_cb=None):
             # 🟢 ДИНАМИЧЕСКОЕ ПЕРЕКЛЮЧЕНИЕ СЕРВЕРА И ТОКЕНА ДЛЯ КАЖДОЙ НОДЫ
             source_url = node.get("_source_url", "")
             if source_url:
-                b_match = re.search(r'smartico\.ai/(\d+)', source_url) or re.search(r'/(\d+)(?:#|/|$)', source_url)
+                b_match = re.search(rf'{re.escape(SYSTEM_DOMAIN)}/(\d+)', source_url) or re.search(r'/(\d+)(?:#|/|$)', source_url)
                 if b_match:
                     new_brand = b_match.group(1)
                     new_env = "env2"
@@ -456,7 +456,7 @@ def test_general_info(tasks, tokens, expected_data=None, progress_cb=None):
                     api.headers["authorization"] = current_token
                     api.auth_token = current_token
                     
-                    system_domain = os.getenv("SYSTEM_DOMAIN", "smartico.ai")
+                    system_domain = SYSTEM_DOMAIN
                     if new_env == "env7":
                         api.boapi_host = f"boapi7.{system_domain}"
                         api.drive_host = f"drive-7.{system_domain}"
@@ -922,7 +922,7 @@ def test_general_info(tasks, tokens, expected_data=None, progress_cb=None):
 
         def add_labels_to_config(text, source_url, depth):
             if not text: return
-            b_match = re.search(r'smartico\.ai/(\d+)', source_url) or re.search(r'/(\d+)(?:#|/|$)', source_url)
+            b_match = re.search(rf'{re.escape(SYSTEM_DOMAIN)}/(\d+)', source_url) or re.search(r'/(\d+)(?:#|/|$)', source_url)
             brand = b_match.group(1) if b_match else brand_id
             env = "env2"
             if "drive-7" in source_url: env = "env7"
@@ -965,7 +965,7 @@ def test_general_info(tasks, tokens, expected_data=None, progress_cb=None):
             api.headers["authorization"] = current_token
             api.auth_token = current_token
             
-            system_domain = os.getenv("SYSTEM_DOMAIN", "smartico.ai")
+            system_domain = SYSTEM_DOMAIN
             if env == "env7":
                 api.boapi_host = f"boapi7.{system_domain}"
                 api.drive_host = f"drive-7.{system_domain}"
