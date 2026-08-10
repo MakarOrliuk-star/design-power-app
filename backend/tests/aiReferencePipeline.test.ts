@@ -203,10 +203,10 @@ describe("processAiReferenceAsset — один ассет (TASK safe-zone/auto-h
   it("happy path: одна попытка → removeBg → единственный ассет с metadata.transparent", async () => {
     await processAiReferenceAsset(OPTS);
 
-    // Референсы ищутся по базовому имени бренда (stripGenderName).
+    // Референсы ищутся сначала по пулу тон-варианта (DI2-10), и он здесь есть.
     expect(db.variationReference.findMany).toHaveBeenCalledWith(
       expect.objectContaining({
-        where: { presetId: "p1", brandName: "Betnella", assetKey: "email" },
+        where: { presetId: "p1", brandName: "Betnella(Men)", assetKey: "email" },
       }),
     );
     // Генерация: GPT Image 2 (A-7) с точным канвасом, banana не вызывается.
@@ -441,10 +441,10 @@ describe("processAiReferenceAsset — зависимый формат (DI2-3)", 
   it("якорь идёт первой картинкой, схема-раскладка не используется, стиль не переснимается", async () => {
     await processAiReferenceAsset(PUSH_OPTS);
 
-    // Референсы берутся из пула СВОЕГО формата (DI2-2).
+    // Референсы берутся из пула СВОЕГО формата (DI2-2) и своего тона (DI2-10).
     expect(db.variationReference.findMany).toHaveBeenCalledWith(
       expect.objectContaining({
-        where: { presetId: "p1", brandName: "Betnella", assetKey: "push" },
+        where: { presetId: "p1", brandName: "Betnella(Men)", assetKey: "push" },
       }),
     );
     const [args] = fal.runGptImage2Edit.mock.calls[0]!;
@@ -506,6 +506,24 @@ describe("processAiReferenceAsset — якорь отдаёт стиль дал�
   it("провал ассета возвращает ok:false — зависимые форматы не поедут", async () => {
     fal.runBriaRemoveBg.mockResolvedValue({ success: false, error: "HTTP 500" });
     expect(await processAiReferenceAsset(OPTS)).toEqual({ ok: false });
+  });
+});
+
+describe("тон-варианты в пайплайне (DI2-10)", () => {
+  it("пул тона пуст → в генерацию идут общие референсы бренда", async () => {
+    db.variationReference.findMany
+      .mockResolvedValueOnce([]) // Betnella(Men) — своего пула нет
+      .mockResolvedValueOnce(refRows(6)); // Betnella — общий пул
+
+    await processAiReferenceAsset(OPTS);
+
+    expect(db.variationReference.findMany).toHaveBeenNthCalledWith(
+      2,
+      expect.objectContaining({
+        where: { presetId: "p1", brandName: "Betnella", assetKey: "email" },
+      }),
+    );
+    expect(fal.runGptImage2Edit).toHaveBeenCalledTimes(1);
   });
 });
 

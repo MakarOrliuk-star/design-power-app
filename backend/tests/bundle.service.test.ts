@@ -214,9 +214,32 @@ describe("launchGeneration", () => {
       expect(result).toEqual({
         ok: false,
         error: "refs_missing",
-        missingRefs: [{ brandName: "Betnella", assetKey: "push", count: 2, min: 5 }],
+        // Проверяется тон-ВАРИАНТ, и в ошибке стоит его подпись (DI2-10).
+        missingRefs: [{ brandName: "Betnella (Men)", assetKey: "push", count: 2, min: 5 }],
       });
       expect(queue.addBulk).not.toHaveBeenCalled();
+    });
+
+    // DI2-10: у (Men) свой полный пул, у (Women) своего нет и общий не добран —
+    // блокируется только женский вариант, и это видно в ошибке.
+    it("тон-варианты проверяются раздельно: свой пул перекрывает общий", async () => {
+      db.bundle.findUnique.mockResolvedValue(aiRefBundle);
+      db.brand.findMany.mockResolvedValue([
+        { id: "b1", name: "Betnella(Men)" },
+        { id: "b2", name: "Betnella(Women)" },
+      ]);
+      db.variationReference.groupBy.mockResolvedValue([
+        { brandName: "Betnella", assetKey: "email", _count: { _all: 8 } },
+        { brandName: "Betnella", assetKey: "push", _count: { _all: 3 } },
+        { brandName: "Betnella(Men)", assetKey: "email", _count: { _all: 6 } },
+        { brandName: "Betnella(Men)", assetKey: "push", _count: { _all: 5 } },
+      ]);
+
+      expect(await launchGeneration("bun1")).toEqual({
+        ok: false,
+        error: "refs_missing",
+        missingRefs: [{ brandName: "Betnella (Women)", assetKey: "push", count: 3, min: 5 }],
+      });
     });
 
     it("хватает на всех форматах → генерация стартует", async () => {

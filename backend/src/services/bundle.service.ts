@@ -2,7 +2,7 @@ import { prisma } from "../lib/prisma.js";
 import { getBundleQueue } from "../queues/index.js";
 import { canStartGeneration, deriveBundleStatus } from "./bundleStatus.js";
 import type { BundleAssetStatus } from "./bundleStatus.js";
-import { refCountsByBrand, countFor, MIN_REFS_FOR_GENERATION } from "./variationRefs.js";
+import { refCountsByBrand, resolveRefPoolName, MIN_REFS_FOR_GENERATION } from "./variationRefs.js";
 
 // Image Bundles domain service (TASK crm-bundle, R-PLAN §3/§6/§7).
 
@@ -223,12 +223,19 @@ export async function launchGeneration(bundleId: string): Promise<LaunchResult |
   if (aiRefAssets.length > 0) {
     if (!bundle.presetId) return { ok: false, error: "preset_required" };
     const counts = await refCountsByBrand(bundle.presetId);
-    const missing = baseNames
-      .flatMap((name) =>
+    // Проверяем КАЖДЫЙ тон-вариант (DI2-10): у "Betnella(Men)" может быть свой
+    // пул, а может не быть — тогда считается общий пул базового бренда.
+    const missing = variants
+      .flatMap((variant) =>
         aiRefAssets.map((asset) => ({
-          brandName: name,
+          brandName: variant.displayName,
           assetKey: asset.key,
-          count: countFor(counts, name, asset.key),
+          count: resolveRefPoolName(
+            counts,
+            variant.brandName,
+            stripGenderName(variant.brandName),
+            asset.key,
+          ).count,
           min: MIN_REFS_FOR_GENERATION,
         })),
       )

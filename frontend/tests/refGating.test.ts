@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { missingRefFormatsFor, worstRefCount } from "~/utils/refGating";
+import { missingRefFormatsFor, worstRefCount, effectiveRefCount } from "~/utils/refGating";
 import type { RefCountsMap, RefFormatMeta } from "~/utils/refGating";
 
 // Гейт брендов в мастере (TASK multiformat-promo, DI2-2): у email, push и
@@ -48,5 +48,42 @@ describe("worstRefCount", () => {
     expect(worstRefCount(counts, FORMATS, "Betnella")).toBe(5);
     expect(worstRefCount(counts, FORMATS, "Corgi")).toBe(0);
     expect(worstRefCount(counts, [], "Betnella")).toBe(0);
+  });
+});
+
+// Тон-варианты (DI2-10): персонажа задают референсы, поэтому у (Men)/(Women)
+// могут быть свои пулы; пустой пул наследует общий пул бренда.
+describe("тон-варианты", () => {
+  const VARIANTS = [
+    { name: "Betnella(Men)", displayName: "Betnella (Men)" },
+    { name: "Betnella(Women)", displayName: "Betnella (Women)" },
+  ];
+  const toneCounts: RefCountsMap = {
+    Betnella: { email: 8, popup: 6, push: 7 }, // общий пул
+    "Betnella(Men)": { email: 6, popup: 5, push: 5 }, // свой полный
+    "Betnella(Women)": { email: 6, popup: 2 }, // начат и не добран
+  };
+
+  it("свой пул перебивает общий, пустой — наследует общий", () => {
+    expect(effectiveRefCount(toneCounts, "Betnella", "Betnella(Men)", "email")).toBe(6);
+    // push у Women не заводили вовсе → берётся общий пул бренда (7).
+    expect(effectiveRefCount(toneCounts, "Betnella", "Betnella(Women)", "push")).toBe(7);
+  });
+
+  it("начатый, но недобранный пул тона НЕ подменяется общим — это явная ошибка", () => {
+    // popup у Women = 2 своих, хотя в общем 6: молча смешивать полы нельзя.
+    expect(effectiveRefCount(toneCounts, "Betnella", "Betnella(Women)", "popup")).toBe(2);
+    expect(missingRefFormatsFor(toneCounts, FORMATS, MIN, "Betnella", VARIANTS)).toEqual([
+      { label: "Women · Pop-up", count: 2 },
+    ]);
+  });
+
+  it("бейдж бренда падает до худшего тона", () => {
+    expect(worstRefCount(toneCounts, FORMATS, "Betnella", VARIANTS)).toBe(2);
+  });
+
+  it("общий пул закрывает оба тона, если своих нет", () => {
+    const onlyBase: RefCountsMap = { Betnella: { email: 8, popup: 6, push: 7 } };
+    expect(missingRefFormatsFor(onlyBase, FORMATS, MIN, "Betnella", VARIANTS)).toEqual([]);
   });
 });
