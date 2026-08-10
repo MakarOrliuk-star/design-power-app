@@ -1874,97 +1874,6 @@ async def generate_single_report_stream(request: SingleReportRequest):
                     stream_logger("✅ АУДИТ УСПЕШНО ЗАВЕРШЕН!", 100)
                     
                     final_file_name = f"{camp_name}_{datetime.now().strftime('%Y%m%d_%H%M%S')}.html"
-                    
-                    # 🟢 ЖЕЛЕЗОБЕТОННЫЙ ФИКС JS (SPA / Vue Bypass)
-                    import urllib.parse
-                    import base64
-                    
-                    script_start = final_report_html.rfind("<script>")
-                    script_end = final_report_html.rfind("</script>")
-                    
-                    if script_start != -1 and script_end != -1:
-                        raw_script = final_report_html[script_start + 8 : script_end]
-                        
-                        # 1. Убираем обертку DOMContentLoaded
-                        raw_script = re.sub(r"document\.addEventListener\(['\"]DOMContentLoaded['\"],\s*\(\)\s*=>\s*\{", "", raw_script)
-                        raw_script = re.sub(r"\}\);\s*$", "", raw_script.strip())
-                        
-                        # 2. Синхронное копирование: браузеры жестко блокируют буфер обмена,
-                        # если он вызывается внутри setTimeout (так как теряется контекст доверенного клика юзера).
-                        robust_copy_js = """
-                        window.copyLocalErrors = function(btn, event) {
-                            event.preventDefault();
-                            const originalText = btn.innerHTML;
-                            
-                            const grouped = window.extractGroupedErrors(btn);
-                            if (!grouped) { 
-                                alert("Нет ошибок по выбранным фильтрам."); 
-                                return; 
-                            }
-                            
-                            let textResult = "";
-                            for (const [macro, data] of Object.entries(grouped)) {
-                                textResult += `Лейбл: ${macro}\\nСсылка: ${data.url}\\n\\n`;
-                                for (const [brand, bData] of Object.entries(data.brands)) {
-                                    textResult += `Бренд: ${brand}\\n`;
-                                    for (const [errText, langs] of Object.entries(bData)) {
-                                        const uniqLangs = [...new Set(langs)].sort();
-                                        textResult += `Локали: ${uniqLangs.join(', ')}\\nОшибки:\\n• ${errText}\\n\\n`;
-                                    }
-                                }
-                                textResult += `----------------------------------------\\n\\n`;
-                            }
-                            
-                            const finishCopy = () => {
-                                btn.innerHTML = "✅ Скопировано!";
-                                setTimeout(() => { 
-                                    btn.innerHTML = originalText; 
-                                    const m = btn.closest('.dropdown-menu'); 
-                                    if(m) m.style.display='none'; 
-                                }, 2000);
-                            };
-
-                            const fallback = () => {
-                                const ta = document.createElement("textarea");
-                                ta.value = textResult.trim();
-                                ta.style.position = "fixed"; 
-                                ta.style.top = "-9999px";
-                                document.body.appendChild(ta);
-                                ta.select();
-                                try { 
-                                    document.execCommand('copy'); 
-                                    finishCopy();
-                                } catch (e) { 
-                                    btn.innerHTML = "❌ Ошибка"; 
-                                    alert("Браузер заблокировал копирование."); 
-                                    setTimeout(() => { btn.innerHTML = originalText; }, 2000);
-                                }
-                                document.body.removeChild(ta);
-                            };
-
-                            // Мгновенная (синхронная) запись в буфер
-                            if (navigator.clipboard && navigator.clipboard.writeText) {
-                                navigator.clipboard.writeText(textResult.trim()).then(finishCopy).catch(fallback);
-                            } else {
-                                fallback();
-                            }
-                        };
-                        """
-                        raw_script += robust_copy_js
-
-                        # 3. Двойная кодировка (URL -> Base64), чтобы Vue не сломал кавычки и спецсимволы
-                        url_encoded = urllib.parse.quote(raw_script)
-                        b64_js = base64.b64encode(url_encoded.encode('utf-8')).decode('utf-8')
-
-                        # 4. Хак с ONERROR. Ошибка загрузки битой картинки сработает ВСЕГДА и исполнит JS.
-                        hack_html = f"""
-                        <style>button:active {{ transform: scale(0.95); transition: 0.1s; }}</style>
-                        <img src="invalid-url-to-force-error.jpg" 
-                             onerror="try{{ var s=document.createElement('script'); s.type='text/javascript'; s.innerHTML=decodeURIComponent(atob('{b64_js}')); document.head.appendChild(s); }}catch(e){{console.error('JS Inject Error', e);}} this.remove();" 
-                             style="display:none;">
-                        """
-                        
-                        final_report_html = final_report_html[:script_start] + hack_html + final_report_html[script_end + 9:]
 
                     done_event = {
                         "type": "done",
@@ -1972,7 +1881,7 @@ async def generate_single_report_stream(request: SingleReportRequest):
                         "html_content": final_report_html
                     }
                     
-                    # ensure_ascii=False сохранит русский язык чистым, чтобы JS-фильтры работали корректно
+                    # Отправляем чистый HTML без хаков (ensure_ascii=False для кириллицы)
                     asyncio.run_coroutine_threadsafe(
                         queue.put(f"data: {json.dumps(done_event, ensure_ascii=False)}\n\n"), 
                         loop
