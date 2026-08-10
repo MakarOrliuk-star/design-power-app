@@ -5381,12 +5381,11 @@ class GeneralCore:
             <button id="back-to-top" class="fixed bottom-8 right-8 bg-[#3b82f6] text-white w-12 h-12 rounded-full shadow-lg hidden hover:bg-blue-600 transition-all z-50 text-xl font-bold flex items-center justify-center border border-blue-400">↑</button>
 
             <script>
-                document.addEventListener('DOMContentLoaded', () => {{
+                (function() {{
                     // Внедряем CSS для скрытия фильтром
                     if (!document.getElementById('custom-filter-styles')) {{
                         const style = document.createElement('style');
                         style.id = 'custom-filter-styles';
-                        // 🟢 ФИКС: Усиливаем вес селектора, чтобы он 100% перебивал любые !important у плашек
                         style.innerHTML = '.hidden-by-filter, details.sim-pill.hidden-by-filter, div.hidden-by-filter, span.hidden-by-filter {{ display: none !important; }}';
                         document.head.appendChild(style);
                     }}
@@ -5428,7 +5427,6 @@ class GeneralCore:
                                 if (isMacro && showMacro) keep = true;
                                 
                                 if (keep) {{
-                                    // 🟢 УМНАЯ ОЧИСТКА: Удаляем динамическое количество символов (~88 симв.) чтобы сгруппировать ошибку
                                     let cleanErr = e.replace(/:?\s*~\d+\s*симв\.?\s*/g, ' ').replace(/\s+/g, ' ').trim();
                                     
                                     if (!grouped[macro]) grouped[macro] = {{ url: url, brands: {{}} }};
@@ -5446,38 +5444,49 @@ class GeneralCore:
                     }};
 
                     window.copyLocalErrors = function(btn, event) {{
-                        event.preventDefault();
+                        if (event) event.preventDefault();
                         const grouped = window.extractGroupedErrors(btn);
                         if (!grouped) {{ alert("Нет ошибок по выбранным фильтрам."); return; }}
                         
                         let textResult = "";
                         for (const [macro, data] of Object.entries(grouped)) {{
-                            textResult += `Лейбл: ${{macro}}\nСсылка: ${{data.url}}\n\n`;
+                            textResult += `Лейбл: ${{macro}}\\nСсылка: ${{data.url}}\\n\\n`;
                             
                             for (const [brand, bData] of Object.entries(data.brands)) {{
-                                textResult += `Бренд: ${{brand}}\n`;
+                                textResult += `Бренд: ${{brand}}\\n`;
                                 for (const [errText, langs] of Object.entries(bData)) {{
                                     const uniqLangs = [...new Set(langs)].sort();
-                                    textResult += `Локали: ${{uniqLangs.join(', ')}}\nОшибки:\n• ${{errText}}\n\n`;
+                                    textResult += `Локали: ${{uniqLangs.join(', ')}}\\nОшибки:\\n• ${{errText}}\\n\\n`;
                                 }}
                             }}
-                            textResult += `----------------------------------------\n\n`;
+                            textResult += `----------------------------------------\\n\\n`;
                         }}
                         
                         const originalText = btn.innerHTML;
-                        if (navigator.clipboard && navigator.clipboard.writeText) {{
-                            navigator.clipboard.writeText(textResult.trim()).then(() => {{
-                                btn.innerHTML = "✅ Скопировано!"; setTimeout(() => btn.innerHTML = originalText, 2000);
-                            }}).catch(err => alert("Ошибка копирования: " + err));
-                        }} else {{
+                        const finishCopy = () => {{
+                            btn.innerHTML = "✅ Скопировано!"; 
+                            setTimeout(() => btn.innerHTML = originalText, 2000);
+                            const menu = btn.closest('.dropdown-menu');
+                            if (menu) menu.style.display = 'none';
+                        }};
+
+                        const fallbackCopy = () => {{
                             const textArea = document.createElement("textarea");
-                            textArea.value = textResult.trim(); document.body.appendChild(textArea); textArea.select();
-                            try {{ document.execCommand('copy'); btn.innerHTML = "✅ Скопировано!"; setTimeout(() => btn.innerHTML = originalText, 2000); }} catch (e) {{ alert("Ошибка"); }}
+                            textArea.value = textResult.trim(); 
+                            textArea.style.position = "fixed";
+                            textArea.style.top = "-9999px";
+                            document.body.appendChild(textArea); 
+                            textArea.select();
+                            try {{ document.execCommand('copy'); finishCopy(); }} 
+                            catch (e) {{ alert("Браузер заблокировал копирование"); btn.innerHTML = originalText; }}
                             document.body.removeChild(textArea);
+                        }};
+
+                        if (navigator.clipboard && navigator.clipboard.writeText) {{
+                            navigator.clipboard.writeText(textResult.trim()).then(finishCopy).catch(() => fallbackCopy());
+                        }} else {{
+                            fallbackCopy();
                         }}
-                        
-                        const menu = btn.closest('.dropdown-menu');
-                        if (menu) menu.style.display = 'none';
                     }};
 
                     window.updateErrorDisplay = function(cb) {{
@@ -5516,7 +5525,6 @@ class GeneralCore:
                             }}
                         }});
 
-                        // Скрываем пустые плашки брендов, если все их ошибки были отфильтрованы
                         const brandBlocks = parentContext.querySelectorAll('.brand-has-errors, .brand-perfect');
                         brandBlocks.forEach(b => {{
                             const visibleErrors = b.querySelectorAll('.copyable-error:not(.hidden-by-filter), .critical-error-flag:not(.hidden-by-filter)');
@@ -5530,19 +5538,19 @@ class GeneralCore:
                         }});
                     }};
 
-                    // Закрытие выпадающих списков при клике вне их области
                     document.addEventListener('click', function(e) {{
                         if (!e.target.closest('.custom-dropdown-container')) {{
                             document.querySelectorAll('.dropdown-menu').forEach(menu => menu.style.display = 'none');
                         }}
                     }});
 
-                    // Toggle All Pills
-                    document.getElementById('toggleAllPills')?.addEventListener('change', (e) => {{
-                        document.body.classList.toggle('show-all-pills', e.target.checked);
-                    }});
+                    const toggleAll = document.getElementById('toggleAllPills');
+                    if (toggleAll) {{
+                        toggleAll.addEventListener('change', (e) => {{
+                            document.body.classList.toggle('show-all-pills', e.target.checked);
+                        }});
+                    }}
 
-                    // Section Master Checkboxes
                     document.addEventListener('change', e => {{
                         if (e.target.matches('.section-cb')) {{
                             const isChecked = e.target.checked;
@@ -5557,7 +5565,6 @@ class GeneralCore:
                         }}
                     }});
 
-                    // Sync Checkboxes
                     document.addEventListener('change', e => {{
                         if (e.target.matches('.general-cb, .sync-cb')) {{
                             const isChecked = e.target.checked;
@@ -5567,13 +5574,13 @@ class GeneralCore:
                             if (lbl) {{
                                 document.querySelectorAll(`.sync-cb[data-label="${{lbl}}"]`).forEach(s => {{
                                     s.checked = isChecked;
-                                    s.closest('.dim-target').classList.toggle('dimmed-done', isChecked);
+                                    const t = s.closest('.dim-target');
+                                    if (t) t.classList.toggle('dimmed-done', isChecked);
                                 }});
                             }}
                         }}
                     }});
 
-                    // Sortable Tables
                     document.querySelectorAll('table th').forEach((th, i) => {{
                         th.addEventListener('click', () => {{
                             const table = th.closest('table');
@@ -5588,15 +5595,14 @@ class GeneralCore:
                         }});
                     }});
 
-                    // АВТО-ЗАКРЫТИЕ СПОЙЛЕРОВ И АВТО-ПРОВЕРКА
                     document.querySelectorAll('details').forEach(details => {{
+                        if (details.querySelector('.btn-auto-close')) return;
+                        
                         const closeBtn = document.createElement('button');
                         closeBtn.innerHTML = '✅ Свернуть и отметить как проверенное';
-                        closeBtn.className = 'mt-3 px-3 py-1.5 bg-slate-100 hover:bg-emerald-100 text-slate-600 hover:text-emerald-700 hover:border-emerald-300 rounded text-xs font-semibold w-full text-center transition-colors border border-slate-200 shadow-sm';
+                        closeBtn.className = 'btn-auto-close mt-3 px-3 py-1.5 bg-slate-100 hover:bg-emerald-100 text-slate-600 hover:text-emerald-700 hover:border-emerald-300 rounded text-xs font-semibold w-full text-center transition-colors border border-slate-200 shadow-sm';
                         closeBtn.addEventListener('click', (e) => {{
                             e.preventDefault();
-                            
-                            // Автоматически отмечаем чекбокс "Проверено" (и триггерим эвент, чтобы перекрасилась плашка)
                             const cb = details.querySelector('input[type="checkbox"].sync-cb, input[type="checkbox"].general-cb');
                             if (cb && !cb.checked) {{
                                 cb.checked = true;
@@ -5607,26 +5613,18 @@ class GeneralCore:
                             window.scrollTo({{top: y, behavior: 'smooth'}});
                             setTimeout(() => details.removeAttribute('open'), 150);
                         }});
-                        const contentContainer = Array.from(details.children).find(child => child.tagName.toLowerCase() === 'div');
-                        if (contentContainer) contentContainer.appendChild(closeBtn);
-                        else details.appendChild(closeBtn);
-                    }});
-                        
-                        const contentContainer = Array.from(details.children).find(child => child.tagName.toLowerCase() === 'div');
-                        if (contentContainer) contentContainer.appendChild(closeBtn);
-                        else details.appendChild(closeBtn);
-                    }});
                         
                         const contentContainer = Array.from(details.children).find(child => child.tagName.toLowerCase() === 'div');
                         if (contentContainer) contentContainer.appendChild(closeBtn);
                         else details.appendChild(closeBtn);
                     }});
 
-                    // Scroll to top
                     const btt = document.getElementById('back-to-top');
-                    window.addEventListener('scroll', () => btt.classList.toggle('hidden', window.scrollY < 300));
-                    btt.addEventListener('click', () => window.scrollTo({{ top: 0, behavior: 'smooth' }}));
-                }});
+                    if (btt) {{
+                        window.addEventListener('scroll', () => btt.classList.toggle('hidden', window.scrollY < 300));
+                        btt.addEventListener('click', () => window.scrollTo({{ top: 0, behavior: 'smooth' }}));
+                    }}
+                }})();
             </script>
         </body>
         </html>
