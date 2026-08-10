@@ -4,6 +4,7 @@
 // type config, not the static mock (D2). One brand toggle = both tone
 // variants (D3/D7). Presets drop-down on prompt focus (D8).
 import { ref, computed, watch } from "vue";
+import { worstRefCount } from "~/utils/refGating";
 
 const MAX_PROMPT = 1500;
 
@@ -40,7 +41,7 @@ watch(selectedPresetId, (presetId) => {
   if (presetId) {
     const next = new Set(selectedBrands.value);
     for (const key of next) {
-      if ((store.refCounts[key] ?? 0) < store.refCountsMin) next.delete(key);
+      if (store.missingRefFormats(key).length > 0) next.delete(key);
     }
     // refCounts приезжают асинхронно — чистим ещё раз после загрузки (ниже).
     selectedBrands.value = next;
@@ -48,12 +49,12 @@ watch(selectedPresetId, (presetId) => {
 });
 watch(
   () => store.refCounts,
-  (counts) => {
+  () => {
     if (!aiReferenceMode.value || !selectedPresetId.value) return;
     const next = new Set(selectedBrands.value);
     let touched = false;
     for (const key of next) {
-      if ((counts[key] ?? 0) < store.refCountsMin) {
+      if (store.missingRefFormats(key).length > 0) {
         next.delete(key);
         touched = true;
       }
@@ -62,11 +63,22 @@ watch(
   },
 );
 
+/** Худший формат бренда — его число и показывает бейдж (DI2-2). */
 function brandRefCount(key: string): number {
-  return store.refCounts[key] ?? 0;
+  return worstRefCount(store.refCounts, store.refFormats, key);
+}
+/** Подсказка «каких форматов не хватает» — иначе бренд молча заблокирован. */
+function brandMissingHint(key: string): string {
+  const missing = store.missingRefFormats(key);
+  if (missing.length === 0) return "";
+  return missing.map((m) => `${m.label} ${m.count}/${store.refCountsMin}`).join(", ");
 }
 function brandBlocked(key: string): boolean {
-  return aiReferenceMode.value && Boolean(selectedPresetId.value) && brandRefCount(key) < store.refCountsMin;
+  return (
+    aiReferenceMode.value &&
+    Boolean(selectedPresetId.value) &&
+    store.missingRefFormats(key).length > 0
+  );
 }
 
 const filteredBrands = computed(() => {
@@ -133,7 +145,7 @@ const LAUNCH_ERRORS: Record<string, string> = {
   queue_unavailable: "Generation queue is unavailable — try again later.",
   preset_required: "Для этого типа бандла нужно выбрать вариацию (промо).",
   refs_missing:
-    "У части выбранных брендов меньше 5 референсов для этой вариации — загрузите их на вкладке «Референсы».",
+    "У части выбранных брендов не хватает референсов на один из форматов (email / pop-up / push) — загрузите их на вкладке «Референсы».",
 };
 
 const ASSET_ICONS: Record<string, string> = { email: "✉️", popup: "🪟", push: "🔔" };
@@ -298,7 +310,7 @@ const ASSET_ICONS: Record<string, string> = { email: "✉️", popup: "🪟", pu
             :key="b.key"
             class="brand"
             :class="{ 'brand--blocked': brandBlocked(b.key) }"
-            :title="brandBlocked(b.key) ? `Референсов ${brandRefCount(b.key)}/${store.refCountsMin} — загрузите ещё на вкладке «Референсы»` : undefined"
+            :title="brandBlocked(b.key) ? `Не хватает референсов: ${brandMissingHint(b.key)} — загрузите на вкладке «Референсы»` : undefined"
           >
             <span class="brand__avatar">{{ b.displayName.slice(0, 1).toUpperCase() }}</span>
             <span class="brand__name" :title="b.variants.map((v) => v.displayName).join(', ')">{{ b.displayName }}</span>

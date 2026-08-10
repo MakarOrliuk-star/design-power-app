@@ -4,9 +4,11 @@ import type { BundleAssetMeta } from "~/stores/bundles";
 // the zone in PERCENT of the image (TASK §2.3), so the overlay maps straight
 // onto the картинку at any card width and stays valid at @2x.
 
-/** Absolute-position style of the safe zone inside the asset frame. */
+/** Absolute-position style of the safe zone inside the asset frame.
+ *  Форматы без safe-зоны (push/pop-up, DI2-4) отдают null — оверлей скрыт. */
 export function safeZoneStyle(meta: BundleAssetMeta): Record<string, string> {
   const z = meta.safeZonePct;
+  if (!z) return { display: "none" };
   return {
     left: `${z.x}%`,
     top: `${z.y}%`,

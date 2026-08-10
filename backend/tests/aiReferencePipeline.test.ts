@@ -10,6 +10,7 @@ const db = vi.hoisted(() => ({
   bundle: { findUnique: vi.fn(), update: vi.fn() },
   bundleAsset: {
     update: vi.fn(),
+    findUnique: vi.fn(),
     updateMany: vi.fn(),
     deleteMany: vi.fn(),
     findMany: vi.fn(),
@@ -30,7 +31,12 @@ const cloud = vi.hoisted(() => ({
 }));
 const cache = vi.hoisted(() => ({ fetchBuffer: vi.fn() }));
 const validator = vi.hoisted(() => ({ validateAiAsset: vi.fn() }));
-const reviewer = vi.hoisted(() => ({ reviewComposition: vi.fn(), QA_REFS_SHOWN: 3 }));
+const reviewer = vi.hoisted(() => ({
+  reviewComposition: vi.fn(),
+  QA_REFS_SHOWN: 3,
+  qaThreshold: vi.fn(() => 80),
+}));
+const style = vi.hoisted(() => ({ describeCampaignStyle: vi.fn() }));
 const healing = vi.hoisted(() => ({ healComposition: vi.fn() }));
 
 vi.mock("../src/lib/prisma.js", () => ({ prisma: db }));
@@ -40,6 +46,7 @@ vi.mock("../src/lib/cloudinary.js", () => cloud);
 vi.mock("../src/services/layerCache.js", () => cache);
 vi.mock("../src/lib/aiAssetValidator.js", () => validator);
 vi.mock("../src/lib/vlmReviewer.js", () => reviewer);
+vi.mock("../src/lib/styleAnchor.js", () => style);
 vi.mock("../src/services/aiHealing.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../src/services/aiHealing.js")>();
   return { ...actual, healComposition: healing.healComposition };
@@ -47,10 +54,13 @@ vi.mock("../src/services/aiHealing.js", async (importOriginal) => {
 
 import {
   processAiReferenceAsset,
+  loadAnchorContext,
   derivedAssetKeys,
   parentOfDerivedKey,
   derivedAssetLabel,
   buildAiReferencePrompt,
+  buildSecondaryPrompt,
+  formatGeometryHint,
   AI_REF_MAX_ATTEMPTS,
 } from "../src/services/aiReferencePipeline.js";
 
@@ -77,6 +87,7 @@ function refRows(n: number) {
     id: `r${i}`,
     presetId: "p1",
     brandName: "Betnella",
+    assetKey: "email",
     imageUrl: `https://cdn/ref${i}.png`,
     publicId: `pid${i}`,
     width: 1200,
@@ -129,7 +140,12 @@ beforeEach(() => {
   cache.fetchBuffer.mockReset();
   validator.validateAiAsset.mockReset();
   reviewer.reviewComposition.mockReset();
+  style.describeCampaignStyle.mockReset();
   healing.healComposition.mockReset();
+  style.describeCampaignStyle.mockResolvedValue({
+    text: "Campaign style to reproduce — Palette: neon purple.",
+    anchor: { palette: "neon purple", character: "", props: "", lighting: "", rendering: "" },
+  });
 
   db.bundle.findUnique.mockResolvedValue({
     neuralPrompt: "VIP Exclusive weekend BONUS",
@@ -189,7 +205,9 @@ describe("processAiReferenceAsset — один ассет (TASK safe-zone/auto-h
 
     // Референсы ищутся по базовому имени бренда (stripGenderName).
     expect(db.variationReference.findMany).toHaveBeenCalledWith(
-      expect.objectContaining({ where: { presetId: "p1", brandName: "Betnella" } }),
+      expect.objectContaining({
+        where: { presetId: "p1", brandName: "Betnella", assetKey: "email" },
+      }),
     );
     // Генерация: GPT Image 2 (A-7) с точным канвасом, banana не вызывается.
     expect(fal.runGptImage2Edit).toHaveBeenCalledTimes(1);
@@ -352,5 +370,179 @@ describe("processAiReferenceAsset — один ассет (TASK safe-zone/auto-h
     };
     expect(failCall.data.status).toBe("FAILED");
     expect(failCall.data.errorMessage).toContain("transparent upload");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Мультиформатное промо (TASK multiformat-promo): якорь email → push/pop-up
+// в едином стиле кампании (DI2-3), без safe-зоны и схемы-раскладки (DI2-4).
+// ---------------------------------------------------------------------------
+
+describe("formatGeometryHint / buildSecondaryPrompt (DI2-3/DI2-4)", () => {
+  it("геометрия формата человекочитаема — модель не видит канвас из промпта", () => {
+    expect(formatGeometryHint("Push", 1024, 512)).toBe(
+      "Target format: Push — a wide horizontal banner, 1024×512 px (2:1).",
+    );
+    expect(formatGeometryHint("Pop-up", 800, 600)).toContain(
+      "nearly square banner, 800×600 px (4:3)",
+    );
+  });
+
+  it("промпт зависимого формата: якорь-эталон, запрет копировать раскладку, без copy space", () => {
+    const p = buildSecondaryPrompt({
+      variationText: "VIP weekend",
+      styleText: "Campaign style to reproduce — Palette: neon purple.",
+      hasAnchor: true,
+      formatLabel: "Push",
+      targetW: 1024,
+      targetH: 512,
+    });
+    expect(p).toContain("Campaign brief: VIP weekend.");
+    expect(p).toContain("Target format: Push");
+    expect(p).toContain("Palette: neon purple");
+    expect(p).toContain("APPROVED anchor creative");
+    expect(p).toContain("Do NOT copy its layout");
+    expect(p).toContain("NO reserved copy space");
+    expect(p).toContain("STRICTLY NO text");
+    // Требований якорного контракта тут быть не должно.
+    expect(p).not.toContain("COPY SPACE");
+    expect(p).not.toContain("THREE sections");
+  });
+
+  it("без якоря (старый бандл) блок STYLE SOURCE снимается", () => {
+    const p = buildSecondaryPrompt({
+      variationText: "VIP weekend",
+      styleText: "",
+      hasAnchor: false,
+      formatLabel: "Pop-up",
+      targetW: 800,
+      targetH: 600,
+    });
+    expect(p).not.toContain("APPROVED anchor creative");
+    expect(p).toContain("The images are reference banners");
+  });
+});
+
+describe("processAiReferenceAsset — зависимый формат (DI2-3)", () => {
+  const PUSH_OPTS = {
+    ...OPTS,
+    assetId: "a2",
+    assetKey: "push",
+    targetW: 1024,
+    targetH: 512,
+    isAnchor: false,
+    formatLabel: "Push",
+    anchor: {
+      imageUrl: "https://cdn/email-base.png",
+      styleText: "Campaign style to reproduce — Palette: neon purple.",
+    },
+  };
+
+  it("якорь идёт первой картинкой, схема-раскладка не используется, стиль не переснимается", async () => {
+    await processAiReferenceAsset(PUSH_OPTS);
+
+    // Референсы берутся из пула СВОЕГО формата (DI2-2).
+    expect(db.variationReference.findMany).toHaveBeenCalledWith(
+      expect.objectContaining({
+        where: { presetId: "p1", brandName: "Betnella", assetKey: "push" },
+      }),
+    );
+    const [args] = fal.runGptImage2Edit.mock.calls[0]!;
+    expect(args.imageUrls[0]).toBe("https://cdn/email-base.png");
+    expect(args.imageUrls).toHaveLength(7); // якорь + 6 референсов формата
+    expect(args.prompt).toContain("APPROVED anchor creative");
+    expect(args.prompt).not.toContain("LAYOUT GUIDE");
+    expect(args.width).toBe(1024);
+    expect(args.height).toBe(512);
+    // Описание стиля снимается только с якоря — здесь оно уже готово.
+    expect(style.describeCampaignStyle).not.toHaveBeenCalled();
+  });
+
+  it("чек чистого центра не выполняется, приёмка идёт профилем secondary (DI2-4)", async () => {
+    await processAiReferenceAsset(PUSH_OPTS);
+    const techOpts = validator.validateAiAsset.mock.calls[0]![3];
+    expect(techOpts).toEqual({});
+    const [qaArgs] = reviewer.reviewComposition.mock.calls[0]!;
+    expect(qaArgs.profile).toBe("secondary");
+    expect(qaArgs.anchorUrl).toBe("https://cdn/email-base.png");
+  });
+
+  it("в метаданных нет safe-зоны, зато виден источник стиля", async () => {
+    await processAiReferenceAsset(PUSH_OPTS);
+    const parent = parentDoneCall()! as unknown as { data: { metadata: Record<string, unknown> } };
+    expect(parent.data.metadata.safeZonePct).toBeNull();
+    expect(parent.data.metadata.campaignAnchorUrl).toBe("https://cdn/email-base.png");
+    expect(parent.data.metadata.styleAnchorUsed).toBe(true);
+  });
+});
+
+describe("processAiReferenceAsset — якорь отдаёт стиль дальше (DI2-3)", () => {
+  it("сохраняет базу ДО removeBg и описание стиля, возвращает их процессору", async () => {
+    const result = await processAiReferenceAsset(OPTS);
+
+    expect(style.describeCampaignStyle).toHaveBeenCalledWith("https://cdn/fit.png");
+    expect(result).toEqual({
+      ok: true,
+      baseUrl: "https://cdn/fit.png",
+      styleText: "Campaign style to reproduce — Palette: neon purple.",
+    });
+    const parent = parentDoneCall()! as unknown as {
+      data: { metadata: Record<string, unknown> & { qa: Record<string, unknown> } };
+    };
+    // Якорем становится белая база, а НЕ прозрачная картинка ассета.
+    expect(parent.data.metadata.qa.baseUrl).toBe("https://cdn/fit.png");
+    expect(parent.data.metadata.qa.threshold).toBe(80);
+    expect(parent.data.metadata.styleAnchor).toContain("neon purple");
+    expect(parent.data.metadata.isStyleAnchor).toBe(true);
+  });
+
+  it("сбой описания стиля не валит якорь (fail-open)", async () => {
+    style.describeCampaignStyle.mockResolvedValue({ text: "", anchor: null, error: "HTTP 500" });
+    const result = await processAiReferenceAsset(OPTS);
+    expect(result.ok).toBe(true);
+    expect(result.styleText).toBe("");
+  });
+
+  it("провал ассета возвращает ok:false — зависимые форматы не поедут", async () => {
+    fal.runBriaRemoveBg.mockResolvedValue({ success: false, error: "HTTP 500" });
+    expect(await processAiReferenceAsset(OPTS)).toEqual({ ok: false });
+  });
+});
+
+describe("loadAnchorContext (DI2-9)", () => {
+  it("берёт белую базу из metadata.qa.baseUrl", async () => {
+    db.bundleAsset.findUnique.mockResolvedValue({
+      status: "DONE",
+      imageUrl: "https://cdn/email-transparent.png",
+      metadata: { styleAnchor: "Palette: neon purple.", qa: { baseUrl: "https://cdn/base.png" } },
+    });
+    expect(await loadAnchorContext("v1", "email")).toEqual({
+      imageUrl: "https://cdn/base.png",
+      styleText: "Palette: neon purple.",
+    });
+  });
+
+  it("старый бандл без baseUrl → фолбэк на картинку ассета с пометкой", async () => {
+    db.bundleAsset.findUnique.mockResolvedValue({
+      status: "DONE",
+      imageUrl: "https://cdn/email-transparent.png",
+      metadata: { qa: {} },
+    });
+    expect(await loadAnchorContext("v1", "email")).toEqual({
+      imageUrl: "https://cdn/email-transparent.png",
+      styleText: "",
+      fallback: true,
+    });
+  });
+
+  it("якорь не готов (FAILED / нет строки) → контекста нет", async () => {
+    db.bundleAsset.findUnique.mockResolvedValue({
+      status: "FAILED",
+      imageUrl: null,
+      metadata: null,
+    });
+    expect(await loadAnchorContext("v1", "email")).toBeNull();
+    db.bundleAsset.findUnique.mockResolvedValue(null);
+    expect(await loadAnchorContext("v1", "email")).toBeNull();
   });
 });

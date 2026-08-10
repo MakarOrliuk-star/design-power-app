@@ -228,10 +228,41 @@ describe("GET /api/bundles/:id (Result screen)", () => {
     expect(res.body.bundle.variants[0].assets[0].meta).toBeNull();
   });
 
-  it("returns meta:null when metadata exists but carries no safe zone", async () => {
-    db.bundle.findUnique.mockResolvedValue(bundleWithAsset({ specKey: "email.hero", safeZonePct: null }));
+  it("returns meta:null for foreign metadata (no spec key, no safe zone)", async () => {
+    db.bundle.findUnique.mockResolvedValue(bundleWithAsset({ someOtherField: 1, safeZonePct: null }));
     const res = await request(makeApp()).get("/api/bundles/bun1");
     expect(res.body.bundle.variants[0].assets[0].meta).toBeNull();
+  });
+
+  // TASK multiformat-promo (DI2-4): у push/pop-up safe-зоны нет, но вердикт
+  // приёмки CRM всё равно должен видеть — meta больше не схлопывается в null.
+  it("safeZonePct:null у формата без текста — метаданные и вердикт приёмки остаются", async () => {
+    db.bundle.findUnique.mockResolvedValue(
+      bundleWithAsset({
+        specKey: "ai_reference",
+        specVersion: 1,
+        safeZonePct: null,
+        validator: { passed: false, attempts: 3 },
+        qa: {
+          qaPassed: false,
+          threshold: 80,
+          chosenAttempt: 0,
+          attempts: [{ score: 68, pass: false, reasons: ["стиль расходится с кампанией"] }],
+        },
+      }),
+    );
+    const res = await request(makeApp()).get("/api/bundles/bun1");
+    const meta = res.body.bundle.variants[0].assets[0].meta;
+    expect(meta).not.toBeNull();
+    expect(meta.safeZonePct).toBeNull();
+    expect(meta.qa).toEqual({
+      passed: false,
+      attempts: 1,
+      reasons: ["стиль расходится с кампанией"],
+      healing: null,
+      score: 68,
+      threshold: 80,
+    });
   });
 });
 

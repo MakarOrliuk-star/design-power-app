@@ -462,6 +462,10 @@ const bundleTypeAssetSchema = z.object({
   // "ai_reference" — композиция из референсов вариации (TASK ai-reference):
   // включение/откат режима = правка данных из админки, без деплоя.
   composeMode: z.enum(["ai", "layered", "ai_reference"]).optional(),
+  // Якорь стиля кампании (TASK multiformat-promo, A2-1): генерируется первым,
+  // остальные ai_reference-форматы наследуют его стиль. Не задан — якорем
+  // становится "email" (см. resolveStyleAnchorKey).
+  styleAnchor: z.boolean().optional(),
   // Versioned geometry reference (Phase 1): render resolves the latest active
   // LayoutSpec with this key. Absent → legacy zones/composeMode path.
   layoutSpecKey: z.string().min(1).max(60).optional(),

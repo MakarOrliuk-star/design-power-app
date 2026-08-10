@@ -717,6 +717,9 @@ interface AdminBundleTypeAsset {
   zones?: Record<string, { x: number; y: number; w: number; h: number }>;
   // "ai_reference" — композиция из 5–15 референсов вариации (TASK ai-reference)
   composeMode?: "ai" | "layered" | "ai_reference";
+  // Якорь стиля кампании (TASK multiformat-promo, A2-1): по умолчанию email.
+  // Поле сохраняется как есть — правится через API, отдельного UI пока нет.
+  styleAnchor?: boolean;
 }
 interface AdminBundleType {
   id: string;

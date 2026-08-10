@@ -33,6 +33,12 @@ describe("safeZoneStyle", () => {
   it("falls back to dark text when the engine recommended nothing", () => {
     expect(safeZoneStyle(meta({ recommendedTextColor: null })).color).toBe("#111111");
   });
+
+  // TASK multiformat-promo (DI2-4): push и pop-up идут без текста, safe-зоны у
+  // них нет — оверлей обязан просто исчезнуть, а не рисовать зону из нулей.
+  it("прячет оверлей у форматов без safe-зоны", () => {
+    expect(safeZoneStyle(meta({ safeZonePct: null }))).toEqual({ display: "none" });
+  });
 });
 
 describe("safeContrast", () => {

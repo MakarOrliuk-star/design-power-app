@@ -1,14 +1,19 @@
 import { prisma } from "../lib/prisma.js";
 
 /**
- * Референсы вариаций (TASK ai-reference, DI-R3/R5).
+ * Референсы вариаций (TASK ai-reference, DI-R3/R5; TASK multiformat-promo, DI2-1/2).
  *
- * Референс — ГОТОВЫЙ email-баннер, загруженный админом/CRM_SUPER под пару
- * «вариация (NeuralPromptPreset) × базовый бренд». Из них nano-banana-2 /edit
- * собирает новую композицию целиком, поэтому:
- *   - на паре хранится 5..15 файлов (меньше 5 — генерация закрыта, DI-R3);
+ * Референс — ГОТОВЫЙ баннер, загруженный админом/CRM_SUPER под тройку
+ * «вариация (NeuralPromptPreset) × базовый бренд × ФОРМАТ». Из них
+ * gpt-image-2 (или nano-banana-2) /edit собирает новую композицию целиком,
+ * поэтому:
+ *   - на тройке хранится 5..15 файлов (меньше 5 — генерация формата закрыта);
  *   - в один вызов модели уходят первые MAX_EDIT_REFS по sortOrder — жёсткий
- *     лимит nano-banana-2 /edit, DI-R5. Порядок админа = приоритет.
+ *     лимит /edit, DI-R5. Порядок админа = приоритет.
+ *
+ * Формат (`assetKey`) совпадает с ключом ассета в `BundleType.assets[]`
+ * ("email" / "popup" / "push"): у форматов разная стилистика, поэтому пулы
+ * референсов раздельные и фолбэка «push берёт email-рефы» нет (DI2-2).
  */
 
 export const MIN_REFS_FOR_GENERATION = 5;
@@ -16,12 +21,16 @@ export const MAX_REFS_PER_PAIR = 15;
 /** Лимит image_urls у nano-banana-2 /edit (fal.ai; см. тж. falModels.ts). */
 export const MAX_EDIT_REFS = 14;
 
+/** Формат по умолчанию — совпадает с @default("email") в схеме (DI2-1). */
+export const DEFAULT_REF_ASSET_KEY = "email";
+
 export const REFS_FOLDER = "bundle_refs";
 
 export interface VariationRefDto {
   id: string;
   presetId: string;
   brandName: string;
+  assetKey: string;
   imageUrl: string;
   publicId: string;
   width: number;
@@ -30,22 +39,41 @@ export interface VariationRefDto {
   createdAt: Date;
 }
 
-/** Все референсы пары, в порядке админа. */
-export async function listRefs(presetId: string, brandName: string): Promise<VariationRefDto[]> {
+/** Счётчики одной вариации: бренд → формат → сколько референсов. */
+export type RefCounts = Record<string, Record<string, number>>;
+
+/** Все референсы тройки (вариация × бренд × формат), в порядке админа. */
+export async function listRefs(
+  presetId: string,
+  brandName: string,
+  assetKey: string,
+): Promise<VariationRefDto[]> {
   return prisma.variationReference.findMany({
-    where: { presetId, brandName },
+    where: { presetId, brandName, assetKey },
     orderBy: [{ sortOrder: "asc" }, { createdAt: "asc" }],
   });
 }
 
-/** Счётчики по брендам для бейджей мастера («Betnella: 7/15», DI-R12). */
-export async function refCountsByBrand(presetId: string): Promise<Record<string, number>> {
+/**
+ * Счётчики по брендам и форматам для бейджей мастера и вкладок RefsManager
+ * («Betnella: email 7, push 5», DI-R12/DI2-2).
+ */
+export async function refCountsByBrand(presetId: string): Promise<RefCounts> {
   const rows = await prisma.variationReference.groupBy({
-    by: ["brandName"],
+    by: ["brandName", "assetKey"],
     where: { presetId },
     _count: { _all: true },
   });
-  return Object.fromEntries(rows.map((r) => [r.brandName, r._count._all]));
+  const counts: RefCounts = {};
+  for (const row of rows) {
+    (counts[row.brandName] ??= {})[row.assetKey] = row._count._all;
+  }
+  return counts;
+}
+
+/** Сколько референсов у пары бренд×формат в готовых счётчиках (0, если нет). */
+export function countFor(counts: RefCounts, brandName: string, assetKey: string): number {
+  return counts[brandName]?.[assetKey] ?? 0;
 }
 
 /**
@@ -56,11 +84,12 @@ export async function refCountsByBrand(presetId: string): Promise<Record<string,
 export async function pickGenerationRefs(
   presetId: string,
   brandName: string,
+  assetKey: string,
 ): Promise<VariationRefDto[]> {
-  const refs = await listRefs(presetId, brandName);
+  const refs = await listRefs(presetId, brandName, assetKey);
   if (refs.length < MIN_REFS_FOR_GENERATION) {
     throw new Error(
-      `ai_reference: у бренда "${brandName}" ${refs.length} референсов, нужно >= ${MIN_REFS_FOR_GENERATION}`,
+      `ai_reference: у бренда "${brandName}" (формат ${assetKey}) ${refs.length} референсов, нужно >= ${MIN_REFS_FOR_GENERATION}`,
     );
   }
   return refs.slice(0, MAX_EDIT_REFS);
@@ -73,4 +102,9 @@ export function brandSlug(brandName: string): string {
     .replace(/[^a-z0-9а-яё]+/gi, "-")
     .replace(/^-+|-+$/g, "");
   return slug || "brand";
+}
+
+/** Папка Cloudinary тройки: bundle_refs/{presetId}/{brand}/{format}. */
+export function refsFolder(presetId: string, brandName: string, assetKey: string): string {
+  return `${REFS_FOLDER}/${presetId}/${brandSlug(brandName)}/${brandSlug(assetKey)}`;
 }

@@ -5,9 +5,20 @@ import { describe, it, expect, beforeEach, vi } from "vitest";
 const visionMock = vi.hoisted(() => vi.fn());
 vi.mock("../src/lib/fal.js", () => ({ runVisionQa: visionMock }));
 
-import { parseVerdict, reviewComposition, QA_REFS_SHOWN } from "../src/lib/vlmReviewer.js";
+import {
+  parseVerdict,
+  reviewComposition,
+  applyThreshold,
+  qaThreshold,
+  buildQaSystemPrompt,
+  DEFAULT_QA_THRESHOLD,
+  QA_REFS_SHOWN,
+} from "../src/lib/vlmReviewer.js";
 
-beforeEach(() => visionMock.mockReset());
+beforeEach(() => {
+  visionMock.mockReset();
+  vi.unstubAllEnvs();
+});
 
 describe("parseVerdict", () => {
   it("разбирает чистый JSON", () => {
@@ -74,5 +85,91 @@ describe("reviewComposition", () => {
       .mockResolvedValueOnce({ success: true, output: '{"pass": false, "score": 40, "reasons": ["анатомия"]}' });
     const verdict = await reviewComposition(opts);
     expect(verdict).toEqual({ pass: false, score: 40, reasons: ["анатомия"] });
+  });
+});
+
+// TASK multiformat-promo (DI2-5): «% приемки» — числовой порог, а не только
+// булев вердикт модели. Слабая, но формально принятая картинка теперь уходит
+// в авто-ретрай сама, без ручного Regenerate.
+describe("порог приёмки (DI2-5)", () => {
+  it("дефолт 80, ENV переопределяет и зажимается в 0..100", () => {
+    expect(qaThreshold()).toBe(DEFAULT_QA_THRESHOLD);
+    vi.stubEnv("AI_REF_QA_THRESHOLD", "92");
+    expect(qaThreshold()).toBe(92);
+    vi.stubEnv("AI_REF_QA_THRESHOLD", "500");
+    expect(qaThreshold()).toBe(100);
+    vi.stubEnv("AI_REF_QA_THRESHOLD", "мусор");
+    expect(qaThreshold()).toBe(DEFAULT_QA_THRESHOLD);
+  });
+
+  it("pass:true со score ниже порога отменяется, причина видна человеку", () => {
+    const verdict = applyThreshold({ pass: true, score: 68, reasons: [] }, 80);
+    expect(verdict.pass).toBe(false);
+    expect(verdict.reasons[0]).toBe("оценка приёмки 68 ниже порога 80");
+  });
+
+  it("score на пороге проходит, чужие причины сохраняются", () => {
+    expect(applyThreshold({ pass: true, score: 80, reasons: [] }, 80).pass).toBe(true);
+    const failed = applyThreshold({ pass: false, score: 10, reasons: ["анатомия"] }, 80);
+    expect(failed.reasons).toEqual(["анатомия"]);
+  });
+
+  it("порог применяется в reviewComposition поверх ответа модели", async () => {
+    vi.stubEnv("AI_REF_QA_THRESHOLD", "85");
+    visionMock.mockResolvedValue({
+      success: true,
+      output: '{"pass": true, "score": 80, "reasons": []}',
+    });
+    const verdict = await reviewComposition({
+      imageUrl: "https://cdn/gen.png",
+      refUrls: [],
+      variationText: "VIP",
+      brandName: "Betnella",
+    });
+    expect(verdict.pass).toBe(false);
+    expect(verdict.score).toBe(80);
+  });
+});
+
+// TASK multiformat-promo (DI2-4): у push/pop-up нет copy space, зато есть
+// сверка с якорной композицией кампании.
+describe("профили чек-листа (DI2-4)", () => {
+  it("якорный профиль требует пустой центр, зависимый — нет", () => {
+    const anchor = buildQaSystemPrompt("anchor");
+    const secondary = buildQaSystemPrompt("secondary");
+    expect(anchor).toContain("central band");
+    expect(anchor).toContain("COMPLETELY EMPTY");
+    expect(secondary).not.toContain("COMPLETELY EMPTY");
+    expect(secondary).toContain("NO required empty copy space");
+  });
+
+  it("зависимый профиль сверяет стиль с якорем и не считает другую раскладку браком", () => {
+    const secondary = buildQaSystemPrompt("secondary");
+    expect(secondary).toContain("CAMPAIGN STYLE MATCH");
+    expect(secondary).toContain("a different layout, crop or aspect ratio is CORRECT");
+  });
+
+  it("якорь показывается приёмщику вторым изображением, перед референсами формата", async () => {
+    visionMock.mockResolvedValue({
+      success: true,
+      output: '{"pass": true, "score": 95, "reasons": []}',
+    });
+    await reviewComposition({
+      imageUrl: "https://cdn/push.png",
+      refUrls: ["https://cdn/pr1.png", "https://cdn/pr2.png"],
+      variationText: "VIP",
+      brandName: "Betnella",
+      profile: "secondary",
+      anchorUrl: "https://cdn/email-base.png",
+      formatLabel: "Push",
+    });
+    const call = visionMock.mock.calls[0]![0] as { imageUrls: string[]; prompt: string };
+    expect(call.imageUrls).toEqual([
+      "https://cdn/push.png",
+      "https://cdn/email-base.png",
+      "https://cdn/pr1.png",
+      "https://cdn/pr2.png",
+    ]);
+    expect(call.prompt).toContain("Format: Push.");
   });
 });

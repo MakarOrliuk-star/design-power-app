@@ -2,7 +2,7 @@ import { prisma } from "../lib/prisma.js";
 import { getBundleQueue } from "../queues/index.js";
 import { canStartGeneration, deriveBundleStatus } from "./bundleStatus.js";
 import type { BundleAssetStatus } from "./bundleStatus.js";
-import { refCountsByBrand, MIN_REFS_FOR_GENERATION } from "./variationRefs.js";
+import { refCountsByBrand, countFor, MIN_REFS_FOR_GENERATION } from "./variationRefs.js";
 
 // Image Bundles domain service (TASK crm-bundle, R-PLAN §3/§6/§7).
 
@@ -21,6 +21,10 @@ export interface BundleTypeAsset {
   // целиком из 5–15 референс-баннеров вариации (gpt-image-2 /edit) + приёмка
   // VLM + auto-healing; выдаёт ОДИН ассет — прозрачную версию без текста.
   composeMode?: "ai" | "layered" | "ai_reference";
+  // TASK multiformat-promo (A2-1): якорь стиля кампании среди ai_reference-
+  // ассетов — он генерируется ПЕРВЫМ, остальные наследуют его стиль. Не задан
+  // ни на одном ассете → якорь выбирается по правилу resolveStyleAnchorKey.
+  styleAnchor?: boolean;
   // Versioned geometry (TASK email-composition, Phase 1): key into LayoutSpec;
   // the composition engine resolves the latest active version at render time.
   layoutSpecKey?: string;
@@ -30,6 +34,68 @@ export interface BundleTypeAsset {
   // Golden composite @1x for the validator's structural SSIM check (Phase 4;
   // the golden assets themselves are produced in Phase 6).
   goldenUrl?: string;
+}
+
+// ------------------------------------------------------------------
+// Мультиформатное промо (TASK multiformat-promo, DI2-3/A2-1): порядок
+// генерации ai_reference-ассетов. Якорь кампании рендерится первым, остальные
+// форматы получают его композицию как стиль-эталон.
+// ------------------------------------------------------------------
+
+/** Ассеты типа бандла, собираемые режимом ai_reference (в порядке админа). */
+export function aiReferenceAssets(typeAssets: BundleTypeAsset[]): BundleTypeAsset[] {
+  return typeAssets.filter((a) => a.composeMode === "ai_reference");
+}
+
+/**
+ * Ключ якорного ассета (A2-1): явный `styleAnchor: true` → "email" → первый
+ * ai_reference-ассет. null — режим в типе не используется вовсе.
+ */
+export function resolveStyleAnchorKey(typeAssets: BundleTypeAsset[]): string | null {
+  const refs = aiReferenceAssets(typeAssets);
+  if (refs.length === 0) return null;
+  const explicit = refs.find((a) => a.styleAnchor === true);
+  if (explicit) return explicit.key;
+  const email = refs.find((a) => a.key === "email");
+  return (email ?? refs[0]!).key;
+}
+
+/** Ai_reference-ассеты, зависящие от якоря (все, кроме него самого). */
+export function dependentAiReferenceAssets(typeAssets: BundleTypeAsset[]): BundleTypeAsset[] {
+  const anchorKey = resolveStyleAnchorKey(typeAssets);
+  if (!anchorKey) return [];
+  return aiReferenceAssets(typeAssets).filter((a) => a.key !== anchorKey);
+}
+
+/**
+ * Форматы, для которых нужно грузить референсы: ai_reference-ассеты всех
+ * активных типов бандлов (вкладки RefsManager, Ф3.2). Дубликаты ключей
+ * схлопываются — геометрию берём из первого вхождения.
+ */
+export async function listAiReferenceFormats(): Promise<
+  Array<{ key: string; label: string; width: number; height: number; isAnchor: boolean }>
+> {
+  const types = await prisma.bundleType.findMany({
+    where: { isActive: true },
+    orderBy: { createdAt: "asc" },
+    select: { assets: true },
+  });
+  const formats = new Map<string, { key: string; label: string; width: number; height: number; isAnchor: boolean }>();
+  for (const type of types) {
+    const assets = (type.assets as unknown as BundleTypeAsset[]) ?? [];
+    const anchorKey = resolveStyleAnchorKey(assets);
+    for (const asset of aiReferenceAssets(assets)) {
+      if (formats.has(asset.key)) continue;
+      formats.set(asset.key, {
+        key: asset.key,
+        label: asset.label,
+        width: asset.width,
+        height: asset.height,
+        isAnchor: asset.key === anchorKey,
+      });
+    }
+  }
+  return [...formats.values()];
 }
 
 // ------------------------------------------------------------------
@@ -129,8 +195,11 @@ export type LaunchResult =
         | "queue_unavailable"
         | "preset_required"
         | "refs_missing";
-      /** refs_missing: базовые бренды с числом референсов < минимума (DI-R3). */
-      missingRefs?: Array<{ brandName: string; count: number; min: number }>;
+      /**
+       * refs_missing: пары «бренд × формат» с числом референсов < минимума
+       * (DI-R3; формат добавлен в TASK multiformat-promo, DI2-2).
+       */
+      missingRefs?: Array<{ brandName: string; assetKey: string; count: number; min: number }>;
     };
 
 export async function launchGeneration(bundleId: string): Promise<LaunchResult | null> {
@@ -148,16 +217,21 @@ export async function launchGeneration(bundleId: string): Promise<LaunchResult |
   const typeAssets = bundle.bundleType.assets as unknown as BundleTypeAsset[];
 
   // Гейт ai_reference (fail-fast ДО очереди, R-PLAN §1.3): вариация выбрана и
-  // у каждого выбранного БАЗОВОГО бренда достаточно референсов.
-  if (typeAssets.some((a) => a.composeMode === "ai_reference")) {
+  // у каждого выбранного БАЗОВОГО бренда достаточно референсов НА КАЖДЫЙ
+  // ai_reference-формат (DI2-2 — фолбэка «push берёт email-рефы» нет).
+  const aiRefAssets = aiReferenceAssets(typeAssets);
+  if (aiRefAssets.length > 0) {
     if (!bundle.presetId) return { ok: false, error: "preset_required" };
     const counts = await refCountsByBrand(bundle.presetId);
     const missing = baseNames
-      .map((name) => ({
-        brandName: name,
-        count: counts[name] ?? 0,
-        min: MIN_REFS_FOR_GENERATION,
-      }))
+      .flatMap((name) =>
+        aiRefAssets.map((asset) => ({
+          brandName: name,
+          assetKey: asset.key,
+          count: countFor(counts, name, asset.key),
+          min: MIN_REFS_FOR_GENERATION,
+        })),
+      )
       .filter((m) => m.count < MIN_REFS_FOR_GENERATION);
     if (missing.length > 0) return { ok: false, error: "refs_missing", missingRefs: missing };
   }
@@ -284,15 +358,47 @@ export async function regenerateAsset(
 ): Promise<{ ok: true } | { ok: false; error: "in_flight" | "queue_unavailable" } | null> {
   const asset = await prisma.bundleAsset.findFirst({
     where: { id: assetId, bundleId },
-    include: { variant: { select: { id: true, personImageUrl: true } } },
+    include: {
+      variant: {
+        select: {
+          id: true,
+          personImageUrl: true,
+          bundle: { select: { bundleType: { select: { assets: true } } } },
+        },
+      },
+    },
   });
   if (!asset) return null;
   if (asset.status === "GENERATING" || asset.status === "PENDING") return { ok: false, error: "in_flight" };
+
+  // Каскад DI2-9: Regenerate якорного ассета (email) перерисовывает и
+  // зависимые форматы — иначе push/pop-up останутся в стиле старой кампании.
+  // Зависимые ставятся в GENERATING здесь, а в очередь их отправит процессор
+  // якоря после его успеха (порядок из DI2-3).
+  const typeAssets = (asset.variant.bundle.bundleType.assets as unknown as BundleTypeAsset[]) ?? [];
+  const isAnchor = resolveStyleAnchorKey(typeAssets) === asset.assetKey;
+  const dependentKeys = isAnchor ? dependentAiReferenceAssets(typeAssets).map((a) => a.key) : [];
+  if (dependentKeys.length > 0) {
+    const busy = await prisma.bundleAsset.count({
+      where: {
+        variantId: asset.variant.id,
+        assetKey: { in: dependentKeys },
+        status: { in: ["PENDING", "GENERATING"] },
+      },
+    });
+    if (busy > 0) return { ok: false, error: "in_flight" };
+  }
 
   await prisma.bundleAsset.update({
     where: { id: assetId },
     data: { status: "GENERATING", approved: false, errorMessage: null },
   });
+  if (dependentKeys.length > 0) {
+    await prisma.bundleAsset.updateMany({
+      where: { variantId: asset.variant.id, assetKey: { in: dependentKeys } },
+      data: { status: "GENERATING", approved: false, errorMessage: null },
+    });
+  }
   await prisma.bundle.update({ where: { id: bundleId }, data: { status: "GENERATING" } });
 
   try {

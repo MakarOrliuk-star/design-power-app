@@ -1,7 +1,11 @@
 import { prisma } from "../lib/prisma.js";
 import { runPersonFal } from "../lib/fal.js";
 import { fitAndStoreAsset } from "../lib/assetFit.js";
-import { processAiReferenceAsset, parentOfDerivedKey } from "../services/aiReferencePipeline.js";
+import {
+  processAiReferenceAsset,
+  parentOfDerivedKey,
+  loadAnchorContext,
+} from "../services/aiReferencePipeline.js";
 import { getOrCreateNormalizedLayer, fetchBuffer } from "../services/layerCache.js";
 import { getActiveLayoutSpec, SPEC_KEY_BY_ASSET } from "../services/layoutSpec.js";
 import type { LayoutSpecRow } from "../services/layoutSpec.js";
@@ -27,7 +31,11 @@ import { getPrompt } from "../services/prompts.js";
 import { buildPersonPromptMemoized } from "./person.processor.js";
 import { getBundleQueue } from "./index.js";
 import type { Prisma } from "../../generated/prisma/client.js";
-import { recomputeBundleStatus } from "../services/bundle.service.js";
+import {
+  recomputeBundleStatus,
+  resolveStyleAnchorKey,
+  dependentAiReferenceAssets,
+} from "../services/bundle.service.js";
 import type { BundleTypeAsset } from "../services/bundle.service.js";
 
 /**
@@ -385,7 +393,7 @@ export async function processPrepareVariantJob(bundleId: string, variantId: stri
   if (allTypeAssets.length > 0 && allTypeAssets.every((a) => a.composeMode === "ai_reference")) {
     const pending = await prisma.bundleAsset.findMany({
       where: { variantId, status: { in: ["PENDING", "GENERATING"] } },
-      select: { id: true },
+      select: { id: true, assetKey: true },
     });
     if (pending.length === 0) {
       await recomputeBundleStatus(bundleId);
@@ -395,8 +403,16 @@ export async function processPrepareVariantJob(bundleId: string, variantId: stri
       where: { id: { in: pending.map((a) => a.id) } },
       data: { status: "GENERATING" },
     });
+    // TASK multiformat-promo (DI2-3): единый стиль кампании требует порядка —
+    // сначала якорь (email), и только по его успеху процессор якоря ставит
+    // push/pop-up (они получат его композицию стиль-эталоном). Если якорь уже
+    // готов (перезапуск только зависимых) — ставим их сразу, контекст якоря
+    // они прочитают из его метаданных.
+    const anchorKey = resolveStyleAnchorKey(allTypeAssets);
+    const anchorPending = pending.find((a) => a.assetKey === anchorKey);
+    const toQueue = anchorPending ? [anchorPending] : pending;
     await getBundleQueue().addBulk(
-      pending.map((a) => ({
+      toQueue.map((a) => ({
         name: "render-asset" as const,
         data: { bundleId, variantId, assetId: a.id },
       })),
@@ -864,6 +880,57 @@ async function renderLayeredWithEngine(opts: {
   };
 }
 
+/**
+ * Постановка зависимых форматов после якоря (TASK multiformat-promo, DI2-3).
+ *
+ * Берём только ассеты, ждущие прогон (PENDING/GENERATING): уже готовые строки
+ * каскад не трогает — их перегенерацию инициирует regenerateAsset, который
+ * сам переводит зависимые в GENERATING перед постановкой якоря (DI2-9).
+ * Якорь упал — зависимые не имеют смысла: единый стиль кампании недостижим.
+ */
+async function dispatchDependentAssets(opts: {
+  bundleId: string;
+  variantId: string;
+  dependentKeys: string[];
+  anchorOk: boolean;
+  anchorKey: string;
+}): Promise<void> {
+  const { bundleId, variantId, dependentKeys, anchorOk, anchorKey } = opts;
+  const rows = await prisma.bundleAsset.findMany({
+    where: {
+      variantId,
+      assetKey: { in: dependentKeys },
+      status: { in: ["PENDING", "GENERATING"] },
+    },
+    select: { id: true },
+  });
+  if (rows.length === 0) return;
+  const ids = rows.map((r) => r.id);
+
+  if (!anchorOk) {
+    await prisma.bundleAsset.updateMany({
+      where: { id: { in: ids } },
+      data: {
+        status: "FAILED",
+        errorMessage: `ai_reference: якорный ассет "${anchorKey}" не сгенерирован — перегенерируйте его`,
+      },
+    });
+    await recomputeBundleStatus(bundleId);
+    return;
+  }
+
+  await prisma.bundleAsset.updateMany({
+    where: { id: { in: ids } },
+    data: { status: "GENERATING", errorMessage: null },
+  });
+  await getBundleQueue().addBulk(
+    ids.map((assetId) => ({
+      name: "render-asset" as const,
+      data: { bundleId, variantId, assetId },
+    })),
+  );
+}
+
 // ------------------------------------------------------------------
 // Stage B — render-asset
 // ------------------------------------------------------------------
@@ -904,11 +971,27 @@ export async function processRenderAssetJob(
   // TASK ai-reference: композиция из референсов вариации — свой пайплайн,
   // person/item не нужны (проверка personImageUrl ниже к нему не относится).
   if (config?.composeMode === "ai_reference") {
+    const anchorKey = resolveStyleAnchorKey(typeAssets);
+    const isAnchor = anchorKey === asset.assetKey;
+
+    // Зависимый формат (DI2-3): стиль приходит из уже готового якоря. Якорь
+    // не готов (упал/удалён) — единый стиль недостижим, ассет не гоняем.
+    let anchor = null;
+    if (!isAnchor) {
+      anchor = anchorKey ? await loadAnchorContext(variantId, anchorKey) : null;
+      if (!anchor) {
+        await fail(
+          `ai_reference: якорный ассет "${anchorKey ?? "?"}" не сгенерирован — перегенерируйте его`,
+        );
+        return;
+      }
+    }
+
     await prisma.bundleAsset.update({
       where: { id: assetId },
       data: { status: "GENERATING", errorMessage: null },
     });
-    await processAiReferenceAsset({
+    const result = await processAiReferenceAsset({
       bundleId,
       variantId,
       assetId,
@@ -916,7 +999,25 @@ export async function processRenderAssetJob(
       brandName: variant.brandName,
       targetW,
       targetH,
+      isAnchor,
+      formatLabel: config.label,
+      anchor,
     });
+
+    // Якорь готов → поехали зависимые форматы; якорь упал → они не имеют
+    // смысла (единый стиль кампании невозможен), помечаем причиной.
+    if (isAnchor) {
+      const dependents = dependentAiReferenceAssets(typeAssets).map((a) => a.key);
+      if (dependents.length > 0) {
+        await dispatchDependentAssets({
+          bundleId,
+          variantId,
+          dependentKeys: dependents,
+          anchorOk: result.ok,
+          anchorKey: asset.assetKey,
+        });
+      }
+    }
     return;
   }
 
@@ -935,11 +1036,18 @@ export async function processRenderAssetJob(
       await fail(`родительский ассет "${parentKey}" не найден — перезапустите генерацию бандла`);
       return;
     }
+    const parentAnchorKey = resolveStyleAnchorKey(typeAssets);
+    const parentIsAnchor = parentAnchorKey === parentKey;
+    const parentAnchor = parentIsAnchor
+      ? null
+      : parentAnchorKey
+        ? await loadAnchorContext(variantId, parentAnchorKey)
+        : null;
     await prisma.bundleAsset.update({
       where: { id: parentAsset.id },
       data: { status: "GENERATING", errorMessage: null },
     });
-    await processAiReferenceAsset({
+    const parentResult = await processAiReferenceAsset({
       bundleId,
       variantId,
       assetId: parentAsset.id,
@@ -947,7 +1055,22 @@ export async function processRenderAssetJob(
       brandName: variant.brandName,
       targetW: parentConfig.width,
       targetH: parentConfig.height,
+      isAnchor: parentIsAnchor,
+      formatLabel: parentConfig.label,
+      anchor: parentAnchor,
     });
+    if (parentIsAnchor) {
+      const dependents = dependentAiReferenceAssets(typeAssets).map((a) => a.key);
+      if (dependents.length > 0) {
+        await dispatchDependentAssets({
+          bundleId,
+          variantId,
+          dependentKeys: dependents,
+          anchorOk: parentResult.ok,
+          anchorKey: parentKey,
+        });
+      }
+    }
     return;
   }
 

@@ -24,6 +24,7 @@ const db = vi.hoisted(() => ({
     delete: vi.fn(),
   },
   brand: { findMany: vi.fn() },
+  bundleType: { findMany: vi.fn() },
   $transaction: vi.fn(),
 }));
 const cloud = vi.hoisted(() => ({
@@ -54,6 +55,17 @@ beforeEach(() => {
   }
   cloud.uploadBuffer.mockReset();
   cloud.deleteAsset.mockReset();
+  // Форматы референсов (TASK multiformat-promo) берутся из активных типов
+  // бандлов: ai_reference включён на email (якорь) и push.
+  db.bundleType.findMany.mockResolvedValue([
+    {
+      assets: [
+        { key: "email", label: "Email", width: 1200, height: 600, composeMode: "ai_reference" },
+        { key: "push", label: "Push", width: 1024, height: 512, composeMode: "ai_reference" },
+        { key: "popup", label: "Pop-up", width: 800, height: 600, composeMode: "layered" },
+      ],
+    },
+  ]);
 });
 
 function refRow(i: number) {
@@ -61,6 +73,7 @@ function refRow(i: number) {
     id: `r${i}`,
     presetId: "p1",
     brandName: "Betnella",
+    assetKey: "email",
     imageUrl: `https://cdn/r${i}.png`,
     publicId: `pid${i}`,
     width: 1200,
@@ -103,17 +116,45 @@ describe("GET /bundle-refs", () => {
     expect(res.status).toBe(400);
   });
 
-  it("отдаёт референсы пары + счётчики + лимиты", async () => {
+  it("отдаёт референсы тройки + вложенные счётчики + лимиты", async () => {
     db.variationReference.findMany.mockResolvedValue([refRow(0), refRow(1)]);
     db.variationReference.groupBy.mockResolvedValue([
-      { brandName: "Betnella", _count: { _all: 2 } },
+      { brandName: "Betnella", assetKey: "email", _count: { _all: 2 } },
+      { brandName: "Betnella", assetKey: "push", _count: { _all: 6 } },
     ]);
     const res = await request(makeApp())
       .get("/api/crm-admin/bundle-refs")
-      .query({ presetId: "p1", brandName: "Betnella" });
+      .query({ presetId: "p1", brandName: "Betnella", assetKey: "email" });
     expect(res.status).toBe(200);
     expect(res.body.refs).toHaveLength(2);
-    expect(res.body.counts).toEqual({ Betnella: 2 });
+    // Выборка идёт по формату (DI2-1): пулы email/push/pop-up раздельные.
+    expect(db.variationReference.findMany).toHaveBeenCalledWith(
+      expect.objectContaining({ where: { presetId: "p1", brandName: "Betnella", assetKey: "email" } }),
+    );
+    expect(res.body.counts).toEqual({ Betnella: { email: 2, push: 6 } });
+    expect(res.body.limits).toEqual({ min: 5, max: 15 });
+  });
+
+  it("без assetKey работает как email — совместимость со старыми клиентами", async () => {
+    db.variationReference.findMany.mockResolvedValue([refRow(0)]);
+    db.variationReference.groupBy.mockResolvedValue([]);
+    await request(makeApp())
+      .get("/api/crm-admin/bundle-refs")
+      .query({ presetId: "p1", brandName: "Betnella" });
+    expect(db.variationReference.findMany).toHaveBeenCalledWith(
+      expect.objectContaining({ where: { presetId: "p1", brandName: "Betnella", assetKey: "email" } }),
+    );
+  });
+});
+
+describe("GET /ref-formats (TASK multiformat-promo, DI2-1)", () => {
+  it("отдаёт только ai_reference-форматы активных типов и помечает якорь", async () => {
+    const res = await request(makeApp()).get("/api/crm-admin/ref-formats");
+    expect(res.status).toBe(200);
+    expect(res.body.formats).toEqual([
+      { key: "email", label: "Email", width: 1200, height: 600, isAnchor: true },
+      { key: "push", label: "Push", width: 1024, height: 512, isAnchor: false },
+    ]);
     expect(res.body.limits).toEqual({ min: 5, max: 15 });
   });
 });
@@ -128,7 +169,7 @@ describe("POST /bundle-refs/reorder (порядок = приоритет, DI-R5)
 
     const res = await request(makeApp())
       .post("/api/crm-admin/bundle-refs/reorder")
-      .send({ presetId: "p1", brandName: "Betnella", ids: ["r1", "r0"] });
+      .send({ presetId: "p1", brandName: "Betnella", assetKey: "email", ids: ["r1", "r0"] });
     expect(res.status).toBe(200);
     expect(db.$transaction).toHaveBeenCalledOnce();
   });
@@ -137,7 +178,7 @@ describe("POST /bundle-refs/reorder (порядок = приоритет, DI-R5)
     db.variationReference.findMany.mockResolvedValue([refRow(0), refRow(1)]);
     const res = await request(makeApp())
       .post("/api/crm-admin/bundle-refs/reorder")
-      .send({ presetId: "p1", brandName: "Betnella", ids: ["r0"] });
+      .send({ presetId: "p1", brandName: "Betnella", assetKey: "email", ids: ["r0"] });
     expect(res.status).toBe(400);
     expect(res.body.error).toBe("ids_mismatch");
   });

@@ -46,6 +46,12 @@ const validator = vi.hoisted(() => ({
 // Задание 3, Фаза 6: scene-пайплайн живёт своим модулем и тестируется своим
 // файлом; здесь проверяется только МАРШРУТИЗАЦИЯ по флагу спеки.
 const scenePipeline = vi.hoisted(() => ({ renderSceneAsset: vi.fn() }));
+// TASK multiformat-promo: сам ai_reference-пайплайн покрыт своим файлом —
+// здесь проверяется ПОРЯДОК (якорь → зависимые) и передача якорного контекста.
+const aiRef = vi.hoisted(() => ({
+  processAiReferenceAsset: vi.fn(),
+  loadAnchorContext: vi.fn(),
+}));
 
 vi.mock("../src/lib/prisma.js", () => ({ prisma: db }));
 vi.mock("../src/lib/fal.js", () => fal);
@@ -59,8 +65,21 @@ vi.mock("../src/queues/index.js", () => ({ getBundleQueue: () => queue }));
 vi.mock("../src/queues/person.processor.js", () => ({
   buildPersonPromptMemoized: vi.fn(async (_b: string, brand: string, text: string) => `PP(${brand}): ${text}`),
 }));
-vi.mock("../src/services/bundle.service.js", () => ({ recomputeBundleStatus: recompute }));
+// Хелперы порядка (resolveStyleAnchorKey / dependentAiReferenceAssets) —
+// настоящие: правило выбора якоря должно совпадать с боевым.
+vi.mock("../src/services/bundle.service.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../src/services/bundle.service.js")>();
+  return { ...actual, recomputeBundleStatus: recompute };
+});
 vi.mock("../src/services/scenePipeline.js", () => scenePipeline);
+vi.mock("../src/services/aiReferencePipeline.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../src/services/aiReferencePipeline.js")>();
+  return {
+    ...actual,
+    processAiReferenceAsset: aiRef.processAiReferenceAsset,
+    loadAnchorContext: aiRef.loadAnchorContext,
+  };
+});
 
 import { EMAIL_HERO_V1, EMAIL_HERO_V2 } from "../src/services/layoutSpec.js";
 import {
@@ -97,6 +116,9 @@ beforeEach(() => {
     { png: Buffer.from("piece1"), width: 120, height: 120, area: 12000 },
   ]);
   cloud.uploadBuffer.mockReset();
+  aiRef.processAiReferenceAsset.mockReset();
+  aiRef.loadAnchorContext.mockReset();
+  aiRef.processAiReferenceAsset.mockResolvedValue({ ok: true, baseUrl: "https://cdn/base.png", styleText: "Palette: neon." });
   validator.validateComposedAsset.mockReset();
   validator.personLayerSanity.mockReset();
   // Defaults: sane layer, passing validation (tests override per case).
@@ -1199,5 +1221,153 @@ describe("processPrepareVariantJob — person layer sanity retry (Phase 4)", () 
       },
     });
     expect(queue.addBulk).not.toHaveBeenCalled();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Мультиформатное промо (TASK multiformat-promo, DI2-3): единый стиль требует
+// порядка — сначала якорь (email), затем push/pop-up на его композиции.
+// ---------------------------------------------------------------------------
+
+const AI_REF_ASSETS = [
+  { key: "email", label: "Email", width: 1200, height: 600, composeMode: "ai_reference" },
+  { key: "popup", label: "Pop-up", width: 800, height: 600, composeMode: "ai_reference" },
+  { key: "push", label: "Push", width: 1024, height: 512, composeMode: "ai_reference" },
+];
+
+function aiRefAssetRow(assetKey: string, id: string) {
+  const config = AI_REF_ASSETS.find((a) => a.key === assetKey)!;
+  return {
+    id,
+    bundleId: "bun1",
+    variantId: "v1",
+    assetKey,
+    width: config.width,
+    height: config.height,
+    variant: {
+      id: "v1",
+      brandName: "Betnella(Men)",
+      personImageUrl: null,
+      itemImageUrl: null,
+      bundle: {
+        id: "bun1",
+        neuralPrompt: "VIP weekend",
+        bundleType: { assets: AI_REF_ASSETS },
+      },
+    },
+  };
+}
+
+describe("порядок ai_reference: якорь → зависимые (DI2-3)", () => {
+  it("prepare-variant ставит в очередь ТОЛЬКО якорь, остальные ждут его", async () => {
+    db.bundleBrandVariant.findUnique.mockResolvedValue({
+      id: "v1",
+      bundleId: "bun1",
+      brandName: "Betnella(Men)",
+      bundle: { id: "bun1", neuralPrompt: "VIP weekend", bundleType: { assets: AI_REF_ASSETS } },
+    });
+    db.bundleAsset.findMany.mockResolvedValue([
+      { id: "a1", assetKey: "email" },
+      { id: "a2", assetKey: "popup" },
+      { id: "a3", assetKey: "push" },
+    ]);
+    queue.addBulk.mockResolvedValue([]);
+
+    await processPrepareVariantJob("bun1", "v1");
+
+    // Person/item для этого режима не генерируются вовсе.
+    expect(fal.runPersonFal).not.toHaveBeenCalled();
+    const jobs = queue.addBulk.mock.calls[0]![0] as Array<{ data: { assetId: string } }>;
+    expect(jobs).toHaveLength(1);
+    expect(jobs[0]!.data.assetId).toBe("a1");
+  });
+
+  it("якорь уже готов (перезапуск зависимых) → они ставятся сразу", async () => {
+    db.bundleBrandVariant.findUnique.mockResolvedValue({
+      id: "v1",
+      bundleId: "bun1",
+      brandName: "Betnella(Men)",
+      bundle: { id: "bun1", neuralPrompt: "VIP weekend", bundleType: { assets: AI_REF_ASSETS } },
+    });
+    db.bundleAsset.findMany.mockResolvedValue([
+      { id: "a2", assetKey: "popup" },
+      { id: "a3", assetKey: "push" },
+    ]);
+    queue.addBulk.mockResolvedValue([]);
+
+    await processPrepareVariantJob("bun1", "v1");
+    const jobs = queue.addBulk.mock.calls[0]![0] as Array<{ data: { assetId: string } }>;
+    expect(jobs.map((j) => j.data.assetId)).toEqual(["a2", "a3"]);
+  });
+
+  it("успех якоря → зависимые переводятся в GENERATING и уходят в очередь", async () => {
+    db.bundleAsset.findUnique.mockResolvedValue(aiRefAssetRow("email", "a1"));
+    db.bundleAsset.findMany.mockResolvedValue([{ id: "a2" }, { id: "a3" }]);
+    queue.addBulk.mockResolvedValue([]);
+
+    await processRenderAssetJob("bun1", "v1", "a1");
+
+    const [args] = aiRef.processAiReferenceAsset.mock.calls[0]!;
+    expect(args.isAnchor).toBe(true);
+    expect(args.formatLabel).toBe("Email");
+    expect(db.bundleAsset.updateMany).toHaveBeenCalledWith({
+      where: { id: { in: ["a2", "a3"] } },
+      data: { status: "GENERATING", errorMessage: null },
+    });
+    const jobs = queue.addBulk.mock.calls[0]![0] as Array<{ data: { assetId: string } }>;
+    expect(jobs.map((j) => j.data.assetId)).toEqual(["a2", "a3"]);
+  });
+
+  it("провал якоря → зависимые FAILED с понятной причиной, очередь не трогаем", async () => {
+    aiRef.processAiReferenceAsset.mockResolvedValue({ ok: false });
+    db.bundleAsset.findUnique.mockResolvedValue(aiRefAssetRow("email", "a1"));
+    db.bundleAsset.findMany.mockResolvedValue([{ id: "a2" }, { id: "a3" }]);
+
+    await processRenderAssetJob("bun1", "v1", "a1");
+
+    expect(db.bundleAsset.updateMany).toHaveBeenCalledWith({
+      where: { id: { in: ["a2", "a3"] } },
+      data: {
+        status: "FAILED",
+        errorMessage: 'ai_reference: якорный ассет "email" не сгенерирован — перегенерируйте его',
+      },
+    });
+    expect(queue.addBulk).not.toHaveBeenCalled();
+  });
+
+  it("зависимый формат получает контекст якоря и не тянет за собой каскад", async () => {
+    aiRef.loadAnchorContext.mockResolvedValue({
+      imageUrl: "https://cdn/email-base.png",
+      styleText: "Palette: neon purple.",
+    });
+    db.bundleAsset.findUnique.mockResolvedValue(aiRefAssetRow("push", "a3"));
+
+    await processRenderAssetJob("bun1", "v1", "a3");
+
+    expect(aiRef.loadAnchorContext).toHaveBeenCalledWith("v1", "email");
+    const [args] = aiRef.processAiReferenceAsset.mock.calls[0]!;
+    expect(args.isAnchor).toBe(false);
+    expect(args.formatLabel).toBe("Push");
+    expect(args.anchor).toEqual({
+      imageUrl: "https://cdn/email-base.png",
+      styleText: "Palette: neon purple.",
+    });
+    expect(queue.addBulk).not.toHaveBeenCalled();
+  });
+
+  it("якоря нет → зависимый формат FAILED, деньги на генерацию не тратятся", async () => {
+    aiRef.loadAnchorContext.mockResolvedValue(null);
+    db.bundleAsset.findUnique.mockResolvedValue(aiRefAssetRow("popup", "a2"));
+
+    await processRenderAssetJob("bun1", "v1", "a2");
+
+    expect(aiRef.processAiReferenceAsset).not.toHaveBeenCalled();
+    expect(db.bundleAsset.update).toHaveBeenCalledWith({
+      where: { id: "a2" },
+      data: {
+        status: "FAILED",
+        errorMessage: 'ai_reference: якорный ассет "email" не сгенерирован — перегенерируйте его',
+      },
+    });
   });
 });

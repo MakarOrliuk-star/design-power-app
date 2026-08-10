@@ -1,4 +1,6 @@
 import { defineStore } from "pinia";
+import { missingRefFormatsFor } from "~/utils/refGating";
+import type { MissingFormat, RefCountsMap, RefFormatMeta } from "~/utils/refGating";
 
 // Image Bundles store (TASK crm-bundle Phase 3): project list + wizard meta +
 // create/launch. Talks to /api/bundles (guarded by requireCrmSuper on the BE).
@@ -23,6 +25,8 @@ export interface BundleTypeAssetMeta {
   /** "ai" | "layered" | "ai_reference" (TASK ai-reference) — включает в
    *  мастере обязательный выбор вариации и бейджи референсов у брендов. */
   composeMode?: string;
+  /** Явный якорь стиля кампании (TASK multiformat-promo, A2-1). */
+  styleAnchor?: boolean;
 }
 
 export interface BundleTypeMeta {
@@ -50,7 +54,8 @@ export interface BrandGroup {
 export interface BundleAssetMeta {
   specKey: string;
   specVersion: number;
-  safeZonePct: { x: number; y: number; w: number; h: number };
+  /** null — у формата нет safe-зоны (push/pop-up без текста, DI2-4). */
+  safeZonePct: { x: number; y: number; w: number; h: number } | null;
   recommendedTextColor: string | null;
   luminance: number | null;
   textContrast: { white: number; dark: number } | null;
@@ -64,6 +69,9 @@ export interface BundleAssetMeta {
     attempts: number;
     reasons: string[];
     healing: { attempts: number; used: boolean } | null;
+    /** Оценка победителя и порог приёмки (DI2-5). */
+    score: number | null;
+    threshold: number | null;
   } | null;
 }
 
@@ -263,7 +271,10 @@ export const useBundlesStore = defineStore("bundles", () => {
   }
 
   // ---- Референсы вариации (TASK ai-reference): бейджи «7/15» в мастере ----
-  const refCounts = ref<Record<string, number>>({});
+  // TASK multiformat-promo (DI2-2): счётчики вложены по формату, и бренд
+  // считается готовым, только если КАЖДЫЙ ai_reference-формат набрал минимум.
+  const refCounts = ref<RefCountsMap>({});
+  const refFormats = ref<RefFormatMeta[]>([]);
   const refCountsMin = ref(5);
   const refCountsPresetId = ref<string | null>(null);
 
@@ -274,18 +285,25 @@ export const useBundlesStore = defineStore("bundles", () => {
       return;
     }
     try {
-      const res = await api<{ counts: Record<string, number>; min: number }>(
-        "/api/bundles/ref-counts",
-        { query: { presetId } },
-      );
+      const res = await api<{
+        counts: Record<string, Record<string, number>>;
+        formats: Array<{ key: string; label: string; isAnchor: boolean }>;
+        min: number;
+      }>("/api/bundles/ref-counts", { query: { presetId } });
       // Пользователь мог успеть переключить вариацию, пока летел запрос.
       if (refCountsPresetId.value === presetId) {
         refCounts.value = res.counts;
+        refFormats.value = res.formats ?? [];
         refCountsMin.value = res.min;
       }
     } catch {
       if (refCountsPresetId.value === presetId) refCounts.value = {};
     }
+  }
+
+  /** Форматы бренда, недобравшие минимум — пусто = бренд готов к генерации. */
+  function missingRefFormats(brandKey: string): MissingFormat[] {
+    return missingRefFormatsFor(refCounts.value, refFormats.value, refCountsMin.value, brandKey);
   }
 
   // ---- Selected bundle (Result screen, Phase 5) ----
@@ -471,8 +489,10 @@ export const useBundlesStore = defineStore("bundles", () => {
     launchError,
     createAndGenerate,
     refCounts,
+    refFormats,
     refCountsMin,
     fetchRefCounts,
+    missingRefFormats,
     selected,
     selectedLoading,
     fetchDetails,

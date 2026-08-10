@@ -2,8 +2,12 @@
 // Управление вариациями и их референсами (TASK ai-reference, DI-R3/R12).
 // Доступно CRM_SUPER / ADMIN / MANAGER — тот же гейт, что весь сервис бандлов
 // (бэкенд: /api/crm-admin за requireCrmSuper). Слева — вариации (промпт-
-// пресеты), справа — референсы выбранной пары «вариация × бренд»: 5–15
-// готовых email-баннеров, из которых пайплайн собирает новую композицию.
+// пресеты), справа — референсы выбранной тройки «вариация × бренд × формат»:
+// 5–15 готовых баннеров, из которых пайплайн собирает новую композицию.
+//
+// TASK multiformat-promo (DI2-1): у email, push и pop-up разная стилистика,
+// поэтому после выбора бренда появляются ВКЛАДКИ ФОРМАТОВ — по одной на
+// каждый ассет, у которого в /admin включён режим ai_reference.
 import { ref, computed, onMounted, watch } from "vue";
 
 const api = useApi();
@@ -19,11 +23,22 @@ interface Preset {
 interface RefRow {
   id: string;
   brandName: string;
+  assetKey: string;
   imageUrl: string;
   width: number;
   height: number;
   sortOrder: number;
 }
+interface RefFormat {
+  key: string;
+  label: string;
+  width: number;
+  height: number;
+  /** Якорь кампании (email): его композиция задаёт стиль остальным (DI2-3). */
+  isAnchor: boolean;
+}
+/** counts: бренд → формат → сколько загружено. */
+type RefCounts = Record<string, Record<string, number>>;
 
 const MIN_REFS = 5;
 const MAX_REFS = 15;
@@ -98,27 +113,58 @@ async function deletePreset(p: Preset) {
   }
 }
 
-// ---- Референсы пары «вариация × бренд» ----
+// ---- Референсы тройки «вариация × бренд × формат» ----
 const selectedBrand = ref<string | null>(null);
+const formats = ref<RefFormat[]>([]);
+const selectedFormat = ref<string | null>(null);
 const refs = ref<RefRow[]>([]);
-const counts = ref<Record<string, number>>({});
+const counts = ref<RefCounts>({});
 const refsLoading = ref(false);
 const uploadBusy = ref(false);
 const uploadReport = ref<string[]>([]);
 
-const pairReady = computed(() => Boolean(selectedPresetId.value && selectedBrand.value));
+const tripleReady = computed(() =>
+  Boolean(selectedPresetId.value && selectedBrand.value && selectedFormat.value),
+);
+
+/** Сколько референсов у бренда в конкретном формате. */
+function countOf(brand: string | null, format: string | null): number {
+  if (!brand || !format) return 0;
+  return counts.value[brand]?.[format] ?? 0;
+}
+
+/** Сумма по всем форматам — подпись бренда в селекторе. */
+function brandTotal(brand: string): number {
+  return Object.values(counts.value[brand] ?? {}).reduce((s, n) => s + n, 0);
+}
+
+async function fetchFormats() {
+  try {
+    const res = await api<{ formats: RefFormat[] }>("/api/crm-admin/ref-formats");
+    formats.value = res.formats;
+    // Дефолт — якорь кампании (email): с него начинается любая раскладка.
+    if (!selectedFormat.value || !res.formats.some((f) => f.key === selectedFormat.value)) {
+      selectedFormat.value = (res.formats.find((f) => f.isAnchor) ?? res.formats[0])?.key ?? null;
+    }
+  } catch {
+    error.value = "Не удалось загрузить список форматов";
+  }
+}
 
 async function fetchRefs() {
-  if (!pairReady.value) {
+  if (!tripleReady.value) {
     refs.value = [];
     return;
   }
   refsLoading.value = true;
   try {
-    const res = await api<{ refs: RefRow[]; counts: Record<string, number> }>(
-      "/api/crm-admin/bundle-refs",
-      { query: { presetId: selectedPresetId.value, brandName: selectedBrand.value } },
-    );
+    const res = await api<{ refs: RefRow[]; counts: RefCounts }>("/api/crm-admin/bundle-refs", {
+      query: {
+        presetId: selectedPresetId.value,
+        brandName: selectedBrand.value,
+        assetKey: selectedFormat.value,
+      },
+    });
     refs.value = res.refs;
     counts.value = res.counts;
   } catch {
@@ -128,7 +174,7 @@ async function fetchRefs() {
   }
 }
 
-watch([selectedPresetId, selectedBrand], () => {
+watch([selectedPresetId, selectedBrand, selectedFormat], () => {
   uploadReport.value = [];
   void fetchRefs();
 });
@@ -137,7 +183,7 @@ async function onFilesPicked(e: Event) {
   const input = e.target as HTMLInputElement;
   const files = [...(input.files ?? [])];
   input.value = "";
-  if (!files.length || !pairReady.value) return;
+  if (!files.length || !tripleReady.value) return;
   uploadBusy.value = true;
   uploadReport.value = [];
   error.value = "";
@@ -145,6 +191,7 @@ async function onFilesPicked(e: Event) {
     const form = new FormData();
     form.append("presetId", selectedPresetId.value!);
     form.append("brandName", selectedBrand.value!);
+    form.append("assetKey", selectedFormat.value!);
     for (const f of files) form.append("files", f);
     const res = await api<{ results: Array<{ name: string; ok: boolean; reason?: string }> }>(
       "/api/crm-admin/bundle-refs",
@@ -185,6 +232,7 @@ async function moveRef(index: number, delta: -1 | 1) {
       body: {
         presetId: selectedPresetId.value,
         brandName: selectedBrand.value,
+        assetKey: selectedFormat.value,
         ids: next.map((r) => r.id),
       },
     });
@@ -200,8 +248,17 @@ const countState = computed(() =>
   refs.value.length >= MIN_REFS ? "ok" : refs.value.length > 0 ? "warn" : "empty",
 );
 
+/** Пропорции превью текущего формата — миниатюры не врут о кадре. */
+const thumbRatio = computed(() => {
+  const f = formats.value.find((x) => x.key === selectedFormat.value);
+  return f ? `${f.width} / ${f.height}` : "2 / 1";
+});
+
+const currentFormat = computed(() => formats.value.find((f) => f.key === selectedFormat.value));
+
 onMounted(() => {
   void fetchPresets();
+  void fetchFormats();
   if (!store.metaReady) void store.fetchMeta();
 });
 </script>
@@ -211,7 +268,7 @@ onMounted(() => {
     <header class="refs__head">
       <h2 class="refs__title">Вариации и референсы</h2>
       <p class="refs__hint">
-        Для генерации нужно 5–15 готовых email-баннеров на пару «вариация × бренд».
+        Для генерации нужно 5–15 готовых баннеров на каждый формат пары «вариация × бренд».
         Первые {{ GEN_REFS }} по порядку уходят в модель — порядок можно менять стрелками.
       </p>
     </header>
@@ -263,11 +320,11 @@ onMounted(() => {
           <select v-model="selectedBrand" class="brandsel">
             <option :value="null" disabled>Выберите бренд</option>
             <option v-for="b in store.brands" :key="b.key" :value="b.key">
-              {{ b.displayName }}{{ counts[b.key] ? ` — ${counts[b.key]}` : "" }}
+              {{ b.displayName }}{{ brandTotal(b.key) ? ` — ${brandTotal(b.key)}` : "" }}
             </option>
           </select>
-          <span v-if="pairReady" class="count" :class="`count--${countState}`">{{ countLabel }}</span>
-          <label v-if="pairReady" class="btn btn--sm btn--primary upload" :class="{ 'upload--busy': uploadBusy }">
+          <span v-if="tripleReady" class="count" :class="`count--${countState}`">{{ countLabel }}</span>
+          <label v-if="tripleReady" class="btn btn--sm btn--primary upload" :class="{ 'upload--busy': uploadBusy }">
             <input type="file" accept="image/png,image/jpeg,image/webp" multiple :disabled="uploadBusy || refs.length >= MAX_REFS" @change="onFilesPicked" />
             {{ uploadBusy ? "Загрузка…" : "⬆ Загрузить" }}
           </label>
@@ -275,9 +332,34 @@ onMounted(() => {
 
         <p v-if="!selectedPresetId" class="panel__note">Выберите вариацию слева.</p>
         <p v-else-if="!selectedBrand" class="panel__note">Выберите бренд, чтобы увидеть его референсы.</p>
+        <p v-else-if="!formats.length" class="panel__warn">
+          Ни для одного ассета не включён режим «AI по референсам» — включите его в /admin,
+          чтобы загружать референсы.
+        </p>
         <template v-else>
+          <!-- Вкладки форматов (DI2-1): у email, push и pop-up свои пулы. -->
+          <nav class="tabs">
+            <button
+              v-for="f in formats"
+              :key="f.key"
+              class="tabs__item"
+              :class="{
+                'tabs__item--on': selectedFormat === f.key,
+                'tabs__item--low': countOf(selectedBrand, f.key) < MIN_REFS,
+              }"
+              type="button"
+              :title="f.isAnchor ? 'Якорь кампании: задаёт стиль остальным форматам' : `${f.width}×${f.height}`"
+              @click="selectedFormat = f.key"
+            >
+              {{ f.label }}<span v-if="f.isAnchor" class="tabs__anchor" title="Якорь кампании">★</span>
+              <b>{{ countOf(selectedBrand, f.key) }}</b>
+            </button>
+          </nav>
+
           <p v-if="refs.length < MIN_REFS" class="panel__warn">
-            Для генерации нужно минимум {{ MIN_REFS }} референсов — сейчас {{ refs.length }}.
+            Для генерации нужно минимум {{ MIN_REFS }} референсов формата
+            «{{ currentFormat?.label ?? selectedFormat }}» — сейчас {{ refs.length }}.
+            Бренд без полного набора по всем форматам в мастер не попадёт.
           </p>
           <ul v-if="uploadReport.length" class="panel__report">
             <li v-for="(r, i) in uploadReport" :key="i">✗ {{ r }}</li>
@@ -285,7 +367,7 @@ onMounted(() => {
           <p v-if="refsLoading" class="panel__note">Loading…</p>
           <div v-else class="thumbs">
             <figure v-for="(r, i) in refs" :key="r.id" class="thumb" :class="{ 'thumb--cut': i >= GEN_REFS }">
-              <img :src="r.imageUrl" :alt="`ref ${i + 1}`" loading="lazy" />
+              <img :src="r.imageUrl" :alt="`ref ${i + 1}`" loading="lazy" :style="{ aspectRatio: thumbRatio }" />
               <figcaption class="thumb__bar">
                 <span class="thumb__num" :title="i >= GEN_REFS ? `Не попадает в генерацию (лимит ${GEN_REFS})` : 'Уходит в генерацию'">#{{ i + 1 }}</span>
                 <span class="thumb__tools">
@@ -296,7 +378,9 @@ onMounted(() => {
               </figcaption>
             </figure>
             <p v-if="!refs.length" class="panel__note">
-              Референсов нет. Загрузите 5–15 готовых email-баннеров этого бренда (PNG/JPEG/WebP до 10 МБ).
+              Референсов нет. Загрузите 5–15 готовых баннеров формата
+              «{{ currentFormat?.label ?? selectedFormat }}» для этого бренда
+              (PNG/JPEG/WebP до 10 МБ).
             </p>
           </div>
         </template>
@@ -563,6 +647,47 @@ onMounted(() => {
   opacity: 0.6;
 }
 
+.tabs {
+  display: flex;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+.tabs__item {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  border: 1px solid var(--color-border);
+  background: none;
+  color: var(--color-grey);
+  border-radius: var(--radius-pill);
+  padding: 5px 12px;
+  font-size: 11.5px;
+  font-weight: 600;
+  cursor: pointer;
+}
+.tabs__item b {
+  font-size: 10.5px;
+  border-radius: var(--radius-pill);
+  background: var(--color-segment);
+  padding: 1px 7px;
+}
+.tabs__item--on {
+  border-color: var(--color-accent);
+  color: var(--color-text);
+  box-shadow: 0 0 0 1px var(--color-accent);
+}
+.tabs__item--low b {
+  color: #b45309;
+  background: #fef3c7;
+}
+:global(.dark) .tabs__item--low b {
+  background: rgba(180, 83, 9, 0.16);
+}
+.tabs__anchor {
+  font-size: 10px;
+  color: var(--color-accent);
+}
+
 .thumbs {
   display: grid;
   grid-template-columns: repeat(auto-fill, minmax(170px, 1fr));
@@ -581,6 +706,7 @@ onMounted(() => {
 }
 .thumb img {
   width: 100%;
+  /* Пропорции задаёт выбранный формат (inline style) — 2:1 как запасной. */
   aspect-ratio: 2 / 1;
   object-fit: cover;
   display: block;

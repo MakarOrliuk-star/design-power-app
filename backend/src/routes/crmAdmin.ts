@@ -7,13 +7,13 @@ import sharp from "sharp";
 import { z } from "zod";
 import { prisma } from "../lib/prisma.js";
 import { uploadBuffer, deleteAsset, withRetry } from "../lib/cloudinary.js";
-import { listBundleBrands } from "../services/bundle.service.js";
+import { listBundleBrands, listAiReferenceFormats } from "../services/bundle.service.js";
 import {
   MAX_REFS_PER_PAIR,
   MIN_REFS_FOR_GENERATION,
-  REFS_FOLDER,
-  brandSlug,
+  DEFAULT_REF_ASSET_KEY,
   listRefs,
+  refsFolder,
   refCountsByBrand,
 } from "../services/variationRefs.js";
 
@@ -26,10 +26,15 @@ import {
  *
  * Роуты:
  *   GET/POST/PATCH/DELETE /prompt-presets      — зеркало admin.ts (D8)
- *   GET    /bundle-refs?presetId=&brandName=   — референсы пары + счётчики
- *   POST   /bundle-refs (multipart)            — загрузка 1..15 баннеров
+ *   GET    /ref-formats                        — форматы с ai_reference (DI2-1)
+ *   GET    /bundle-refs?presetId=&brandName=&assetKey= — референсы тройки + счётчики
+ *   POST   /bundle-refs (multipart)            — загрузка 1..15 баннеров формата
  *   POST   /bundle-refs/reorder                — порядок = приоритет (DI-R5)
  *   DELETE /bundle-refs/:id                    — строка БД + best-effort Cloudinary
+ *
+ * TASK multiformat-promo (DI2-1/2): у email, push и pop-up разная стилистика,
+ * поэтому референсы живут в разрезе ФОРМАТА (`assetKey`), лимиты 5..15
+ * считаются по тройке «вариация × бренд × формат».
  */
 
 export const crmAdminRouter = Router();
@@ -120,7 +125,16 @@ export const MAX_REF_BYTES = 10 * 1024 * 1024;
 const refsQuerySchema = z.object({
   presetId: z.string().min(1).max(64),
   brandName: z.string().min(1).max(120),
+  // Формат (DI2-1). Отсутствует → "email": совместимость со старыми клиентами
+  // и с @default("email") в схеме.
+  assetKey: z.string().min(1).max(40).default(DEFAULT_REF_ASSET_KEY),
 });
+
+/** Формат должен быть включён в ai_reference хотя бы в одном активном типе. */
+async function isKnownRefFormat(assetKey: string): Promise<boolean> {
+  const formats = await listAiReferenceFormats();
+  return formats.some((f) => f.key === assetKey);
+}
 
 export interface RefUploadResult {
   name: string;
@@ -136,19 +150,33 @@ async function isKnownBaseBrand(brandName: string): Promise<boolean> {
   return groups.some((g) => g.key === brandName);
 }
 
+/**
+ * Форматы для вкладок RefsManager: те, у которых в активных типах бандлов
+ * включён режим ai_reference (DI2-1). Пустой список = режим нигде не включён,
+ * фронт покажет подсказку вместо вкладок.
+ */
+crmAdminRouter.get("/ref-formats", async (_req: Request, res: Response) => {
+  res.json({
+    formats: await listAiReferenceFormats(),
+    limits: { min: MIN_REFS_FOR_GENERATION, max: MAX_REFS_PER_PAIR },
+  });
+});
+
 crmAdminRouter.get("/bundle-refs", async (req: Request, res: Response) => {
   const parsed = refsQuerySchema.safeParse(req.query);
   if (!parsed.success) {
     res.status(400).json({ error: "invalid_query", details: parsed.error.flatten().fieldErrors });
     return;
   }
-  const { presetId, brandName } = parsed.data;
+  const { presetId, brandName, assetKey } = parsed.data;
   const [refs, counts] = await Promise.all([
-    listRefs(presetId, brandName),
+    listRefs(presetId, brandName, assetKey),
     refCountsByBrand(presetId),
   ]);
   res.json({
     refs,
+    // counts: { [brandName]: { [assetKey]: number } } — фронт рисует счётчики
+    // сразу на всех вкладках формата, не дёргая API по каждой.
     counts,
     limits: { min: MIN_REFS_FOR_GENERATION, max: MAX_REFS_PER_PAIR },
   });
@@ -170,12 +198,13 @@ crmAdminRouter.post("/bundle-refs", async (req: Request, res: Response) => {
     const parsed = refsQuerySchema.safeParse({
       presetId: first(fields.presetId),
       brandName: first(fields.brandName),
+      ...(first(fields.assetKey) !== undefined ? { assetKey: first(fields.assetKey) } : {}),
     });
     if (!parsed.success) {
       res.status(400).json({ error: "invalid_body", details: parsed.error.flatten().fieldErrors });
       return;
     }
-    const { presetId, brandName } = parsed.data;
+    const { presetId, brandName, assetKey } = parsed.data;
 
     // Адресат проверяется ДО обработки файлов (паттерн decor.ts).
     const preset = await prisma.neuralPromptPreset.findUnique({
@@ -190,6 +219,15 @@ crmAdminRouter.post("/bundle-refs", async (req: Request, res: Response) => {
       res.status(404).json({ error: "brand_not_found", hint: "ожидается БАЗОВОЕ имя бренда" });
       return;
     }
+    // Формат должен быть реально включён в ai_reference — иначе загруженные
+    // байты стали бы сиротами, которых никто не увидит (вкладок для них нет).
+    if (!(await isKnownRefFormat(assetKey))) {
+      res.status(404).json({
+        error: "format_not_found",
+        hint: "включите режим ai_reference для этого ассета в /admin",
+      });
+      return;
+    }
 
     const uploaded = Object.values(files)
       .flat()
@@ -199,18 +237,22 @@ crmAdminRouter.post("/bundle-refs", async (req: Request, res: Response) => {
       return;
     }
 
-    const existing = await listRefs(presetId, brandName);
+    const existing = await listRefs(presetId, brandName, assetKey);
     let slots = MAX_REFS_PER_PAIR - existing.length;
     let nextOrder = existing.reduce((m, r) => Math.max(m, r.sortOrder), -1) + 1;
     const knownIds = new Set(existing.map((r) => r.publicId));
-    const folder = `${REFS_FOLDER}/${presetId}/${brandSlug(brandName)}`;
+    const folder = refsFolder(presetId, brandName, assetKey);
 
     const results: RefUploadResult[] = [];
     for (const file of uploaded) {
       temps.push(file.filepath);
       const name = file.originalFilename ?? "reference";
       if (slots <= 0) {
-        results.push({ name, ok: false, reason: `лимит ${MAX_REFS_PER_PAIR} на пару исчерпан` });
+        results.push({
+          name,
+          ok: false,
+          reason: `лимит ${MAX_REFS_PER_PAIR} на формат исчерпан`,
+        });
         continue;
       }
       const raw = await readFile(file.filepath);
@@ -246,6 +288,7 @@ crmAdminRouter.post("/bundle-refs", async (req: Request, res: Response) => {
         data: {
           presetId,
           brandName,
+          assetKey,
           imageUrl: up.secure_url,
           publicId: up.public_id,
           width,
@@ -270,9 +313,7 @@ crmAdminRouter.post("/bundle-refs", async (req: Request, res: Response) => {
   }
 });
 
-const reorderSchema = z.object({
-  presetId: z.string().min(1).max(64),
-  brandName: z.string().min(1).max(120),
+const reorderSchema = refsQuerySchema.extend({
   ids: z.array(z.string().min(1).max(64)).min(1).max(MAX_REFS_PER_PAIR),
 });
 
@@ -283,11 +324,11 @@ crmAdminRouter.post("/bundle-refs/reorder", async (req: Request, res: Response) 
     res.status(400).json({ error: "invalid_body", details: parsed.error.flatten().fieldErrors });
     return;
   }
-  const { presetId, brandName, ids } = parsed.data;
-  const refs = await listRefs(presetId, brandName);
+  const { presetId, brandName, assetKey, ids } = parsed.data;
+  const refs = await listRefs(presetId, brandName, assetKey);
   const known = new Set(refs.map((r) => r.id));
   if (ids.length !== refs.length || ids.some((id) => !known.has(id))) {
-    res.status(400).json({ error: "ids_mismatch", hint: "нужен полный список id пары" });
+    res.status(400).json({ error: "ids_mismatch", hint: "нужен полный список id формата" });
     return;
   }
   await prisma.$transaction(
@@ -295,7 +336,7 @@ crmAdminRouter.post("/bundle-refs/reorder", async (req: Request, res: Response) 
       prisma.variationReference.update({ where: { id }, data: { sortOrder: index } }),
     ),
   );
-  res.json({ refs: await listRefs(presetId, brandName) });
+  res.json({ refs: await listRefs(presetId, brandName, assetKey) });
 });
 
 crmAdminRouter.delete("/bundle-refs/:id", async (req: Request, res: Response) => {

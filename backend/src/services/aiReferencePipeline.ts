@@ -8,7 +8,9 @@ import { fetchBuffer } from "./layerCache.js";
 import { validateAiAsset } from "../lib/aiAssetValidator.js";
 import { getLayoutGuideUrl, LAYOUT_GUIDE_INSTRUCTION } from "../lib/layoutGuide.js";
 import { MAX_EDIT_REFS } from "./variationRefs.js";
-import { reviewComposition, QA_REFS_SHOWN } from "../lib/vlmReviewer.js";
+import { reviewComposition, QA_REFS_SHOWN, qaThreshold } from "../lib/vlmReviewer.js";
+import type { QaProfile } from "../lib/vlmReviewer.js";
+import { describeCampaignStyle } from "../lib/styleAnchor.js";
 import { healComposition } from "./aiHealing.js";
 import type { AiRefAttempt } from "./aiHealing.js";
 import { pickGenerationRefs } from "./variationRefs.js";
@@ -131,6 +133,83 @@ export function buildAiReferencePrompt(variationText: string): string {
     .join(" ");
 }
 
+/**
+ * Контракт зависимого формата (TASK multiformat-promo, DI2-3/DI2-4): push и
+ * pop-up собираются ПОСЛЕ email и обязаны выглядеть как та же кампания.
+ * Отличия от якорного контракта:
+ *  - первой картинкой идёт утверждённая email-композиция (стиль-эталон), и
+ *    её раскладку копировать запрещено — только палитру/героя/пропсы/свет;
+ *  - copy space не резервируется: текста на этих форматах не будет (DI2-4),
+ *    поэтому центр канваса можно занимать.
+ */
+export const AI_REF_SECONDARY_CONTRACT =
+  "Create ONE new cohesive casino promo composition for this format, belonging to an EXISTING campaign. " +
+  "STYLE SOURCE: the FIRST image is the APPROVED anchor creative of that same campaign — reproduce its palette, " +
+  "character design and outfit, prop family, material quality, lighting and rendering EXACTLY; it is the same " +
+  "campaign and the same hero. Do NOT copy its layout, crop or arrangement — compose a NEW scene that fits this canvas. " +
+  "The remaining images are reference banners of this brand for THIS format — follow them for framing, prop density and scale. " +
+  "BACKGROUND: pure solid white (#FFFFFF), completely flat — no scenery, no gradients, no glow, no bokeh, no light rays " +
+  "and no cast shadows on the background; the artwork will be cut out later, so every element needs clean crisp edges. " +
+  "COMPOSITION: fill the canvas with a clear focal hierarchy — the main character and the anchor prop group read " +
+  "instantly at a glance, smaller props support them; there is NO reserved copy space in this format, the center may be occupied. " +
+  "EDGES: the character and all key props stay fully inside the frame with a clear margin from the canvas edges. " +
+  "STRICTLY NO text, captions, headlines, CTA buttons, logos or watermarks anywhere; the only lettering allowed is short " +
+  "casino words that naturally belong to props (slot reels, chips, medallions), such as FS, SCATTER, BONUS, VIP, WILD or 777. " +
+  "Professional advertising quality, coherent lighting across all elements.";
+
+/** Соотношение сторон в человекочитаемом виде («1024×512 (2:1)»). */
+function aspectLabel(w: number, h: number): string {
+  const gcd = (a: number, b: number): number => (b === 0 ? a : gcd(b, a % b));
+  const d = gcd(w, h) || 1;
+  return `${Math.round(w / d)}:${Math.round(h / d)}`;
+}
+
+/** Подсказка геометрии формата — модель не видит размеров канваса из промпта. */
+export function formatGeometryHint(label: string, w: number, h: number): string {
+  const ratio = w / h;
+  // 4:3 (pop-up 800×600) читается как «почти квадрат», а не как баннер —
+  // граница между horizontal и nearly square стоит выше 1.33.
+  const shape =
+    ratio >= 1.6
+      ? "wide horizontal banner"
+      : ratio >= 1.4
+        ? "horizontal banner"
+        : ratio > 0.9
+          ? "nearly square banner"
+          : "vertical banner";
+  return `Target format: ${label} — a ${shape}, ${w}×${h} px (${aspectLabel(w, h)}).`;
+}
+
+/** Промпт зависимого формата: бриф + геометрия + стиль-якорь + контракт. */
+export function buildSecondaryPrompt(opts: {
+  variationText: string;
+  /** Текстовое описание стиля якоря (пусто при fail-open, DI2-3). */
+  styleText: string;
+  /** false — якорной картинки нет (legacy-бандл): контракт про «FIRST image» снимается. */
+  hasAnchor: boolean;
+  formatLabel: string;
+  targetW: number;
+  targetH: number;
+}): string {
+  const brief = opts.variationText.trim();
+  const contract = opts.hasAnchor
+    ? AI_REF_SECONDARY_CONTRACT
+    : // Без якоря первая картинка — обычный референс формата: убираем блок
+      // «STYLE SOURCE», иначе модель примет за эталон случайный баннер.
+      AI_REF_SECONDARY_CONTRACT.replace(
+        /STYLE SOURCE:.*?The remaining images are reference banners/s,
+        "The images are reference banners",
+      );
+  return [
+    brief ? `Campaign brief: ${brief}.` : "",
+    formatGeometryHint(opts.formatLabel, opts.targetW, opts.targetH),
+    opts.styleText,
+    contract,
+  ]
+    .filter(Boolean)
+    .join(" ");
+}
+
 // Тип попытки (генерации и лечения) живёт в aiHealing.ts; ре-экспорт
 // сохраняет прежний импорт для тестов и соседних модулей.
 export type { AiRefAttempt } from "./aiHealing.js";
@@ -139,6 +218,50 @@ interface ChosenAttempt {
   index: number;
   imageUrl: string;
   pass: boolean;
+}
+
+/**
+ * Стиль-якорь кампании для зависимых форматов (DI2-3): композиция якорного
+ * ассета ДО removeBg (белый фон — прозрачный PNG модель отрендерит на чём
+ * попало) + текстовое описание её стиля.
+ */
+export interface AiRefAnchorContext {
+  imageUrl: string;
+  styleText: string;
+  /** true — взят imageUrl готового ассета вместо qa.baseUrl (старый бандл). */
+  fallback?: boolean;
+}
+
+/** Результат прогона: процессор ставит зависимые форматы только после ok. */
+export interface AiRefResult {
+  ok: boolean;
+  /** База (до removeBg) — становится якорем для зависимых форматов. */
+  baseUrl?: string;
+  /** Описание стиля, снятое с якоря (только для якорного ассета). */
+  styleText?: string;
+}
+
+/**
+ * Контекст якоря из уже сгенерированного ассета — нужен, когда зависимый
+ * формат перегенерируют отдельно (DI2-9: Regenerate push не трогает email).
+ * Бандлы, сделанные до этой фичи, не имеют `qa.baseUrl` — берём готовую
+ * картинку ассета с пометкой fallback (она прозрачная, стиль слабее).
+ */
+export async function loadAnchorContext(
+  variantId: string,
+  anchorKey: string,
+): Promise<AiRefAnchorContext | null> {
+  const anchor = await prisma.bundleAsset.findUnique({
+    where: { variantId_assetKey: { variantId, assetKey: anchorKey } },
+    select: { status: true, imageUrl: true, metadata: true },
+  });
+  if (!anchor || anchor.status !== "DONE") return null;
+  const meta = anchor.metadata as { styleAnchor?: unknown; qa?: { baseUrl?: unknown } } | null;
+  const styleText = typeof meta?.styleAnchor === "string" ? meta.styleAnchor : "";
+  const baseUrl = typeof meta?.qa?.baseUrl === "string" ? meta.qa.baseUrl : "";
+  if (baseUrl) return { imageUrl: baseUrl, styleText };
+  if (anchor.imageUrl) return { imageUrl: anchor.imageUrl, styleText, fallback: true };
+  return null;
 }
 
 /** safeZonePct в процентах — контракт метаданных движка (composeEngine E-P5.1). */
@@ -167,8 +290,25 @@ export async function processAiReferenceAsset(opts: {
   brandName: string;
   targetW: number;
   targetH: number;
-}): Promise<void> {
+  /**
+   * Якорь кампании (DI2-3). true (дефолт) — email: схема-раскладки, чистый
+   * центр, снятие стиля для остальных форматов. false — push/pop-up: стиль
+   * приходит готовым в `anchor`.
+   */
+  isAnchor?: boolean;
+  /** Подпись формата для промпта и приёмки («Push», «Pop-up»). */
+  formatLabel?: string;
+  /** Контекст якоря — обязателен по смыслу для зависимых форматов. */
+  anchor?: AiRefAnchorContext | null;
+}): Promise<AiRefResult> {
   const { bundleId, variantId, assetId, assetKey, targetW, targetH } = opts;
+  const isAnchor = opts.isAnchor ?? true;
+  const profile: QaProfile = isAnchor ? "anchor" : "secondary";
+  const formatLabel = opts.formatLabel ?? assetKey;
+  const anchorUrl = isAnchor ? null : (opts.anchor?.imageUrl ?? null);
+  // Чистый центр — требование ТОЛЬКО якорного формата (DI2-4): на push/pop-up
+  // текста не будет, и пустая середина там читается как дыра в композиции.
+  const centerZone = isAnchor ? AI_REF_CENTER_CLEAR_ZONE : undefined;
   const [notextKey, transparentKey] = derivedAssetKeys(assetKey);
 
   // Legacy-строки трёх-ассетной схемы (старые бандлы): любой новый прогон —
@@ -200,39 +340,63 @@ export async function processAiReferenceAsset(opts: {
       preset: { select: { title: true, text: true } },
     },
   });
-  if (!bundle) return; // bundle удалён — no-op
+  if (!bundle) return { ok: false }; // bundle удалён — no-op
   if (!bundle.presetId || !bundle.preset) {
     await fail("ai_reference: у бандла не выбрана вариация (preset)");
-    return;
+    return { ok: false };
   }
 
   const baseBrand = stripGenderName(opts.brandName);
   let refs;
   try {
-    refs = await pickGenerationRefs(bundle.presetId, baseBrand);
+    // Референсы — строго своего формата (DI2-2): у email, push и pop-up
+    // разная стилистика, фолбэка на чужой пул нет.
+    refs = await pickGenerationRefs(bundle.presetId, baseBrand, assetKey);
   } catch (err) {
     await fail(err instanceof Error ? err.message : String(err));
-    return;
+    return { ok: false };
   }
   const refUrls = refs.map((r) => r.imageUrl);
-
-  // A-6: последним референсом уходит схема-раскладка — позиционирование
-  // модели показывается картинкой, под неё резервируется один слот из
-  // MAX_EDIT_REFS. Best-effort: без схемы генерация не блокируется.
-  let genUrls = refUrls.slice(0, MAX_EDIT_REFS);
-  let guideInstruction = "";
-  try {
-    const guideUrl = await getLayoutGuideUrl();
-    genUrls = [...refUrls.slice(0, MAX_EDIT_REFS - 1), guideUrl];
-    guideInstruction = ` ${LAYOUT_GUIDE_INSTRUCTION}`;
-  } catch (err) {
-    console.warn(`⚠ ai-ref layout-guide#${assetId}: ${err instanceof Error ? err.message : err}`);
-  }
 
   // Бриф: текст бандла (мастер заполняет его из вариации, но может уточнить);
   // пустой — сам текст вариации.
   const variationText = bundle.neuralPrompt.trim() || bundle.preset.text;
-  const prompt = buildAiReferencePrompt(variationText) + guideInstruction;
+
+  let genUrls: string[];
+  let prompt: string;
+  if (isAnchor) {
+    // A-6: последним референсом уходит схема-раскладка — позиционирование
+    // модели показывается картинкой, под неё резервируется один слот из
+    // MAX_EDIT_REFS. Best-effort: без схемы генерация не блокируется.
+    genUrls = refUrls.slice(0, MAX_EDIT_REFS);
+    let guideInstruction = "";
+    try {
+      const guideUrl = await getLayoutGuideUrl();
+      genUrls = [...refUrls.slice(0, MAX_EDIT_REFS - 1), guideUrl];
+      guideInstruction = ` ${LAYOUT_GUIDE_INSTRUCTION}`;
+    } catch (err) {
+      console.warn(`⚠ ai-ref layout-guide#${assetId}: ${err instanceof Error ? err.message : err}`);
+    }
+    prompt = buildAiReferencePrompt(variationText) + guideInstruction;
+  } else {
+    // DI2-3: первым слотом идёт якорная композиция кампании, дальше —
+    // референсы своего формата. Схема-раскладки у зависимых нет (DI2-4),
+    // освободившийся слот отдан референсам.
+    genUrls = anchorUrl
+      ? [anchorUrl, ...refUrls.slice(0, MAX_EDIT_REFS - 1)]
+      : refUrls.slice(0, MAX_EDIT_REFS);
+    if (!anchorUrl) {
+      console.warn(`⚠ ai-ref#${assetId} (${assetKey}): нет якоря кампании — генерация без стиля email`);
+    }
+    prompt = buildSecondaryPrompt({
+      variationText,
+      styleText: opts.anchor?.styleText ?? "",
+      hasAnchor: Boolean(anchorUrl),
+      formatLabel,
+      targetW,
+      targetH,
+    });
+  }
   const aspect = nearestFalAspect(targetW, targetH);
   const folder = `bundles/${bundleId}`;
 
@@ -300,7 +464,7 @@ export async function processAiReferenceAsset(opts: {
     // Пользователем — композиция модели устраивает как есть).
     // Стадия C ДО стадии B: детерминированные проверки бесплатны, VLM — нет.
     const tech = await validateAiAsset(buffer, targetW, targetH, {
-      centerClearZone: AI_REF_CENTER_CLEAR_ZONE,
+      ...(centerZone ? { centerClearZone: centerZone } : {}),
     });
     if (!tech.passed) {
       attempts.push({
@@ -320,6 +484,9 @@ export async function processAiReferenceAsset(opts: {
       refUrls: refUrls.slice(0, QA_REFS_SHOWN),
       variationText,
       brandName: baseBrand,
+      profile,
+      anchorUrl,
+      formatLabel,
     });
     const attemptRow: AiRefAttempt = {
       imageUrl: fitted.url,
@@ -348,9 +515,9 @@ export async function processAiReferenceAsset(opts: {
   if (!chosen && !bestCandidate) {
     const lastReason = attempts.at(-1)?.reasons[0] ?? "все попытки провалились";
     await fail(`ai_reference: ${lastReason} (${attempts.length} попыток)`, {
-      qa: { attempts, qaPassed: false },
+      qa: { attempts, qaPassed: false, threshold: qaThreshold() },
     } as unknown as Prisma.InputJsonValue);
-    return;
+    return { ok: false };
   }
 
   // metadata.qa хранит tech-отчёт в виде списка проверок (без буферов).
@@ -385,7 +552,12 @@ export async function processAiReferenceAsset(opts: {
       refUrls,
       variationText,
       brandName: baseBrand,
-      centerClearZone: AI_REF_CENTER_CLEAR_ZONE,
+      // Лечим в том же контуре, в котором генерировали: у зависимых форматов
+      // ни чека центра, ни требования пустой середины в промпте (DI2-4).
+      ...(centerZone ? { centerClearZone: centerZone } : {}),
+      profile,
+      anchorUrl,
+      formatLabel,
     });
     finalUrl = heal.winner.imageUrl;
     qaPassed = heal.winner.pass;
@@ -396,16 +568,34 @@ export async function processAiReferenceAsset(opts: {
     };
   }
 
+  // Стиль-якорь (DI2-3): снимается ТОЛЬКО с якорного ассета и только когда
+  // финальная база уже выбрана — описывать промежуточную попытку смысла нет.
+  // Fail-open: без описания зависимые форматы поедут на одной картинке.
+  let styleText = "";
+  if (isAnchor) {
+    const style = await describeCampaignStyle(finalUrl);
+    styleText = style.text;
+    if (style.error) {
+      console.warn(`⚠ ai-ref style-anchor#${assetId}: ${style.error}`);
+    }
+  }
+
   const qaMeta = {
     attempts: attemptRows(attempts),
     chosenAttempt: finalPick.index,
     qaPassed,
+    threshold: qaThreshold(),
+    // База ДО removeBg: она уходит стиль-якорем в push/pop-up и в каскадные
+    // регенерации зависимых форматов (DI2-3/DI2-9).
+    baseUrl: finalUrl,
     ...(healingMeta ? { healing: healingMeta } : {}),
   };
   const baseMeta = {
     specKey: "ai_reference",
     specVersion: 1,
-    safeZonePct: safeZonePct(),
+    // Safe-зона есть только у якорного формата — на push/pop-up текст не
+    // накладывается, и превью зоны там показывать нечего (DI2-4).
+    safeZonePct: isAnchor ? safeZonePct() : null,
     recommendedTextColor: null,
     luminance: null,
     textContrast: null,
@@ -413,6 +603,14 @@ export async function processAiReferenceAsset(opts: {
     validator: { passed: qaPassed, attempts: attempts.length },
     presetTitle: bundle.preset.title,
     qa: qaMeta,
+    ...(isAnchor
+      ? { styleAnchor: styleText, isStyleAnchor: true }
+      : {
+          // Чем именно наследовался стиль — видно в метаданных ассета.
+          campaignAnchorUrl: anchorUrl,
+          styleAnchorUsed: Boolean(anchorUrl),
+          ...(opts.anchor?.fallback ? { styleAnchorFallback: true } : {}),
+        }),
   };
 
   // Финал (A2): removeBg от финальной базы (DI-R8: свечение/тени как отдаст
@@ -425,7 +623,7 @@ export async function processAiReferenceAsset(opts: {
       `removeBg: ${removed.error ?? "unknown"}`,
       baseMeta as unknown as Prisma.InputJsonValue,
     );
-    return;
+    return { ok: false };
   }
   const trUp = await withRetry(
     () =>
@@ -441,7 +639,7 @@ export async function processAiReferenceAsset(opts: {
       `transparent upload: ${trUp.error ?? "unknown"}`,
       baseMeta as unknown as Prisma.InputJsonValue,
     );
-    return;
+    return { ok: false };
   }
 
   await prisma.bundleAsset.update({
@@ -457,9 +655,11 @@ export async function processAiReferenceAsset(opts: {
   await dropLegacyDerived();
 
   console.log(
-    `🧩 ai-ref ${assetKey}#${assetId}: refs=${refs.length} attempts=${attempts.length}` +
+    `🧩 ai-ref ${assetKey}#${assetId}: ${isAnchor ? "anchor" : "secondary"} refs=${refs.length} ` +
+      `attempts=${attempts.length}` +
       (healingMeta ? ` heal=${healingMeta.attempts.length} healed=${healingMeta.used}` : "") +
       ` qaPassed=${qaPassed}`,
   );
   await recomputeBundleStatus(bundleId);
+  return { ok: true, baseUrl: finalUrl, styleText };
 }
