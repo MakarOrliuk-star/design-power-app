@@ -1875,9 +1875,9 @@ async def generate_single_report_stream(request: SingleReportRequest):
                     
                     final_file_name = f"{camp_name}_{datetime.now().strftime('%Y%m%d_%H%M%S')}.html"
                     
-                    # 🟢 ЖЕЛЕЗОБЕТОННЫЙ ФИКС JS (Vue/React SPA Bypass)
-                    import base64
+                    # 🟢 ЖЕЛЕЗОБЕТОННЫЙ ФИКС JS (SPA / Vue Bypass)
                     import urllib.parse
+                    import base64
                     
                     script_start = final_report_html.rfind("<script>")
                     script_end = final_report_html.rfind("</script>")
@@ -1885,19 +1885,71 @@ async def generate_single_report_stream(request: SingleReportRequest):
                     if script_start != -1 and script_end != -1:
                         raw_script = final_report_html[script_start + 8 : script_end]
                         
-                        # 1. Меняем ожидание DOMContentLoaded на setTimeout. 
-                        # Мы НЕ удаляем закрывающую скобку в конце, поэтому JS-синтаксис останется на 100% валидным.
-                        raw_script = re.sub(r"document\.addEventListener\(['\"]DOMContentLoaded['\"],\s*\(\)\s*=>\s*\{", "setTimeout(() => {", raw_script)
+                        # 1. Убираем обертку DOMContentLoaded
+                        raw_script = re.sub(r"document\.addEventListener\(['\"]DOMContentLoaded['\"],\s*\(\)\s*=>\s*\{", "", raw_script)
+                        raw_script = re.sub(r"\}\);\s*$", "", raw_script.strip())
                         
-                        # 2. Двойная кодировка: URL Encode -> Base64
-                        # Никакой фреймворк или санитизатор не сломает этот код, так как он выглядит как случайный набор латинских букв
+                        # 2. Добавляем улучшенную кнопку копирования (заменяет старую на лету)
+                        # Это даст мгновенный визуальный отклик и обойдет блокировки буфера обмена на проде
+                        robust_copy_js = """
+                        window.copyLocalErrors = function(btn, event) {
+                            event.preventDefault();
+                            const originalText = btn.innerHTML;
+                            btn.innerHTML = "⏳ Копирую...";
+                            btn.style.opacity = "0.8";
+                            
+                            setTimeout(() => {
+                                const grouped = window.extractGroupedErrors(btn);
+                                if (!grouped) { alert("Нет ошибок по выбранным фильтрам."); btn.innerHTML = originalText; btn.style.opacity = "1"; return; }
+                                
+                                let textResult = "";
+                                for (const [macro, data] of Object.entries(grouped)) {
+                                    textResult += `Лейбл: ${macro}\\nСсылка: ${data.url}\\n\\n`;
+                                    for (const [brand, bData] of Object.entries(data.brands)) {
+                                        textResult += `Бренд: ${brand}\\n`;
+                                        for (const [errText, langs] of Object.entries(bData)) {
+                                            const uniqLangs = [...new Set(langs)].sort();
+                                            textResult += `Локали: ${uniqLangs.join(', ')}\\nОшибки:\\n• ${errText}\\n\\n`;
+                                        }
+                                    }
+                                    textResult += `----------------------------------------\\n\\n`;
+                                }
+                                
+                                const fallback = () => {
+                                    const ta = document.createElement("textarea");
+                                    ta.value = textResult.trim();
+                                    ta.style.position = "fixed"; ta.style.top = "-9999px";
+                                    document.body.appendChild(ta);
+                                    ta.select();
+                                    try { document.execCommand('copy'); btn.innerHTML = "✅ Скопировано!"; } 
+                                    catch (e) { btn.innerHTML = "❌ Ошибка"; alert("Браузер заблокировал копирование."); }
+                                    document.body.removeChild(ta);
+                                    setTimeout(() => { btn.innerHTML = originalText; btn.style.opacity = "1"; const m = btn.closest('.dropdown-menu'); if(m) m.style.display='none'; }, 2000);
+                                };
+
+                                if (navigator.clipboard && navigator.clipboard.writeText && window.isSecureContext) {
+                                    navigator.clipboard.writeText(textResult.trim()).then(() => {
+                                        btn.innerHTML = "✅ Скопировано!";
+                                        setTimeout(() => { btn.innerHTML = originalText; btn.style.opacity = "1"; const m = btn.closest('.dropdown-menu'); if(m) m.style.display='none'; }, 2000);
+                                    }).catch(() => fallback());
+                                } else {
+                                    fallback();
+                                }
+                            }, 50); // Даем UI обновиться
+                        };
+                        """
+                        raw_script += robust_copy_js
+
+                        # 3. Двойная кодировка (URL -> Base64), чтобы Vue не сломал кавычки и спецсимволы
                         url_encoded = urllib.parse.quote(raw_script)
                         b64_js = base64.b64encode(url_encoded.encode('utf-8')).decode('utf-8')
 
-                        # 3. Инжектим через невидимую картинку. При загрузке она дешифрует код и исполняет его.
+                        # 4. Хак с ONERROR. Если Vue съедает onload, то ошибка загрузки битой картинки сработает ВСЕГДА!
+                        # Также добавляем CSS, чтобы любая кнопка визуально "прожималась", даже если JS еще не успел подгрузиться
                         hack_html = f"""
-                        <img src="data:image/gif;base64,R0lGODlhAQABAIAAAP///wAAACH5BAEAAAAALAAAAAABAAEAAAICRAEAOw==" 
-                             onload="var s=document.createElement('script'); s.type='text/javascript'; s.innerHTML=decodeURIComponent(atob('{b64_js}')); document.body.appendChild(s); this.remove();" 
+                        <style>button:active {{ transform: scale(0.95); transition: 0.1s; }}</style>
+                        <img src="invalid-url-to-force-error.jpg" 
+                             onerror="try{{ var s=document.createElement('script'); s.type='text/javascript'; s.innerHTML=decodeURIComponent(atob('{b64_js}')); document.head.appendChild(s); }}catch(e){{console.error('JS Inject Error', e);}} this.remove();" 
                              style="display:none;">
                         """
                         
