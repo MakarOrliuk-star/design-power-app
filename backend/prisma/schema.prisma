@@ -738,9 +738,14 @@ model VariationReference {
   createdById String?
   createdAt   DateTime @default(now())
 
-  // The same banner may legitimately be uploaded to two formats, so publicId
-  // is unique per format, not per pair.
-  @@unique([presetId, brandName, assetKey, publicId])
+  // Уникальность СОЗНАТЕЛЬНО остаётся по [presetId, brandName, publicId] и не
+  // включает assetKey: Cloudinary отдаёт public_id вместе с папкой, а папка у
+  // каждого формата своя (variationRefs.refsFolder), поэтому один и тот же
+  // файл в двух форматах получает разные public_id и в это ограничение не
+  // упирается. Плюс `prisma db push` не требует --accept-data-loss, которого
+  // нет в старт-команде Railway (Prisma предупреждает на ЛЮБОМ добавлении
+  // unique-ключа, даже заведомо безопасном).
+  @@unique([presetId, brandName, publicId])
   @@index([presetId, brandName, assetKey])
 }
 
