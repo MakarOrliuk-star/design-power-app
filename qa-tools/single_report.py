@@ -59,10 +59,6 @@ class SingleReportResponse(BaseModel):
 class PreviewRequest(BaseModel):
     template_choice: str
     raw_table_data: str
-
-class PreviewRequest(BaseModel):
-    template_choice: str
-    raw_table_data: str
     mega_type: str = "react"
 
 @router.post("/preview")
@@ -1879,16 +1875,27 @@ async def generate_single_report_stream(request: SingleReportRequest):
                     
                     final_file_name = f"{camp_name}_{datetime.now().strftime('%Y%m%d_%H%M%S')}.html"
                     
+                    # 🟢 ФИКС: Адаптация JS-кода для работы внутри SPA (Vue/React)
+                    # 1. Убираем ожидание DOMContentLoaded (оно не работает при динамической вставке)
+                    final_report_html = re.sub(r"document\.addEventListener\('DOMContentLoaded',\s*\(\)\s*=>\s*\{", "", final_report_html)
+                    final_report_html = re.sub(r"\}\);\s*</script>", "</script>", final_report_html)
+                    
+                    # 2. Обходим жесткую блокировку тегов <script> при вставке через v-html
+                    # Создаем самовыполняющийся img-хак, который вытаскивает код из текста и запускает его как реальный скрипт
+                    script_hack = "<img src=\"data:image/gif;base64,R0lGODlhAQABAIAAAP///wAAACH5BAEAAAAALAAAAAABAAEAAAICRAEAOw==\" onload=\"var s=document.createElement('script');s.innerHTML=this.nextElementSibling.innerHTML;document.body.appendChild(s);this.remove();\" style=\"display:none;\"><script type=\"text/plain\">"
+                    final_report_html = final_report_html.replace("<script>", script_hack)
+                    
                     # 🔥 ГЛАВНОЕ ОТЛИЧИЕ ОТ КОЛЛЕГИ:
-                    # Мы не сохраняем тяжелый HTML в память сервера (REPORTS_CACHE). 
-                    # Мы отправляем его прямо в стрим финальным аккордом!
                     done_event = {
                         "type": "done",
                         "filename": final_file_name,
                         "html_content": final_report_html
                     }
+                    
+                    # 🟢 ФИКС: ensure_ascii=False сохранит русский язык (кириллицу) чистым в JSON-пакете, 
+                    # чтобы фильтры по словам вроде "опечатка" точно работали в браузере
                     asyncio.run_coroutine_threadsafe(
-                        queue.put(f"data: {json.dumps(done_event)}\n\n"), 
+                        queue.put(f"data: {json.dumps(done_event, ensure_ascii=False)}\n\n"), 
                         loop
                     )
                 else:
