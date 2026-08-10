@@ -1889,53 +1889,65 @@ async def generate_single_report_stream(request: SingleReportRequest):
                         raw_script = re.sub(r"document\.addEventListener\(['\"]DOMContentLoaded['\"],\s*\(\)\s*=>\s*\{", "", raw_script)
                         raw_script = re.sub(r"\}\);\s*$", "", raw_script.strip())
                         
-                        # 2. Добавляем улучшенную кнопку копирования (заменяет старую на лету)
-                        # Это даст мгновенный визуальный отклик и обойдет блокировки буфера обмена на проде
+                        # 2. Синхронное копирование: браузеры жестко блокируют буфер обмена,
+                        # если он вызывается внутри setTimeout (так как теряется контекст доверенного клика юзера).
                         robust_copy_js = """
                         window.copyLocalErrors = function(btn, event) {
                             event.preventDefault();
                             const originalText = btn.innerHTML;
-                            btn.innerHTML = "⏳ Копирую...";
-                            btn.style.opacity = "0.8";
                             
-                            setTimeout(() => {
-                                const grouped = window.extractGroupedErrors(btn);
-                                if (!grouped) { alert("Нет ошибок по выбранным фильтрам."); btn.innerHTML = originalText; btn.style.opacity = "1"; return; }
-                                
-                                let textResult = "";
-                                for (const [macro, data] of Object.entries(grouped)) {
-                                    textResult += `Лейбл: ${macro}\\nСсылка: ${data.url}\\n\\n`;
-                                    for (const [brand, bData] of Object.entries(data.brands)) {
-                                        textResult += `Бренд: ${brand}\\n`;
-                                        for (const [errText, langs] of Object.entries(bData)) {
-                                            const uniqLangs = [...new Set(langs)].sort();
-                                            textResult += `Локали: ${uniqLangs.join(', ')}\\nОшибки:\\n• ${errText}\\n\\n`;
-                                        }
+                            const grouped = window.extractGroupedErrors(btn);
+                            if (!grouped) { 
+                                alert("Нет ошибок по выбранным фильтрам."); 
+                                return; 
+                            }
+                            
+                            let textResult = "";
+                            for (const [macro, data] of Object.entries(grouped)) {
+                                textResult += `Лейбл: ${macro}\\nСсылка: ${data.url}\\n\\n`;
+                                for (const [brand, bData] of Object.entries(data.brands)) {
+                                    textResult += `Бренд: ${brand}\\n`;
+                                    for (const [errText, langs] of Object.entries(bData)) {
+                                        const uniqLangs = [...new Set(langs)].sort();
+                                        textResult += `Локали: ${uniqLangs.join(', ')}\\nОшибки:\\n• ${errText}\\n\\n`;
                                     }
-                                    textResult += `----------------------------------------\\n\\n`;
                                 }
-                                
-                                const fallback = () => {
-                                    const ta = document.createElement("textarea");
-                                    ta.value = textResult.trim();
-                                    ta.style.position = "fixed"; ta.style.top = "-9999px";
-                                    document.body.appendChild(ta);
-                                    ta.select();
-                                    try { document.execCommand('copy'); btn.innerHTML = "✅ Скопировано!"; } 
-                                    catch (e) { btn.innerHTML = "❌ Ошибка"; alert("Браузер заблокировал копирование."); }
-                                    document.body.removeChild(ta);
-                                    setTimeout(() => { btn.innerHTML = originalText; btn.style.opacity = "1"; const m = btn.closest('.dropdown-menu'); if(m) m.style.display='none'; }, 2000);
-                                };
+                                textResult += `----------------------------------------\\n\\n`;
+                            }
+                            
+                            const finishCopy = () => {
+                                btn.innerHTML = "✅ Скопировано!";
+                                setTimeout(() => { 
+                                    btn.innerHTML = originalText; 
+                                    const m = btn.closest('.dropdown-menu'); 
+                                    if(m) m.style.display='none'; 
+                                }, 2000);
+                            };
 
-                                if (navigator.clipboard && navigator.clipboard.writeText && window.isSecureContext) {
-                                    navigator.clipboard.writeText(textResult.trim()).then(() => {
-                                        btn.innerHTML = "✅ Скопировано!";
-                                        setTimeout(() => { btn.innerHTML = originalText; btn.style.opacity = "1"; const m = btn.closest('.dropdown-menu'); if(m) m.style.display='none'; }, 2000);
-                                    }).catch(() => fallback());
-                                } else {
-                                    fallback();
+                            const fallback = () => {
+                                const ta = document.createElement("textarea");
+                                ta.value = textResult.trim();
+                                ta.style.position = "fixed"; 
+                                ta.style.top = "-9999px";
+                                document.body.appendChild(ta);
+                                ta.select();
+                                try { 
+                                    document.execCommand('copy'); 
+                                    finishCopy();
+                                } catch (e) { 
+                                    btn.innerHTML = "❌ Ошибка"; 
+                                    alert("Браузер заблокировал копирование."); 
+                                    setTimeout(() => { btn.innerHTML = originalText; }, 2000);
                                 }
-                            }, 50); // Даем UI обновиться
+                                document.body.removeChild(ta);
+                            };
+
+                            // Мгновенная (синхронная) запись в буфер
+                            if (navigator.clipboard && navigator.clipboard.writeText) {
+                                navigator.clipboard.writeText(textResult.trim()).then(finishCopy).catch(fallback);
+                            } else {
+                                fallback();
+                            }
                         };
                         """
                         raw_script += robust_copy_js
@@ -1944,8 +1956,7 @@ async def generate_single_report_stream(request: SingleReportRequest):
                         url_encoded = urllib.parse.quote(raw_script)
                         b64_js = base64.b64encode(url_encoded.encode('utf-8')).decode('utf-8')
 
-                        # 4. Хак с ONERROR. Если Vue съедает onload, то ошибка загрузки битой картинки сработает ВСЕГДА!
-                        # Также добавляем CSS, чтобы любая кнопка визуально "прожималась", даже если JS еще не успел подгрузиться
+                        # 4. Хак с ONERROR. Ошибка загрузки битой картинки сработает ВСЕГДА и исполнит JS.
                         hack_html = f"""
                         <style>button:active {{ transform: scale(0.95); transition: 0.1s; }}</style>
                         <img src="invalid-url-to-force-error.jpg" 
