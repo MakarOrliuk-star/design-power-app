@@ -77,10 +77,13 @@ describe("refCountsByBrand (TASK multiformat-promo, DI2-2)", () => {
 });
 
 describe("refsFolder", () => {
-  it("папка Cloudinary разделена по формату — файлы форматов не смешиваются", () => {
-    expect(refsFolder("p1", "Booongo(Monkey)", "push")).toBe(
-      "bundle_refs/p1/booongo-monkey/push",
-    );
+  it("новые форматы уходят в свои подпапки — public_id по форматам не совпадают", () => {
+    expect(refsFolder("p1", "Booongo(Monkey)", "push")).toBe("bundle_refs/p1/booongo-monkey/push");
+    expect(refsFolder("p1", "Betnella", "popup")).toBe("bundle_refs/p1/betnella/popup");
+  });
+
+  it("email сохраняет исторический путь — дедуп по publicId продолжает работать", () => {
+    expect(refsFolder("p1", "Betnella", "email")).toBe("bundle_refs/p1/betnella");
   });
 });
 

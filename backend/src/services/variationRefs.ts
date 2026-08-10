@@ -104,7 +104,14 @@ export function brandSlug(brandName: string): string {
   return slug || "brand";
 }
 
-/** Папка Cloudinary тройки: bundle_refs/{presetId}/{brand}/{format}. */
+/**
+ * Папка Cloudinary тройки. У email путь ИСТОРИЧЕСКИЙ (без подпапки формата):
+ * public_id уже загруженных баннеров считался от него, и дедуп по publicId
+ * должен продолжать их узнавать. Остальные форматы уходят в свои подпапки —
+ * заодно это и разводит public_id одного и того же файла по форматам, из-за
+ * чего уникальный ключ [presetId, brandName, publicId] им не мешает.
+ */
 export function refsFolder(presetId: string, brandName: string, assetKey: string): string {
-  return `${REFS_FOLDER}/${presetId}/${brandSlug(brandName)}/${brandSlug(assetKey)}`;
+  const base = `${REFS_FOLDER}/${presetId}/${brandSlug(brandName)}`;
+  return assetKey === DEFAULT_REF_ASSET_KEY ? base : `${base}/${brandSlug(assetKey)}`;
 }
