@@ -4,8 +4,15 @@ import { describe, it, expect, beforeEach, vi } from "vitest";
 const db = vi.hoisted(() => ({
   brand: { findMany: vi.fn() },
   bundle: { findUnique: vi.fn(), update: vi.fn() },
-  bundleAsset: { findMany: vi.fn(), findFirst: vi.fn(), update: vi.fn(), updateMany: vi.fn() },
+  bundleAsset: {
+    findMany: vi.fn(),
+    findFirst: vi.fn(),
+    update: vi.fn(),
+    updateMany: vi.fn(),
+    count: vi.fn(),
+  },
   bundleBrandVariant: { deleteMany: vi.fn(), upsert: vi.fn() },
+  variationReference: { groupBy: vi.fn() },
   $transaction: vi.fn(),
 }));
 const queue = vi.hoisted(() => ({ add: vi.fn(), addBulk: vi.fn() }));
@@ -19,6 +26,8 @@ import {
   launchGeneration,
   listBundleBrands,
   regenerateAsset,
+  resolveStyleAnchorKey,
+  dependentAiReferenceAssets,
   stripGenderName,
   variantDisplayName,
 } from "../src/services/bundle.service.js";
@@ -178,6 +187,62 @@ describe("launchGeneration", () => {
     db.bundle.findUnique.mockResolvedValue(null);
     expect(await launchGeneration("nope")).toBeNull();
   });
+
+  // Гейт ai_reference (DI-R3 + TASK multiformat-promo, DI2-2): референсы нужны
+  // на КАЖДЫЙ формат — email хватает, push пустой → генерация не стартует.
+  describe("гейт ai_reference по форматам", () => {
+    const aiRefBundle = {
+      ...bundleRow,
+      presetId: "p1",
+      bundleType: {
+        assets: [
+          { key: "email", label: "Email", width: 1200, height: 600, composeMode: "ai_reference" },
+          { key: "push", label: "Push", width: 1024, height: 512, composeMode: "ai_reference" },
+        ],
+      },
+    };
+
+    it("422 refs_missing с указанием конкретного формата", async () => {
+      db.bundle.findUnique.mockResolvedValue(aiRefBundle);
+      db.brand.findMany.mockResolvedValue([{ id: "b1", name: "Betnella(Men)" }]);
+      db.variationReference.groupBy.mockResolvedValue([
+        { brandName: "Betnella", assetKey: "email", _count: { _all: 8 } },
+        { brandName: "Betnella", assetKey: "push", _count: { _all: 2 } },
+      ]);
+
+      const result = await launchGeneration("bun1");
+      expect(result).toEqual({
+        ok: false,
+        error: "refs_missing",
+        missingRefs: [{ brandName: "Betnella", assetKey: "push", count: 2, min: 5 }],
+      });
+      expect(queue.addBulk).not.toHaveBeenCalled();
+    });
+
+    it("хватает на всех форматах → генерация стартует", async () => {
+      db.bundle.findUnique.mockResolvedValue(aiRefBundle);
+      db.brand.findMany.mockResolvedValue([{ id: "b1", name: "Betnella(Men)" }]);
+      db.variationReference.groupBy.mockResolvedValue([
+        { brandName: "Betnella", assetKey: "email", _count: { _all: 8 } },
+        { brandName: "Betnella", assetKey: "push", _count: { _all: 5 } },
+      ]);
+      mockTransaction();
+      queue.addBulk.mockResolvedValue([]);
+
+      expect(await launchGeneration("bun1")).toEqual({
+        ok: true,
+        variantCount: 1,
+        assetCount: 2,
+      });
+    });
+
+    it("вариация не выбрана → preset_required (референсы даже не читаются)", async () => {
+      db.bundle.findUnique.mockResolvedValue({ ...aiRefBundle, presetId: null });
+      db.brand.findMany.mockResolvedValue([{ id: "b1", name: "Betnella(Men)" }]);
+      expect(await launchGeneration("bun1")).toEqual({ ok: false, error: "preset_required" });
+      expect(db.variationReference.groupBy).not.toHaveBeenCalled();
+    });
+  });
 });
 
 describe("editAsset (D9)", () => {
@@ -233,12 +298,56 @@ describe("editAsset (D9)", () => {
   });
 });
 
+/** Тип бандла без ai_reference — каскад стиля не применяется. */
+const LAYERED_ASSETS = [
+  { key: "email", label: "Email", width: 1200, height: 600, composeMode: "layered" },
+];
+/** Мультиформатное промо (TASK multiformat-promo): якорь email + push/pop-up. */
+const AI_REF_ASSETS = [
+  { key: "email", label: "Email", width: 1200, height: 600, composeMode: "ai_reference" },
+  { key: "popup", label: "Pop-up", width: 800, height: 600, composeMode: "ai_reference" },
+  { key: "push", label: "Push", width: 1024, height: 512, composeMode: "ai_reference" },
+];
+
+describe("resolveStyleAnchorKey / dependentAiReferenceAssets (A2-1)", () => {
+  it("якорь по умолчанию — email, зависимые — остальные ai_reference-форматы", () => {
+    expect(resolveStyleAnchorKey(AI_REF_ASSETS)).toBe("email");
+    expect(dependentAiReferenceAssets(AI_REF_ASSETS).map((a) => a.key)).toEqual(["popup", "push"]);
+  });
+
+  it("явный styleAnchor побеждает правило «email»", () => {
+    const assets = [
+      { key: "email", label: "Email", width: 1200, height: 600, composeMode: "ai_reference" as const },
+      {
+        key: "push",
+        label: "Push",
+        width: 1024,
+        height: 512,
+        composeMode: "ai_reference" as const,
+        styleAnchor: true,
+      },
+    ];
+    expect(resolveStyleAnchorKey(assets)).toBe("push");
+    expect(dependentAiReferenceAssets(assets).map((a) => a.key)).toEqual(["email"]);
+  });
+
+  it("нет ai_reference-ассетов → якоря нет, каскад не запускается", () => {
+    expect(resolveStyleAnchorKey(LAYERED_ASSETS)).toBeNull();
+    expect(dependentAiReferenceAssets(LAYERED_ASSETS)).toEqual([]);
+  });
+});
+
 describe("regenerateAsset", () => {
   it("re-renders stage B only when the variant artifacts exist", async () => {
     db.bundleAsset.findFirst.mockResolvedValue({
       id: "a1",
       status: "DONE",
-      variant: { id: "v1", personImageUrl: "https://cdn/person.png" },
+      assetKey: "email",
+      variant: {
+        id: "v1",
+        personImageUrl: "https://cdn/person.png",
+        bundle: { bundleType: { assets: LAYERED_ASSETS } },
+      },
     });
     queue.add.mockResolvedValue({});
 
@@ -260,7 +369,12 @@ describe("regenerateAsset", () => {
     db.bundleAsset.findFirst.mockResolvedValue({
       id: "a1",
       status: "FAILED",
-      variant: { id: "v1", personImageUrl: null },
+      assetKey: "email",
+      variant: {
+        id: "v1",
+        personImageUrl: null,
+        bundle: { bundleType: { assets: LAYERED_ASSETS } },
+      },
     });
     queue.add.mockResolvedValue({});
 
@@ -272,7 +386,12 @@ describe("regenerateAsset", () => {
     db.bundleAsset.findFirst.mockResolvedValue({
       id: "a1",
       status: "GENERATING",
-      variant: { id: "v1", personImageUrl: null },
+      assetKey: "email",
+      variant: {
+        id: "v1",
+        personImageUrl: null,
+        bundle: { bundleType: { assets: LAYERED_ASSETS } },
+      },
     });
     expect(await regenerateAsset("bun1", "a1")).toEqual({ ok: false, error: "in_flight" });
     expect(queue.add).not.toHaveBeenCalled();
@@ -281,5 +400,65 @@ describe("regenerateAsset", () => {
   it("returns null when the asset does not belong to the bundle", async () => {
     db.bundleAsset.findFirst.mockResolvedValue(null);
     expect(await regenerateAsset("bun1", "foreign")).toBeNull();
+  });
+
+  // TASK multiformat-promo (DI2-9): единый стиль кампании задаёт email, поэтому
+  // его перегенерация обязана утянуть за собой push и pop-up.
+  it("каскад: Regenerate якоря сбрасывает зависимые форматы, в очередь идёт только якорь", async () => {
+    db.bundleAsset.findFirst.mockResolvedValue({
+      id: "a1",
+      status: "DONE",
+      assetKey: "email",
+      variant: {
+        id: "v1",
+        personImageUrl: null,
+        bundle: { bundleType: { assets: AI_REF_ASSETS } },
+      },
+    });
+    db.bundleAsset.count.mockResolvedValue(0);
+    queue.add.mockResolvedValue({});
+
+    expect(await regenerateAsset("bun1", "a1")).toEqual({ ok: true });
+    expect(db.bundleAsset.updateMany).toHaveBeenCalledWith({
+      where: { variantId: "v1", assetKey: { in: ["popup", "push"] } },
+      data: { status: "GENERATING", approved: false, errorMessage: null },
+    });
+    // Зависимые поставит процессор якоря после его успеха — не здесь.
+    expect(queue.add).toHaveBeenCalledTimes(1);
+  });
+
+  it("каскад блокируется, пока зависимый формат ещё в полёте", async () => {
+    db.bundleAsset.findFirst.mockResolvedValue({
+      id: "a1",
+      status: "DONE",
+      assetKey: "email",
+      variant: {
+        id: "v1",
+        personImageUrl: null,
+        bundle: { bundleType: { assets: AI_REF_ASSETS } },
+      },
+    });
+    db.bundleAsset.count.mockResolvedValue(1);
+
+    expect(await regenerateAsset("bun1", "a1")).toEqual({ ok: false, error: "in_flight" });
+    expect(queue.add).not.toHaveBeenCalled();
+    expect(db.bundleAsset.update).not.toHaveBeenCalled();
+  });
+
+  it("Regenerate зависимого формата якорь не трогает", async () => {
+    db.bundleAsset.findFirst.mockResolvedValue({
+      id: "a2",
+      status: "DONE",
+      assetKey: "push",
+      variant: {
+        id: "v1",
+        personImageUrl: null,
+        bundle: { bundleType: { assets: AI_REF_ASSETS } },
+      },
+    });
+    queue.add.mockResolvedValue({});
+
+    expect(await regenerateAsset("bun1", "a2")).toEqual({ ok: true });
+    expect(db.bundleAsset.updateMany).not.toHaveBeenCalled();
   });
 });

@@ -13,6 +13,43 @@ const auth = useAuthStore();
 
 const bundle = computed(() => store.selected);
 
+// ---- Каскад стиля кампании (TASK multiformat-promo, DI2-3/DI2-9) ----
+// Якорный формат (email) задаёт стиль остальным, поэтому его перегенерация
+// тянет за собой push и pop-up. Правило выбора якоря повторяет серверное
+// resolveStyleAnchorKey: явный флаг → "email" → первый ai_reference-ассет.
+const anchorAssetKey = computed<string | null>(() => {
+  const assets = (bundle.value?.bundleType.assets ?? []).filter(
+    (a) => a.composeMode === "ai_reference",
+  );
+  if (assets.length === 0) return null;
+  const explicit = assets.find((a) => a.styleAnchor === true);
+  if (explicit) return explicit.key;
+  return (assets.find((a) => a.key === "email") ?? assets[0])!.key;
+});
+const dependentLabels = computed(() =>
+  (bundle.value?.bundleType.assets ?? [])
+    .filter((a) => a.composeMode === "ai_reference" && a.key !== anchorAssetKey.value)
+    .map((a) => a.label),
+);
+
+function isStyleAnchor(assetKey: string): boolean {
+  return anchorAssetKey.value === assetKey && dependentLabels.value.length > 0;
+}
+
+/** Regenerate якоря предупреждает о каскаде — это тройная стоимость прогона. */
+function regenerateWithCascade(assetKey: string, assetId: string) {
+  if (isStyleAnchor(assetKey)) {
+    const list = dependentLabels.value.join(" и ");
+    if (
+      !window.confirm(
+        `${list} будут перегенерированы заново, чтобы сохранить единый стиль кампании. Продолжить?`,
+      )
+    )
+      return;
+  }
+  void store.regenerateAsset(assetId);
+}
+
 // ---- Style-profile «казино-дизайнера» (DV-E1) — админский override ----
 // Стиль сцены (hue плашки, материал, токены, плотность, выбор декора) — данные,
 // не координаты. Сервер зажимает всё в коридоры спеки; применяется при
@@ -302,7 +339,7 @@ function formatDateTime(iso: string | null): string {
                 <!-- Safe-zone overlay: mock text block as it will be laid out
                      in the письме, positioned from the asset metadata. -->
                 <div
-                  v-if="safePreview && a.meta && a.status === 'done' && a.imageUrl"
+                  v-if="safePreview && a.meta?.safeZonePct && a.status === 'done' && a.imageUrl"
                   class="safe"
                   :style="safeZoneStyle(a.meta)"
                 >
@@ -328,6 +365,9 @@ function formatDateTime(iso: string | null): string {
                 <template v-else>
                   ⚠ Приёмка не пройдена — лучший из {{ a.meta.qa.attempts }}
                 </template>
+                <span v-if="a.meta.qa.score !== null && a.meta.qa.threshold !== null" class="asset__qa-score">
+                  оценка {{ a.meta.qa.score }} / порог {{ a.meta.qa.threshold }}
+                </span>
                 <span v-if="a.meta.qa.reasons.length" class="asset__qa-reasons">
                   {{ a.meta.qa.reasons.join(" · ") }}
                 </span>
@@ -335,7 +375,10 @@ function formatDateTime(iso: string | null): string {
 
               <p v-if="safePreview && a.meta" class="asset__meta">
                 spec {{ a.meta.specKey }}@v{{ a.meta.specVersion }} ·
-                safe {{ Math.round(a.meta.safeZonePct.w) }}% ·
+                <template v-if="a.meta.safeZonePct">
+                  safe {{ Math.round(a.meta.safeZonePct.w) }}% ·
+                </template>
+                <template v-else>без safe-зоны ·</template>
                 contrast {{ safeContrast(a.meta) }} ·
                 text {{ a.meta.recommendedTextColor || "—" }}
                 <span v-if="a.meta.validator && a.meta.validator.attempts > 1">
@@ -354,7 +397,8 @@ function formatDateTime(iso: string | null): string {
                   class="btn btn--sm"
                   type="button"
                   :disabled="a.status === 'generating' || a.status === 'pending'"
-                  @click="store.regenerateAsset(a.id)"
+                  :title="isStyleAnchor(a.assetKey) ? 'Перегенерирует и зависимые форматы — они наследуют стиль этой композиции' : undefined"
+                  @click="regenerateWithCascade(a.assetKey, a.id)"
                 >⟳ Regenerate</button>
                 <button
                   class="btn btn--sm"
@@ -848,6 +892,12 @@ function formatDateTime(iso: string | null): string {
 }
 :global(.dark) .asset__qa {
   background: rgba(180, 83, 9, 0.16);
+}
+.asset__qa-score {
+  display: block;
+  margin-top: 2px;
+  font-weight: 700;
+  opacity: 0.85;
 }
 .asset__qa-reasons {
   display: block;

@@ -4,6 +4,7 @@ import { fetchBuffer } from "./layerCache.js";
 import { validateAiAsset } from "../lib/aiAssetValidator.js";
 import type { AiTechReport } from "../lib/aiAssetValidator.js";
 import { reviewComposition, QA_REFS_SHOWN } from "../lib/vlmReviewer.js";
+import type { QaProfile } from "../lib/vlmReviewer.js";
 
 /**
  * Auto-healing композиции ai_reference (TASK safe-zone/auto-heal, B1/B2/B3).
@@ -45,24 +46,36 @@ export interface AiRefAttempt {
  * AI_REF_COMPOSITION_CONTRACT (белый фон, пустой центр) — чтобы починка одного
  * дефекта не сломала контракт в другом месте. Замечания приёмщик пишет
  * по-русски (QA_SYSTEM_PROMPT) — gpt-image-2 мультиязычна, не переводим.
+ *
+ * `keepCenterClear` (TASK multiformat-promo, DI2-4) — только для якорного
+ * формата: у push/pop-up copy space не нужен, и требование пустой середины
+ * выгрызло бы центр баннера при лечении постороннего дефекта.
  */
-export function buildHealingPrompt(reasons: string[]): string {
+export function buildHealingPrompt(
+  reasons: string[],
+  opts?: { keepCenterClear?: boolean },
+): string {
+  const keepCenterClear = opts?.keepCenterClear ?? true;
   const issues = reasons
     .map((r) => r.trim())
     .filter(Boolean)
     .slice(0, 10)
     .map((r) => `- ${r}`)
     .join("\n");
+  const centerRule = keepCenterClear
+    ? "the wide central copy space (the middle half of the banner, top to bottom) must remain " +
+      "COMPLETELY EMPTY white — remove any prop, coin, sparkle or particle that entered it; "
+    : "keep the existing composition and framing — this format has no reserved copy space, " +
+      "do not clear or empty the middle of the canvas; ";
   return (
-    "Retouch this existing casino email hero composition. Apply ONLY the minimal " +
+    "Retouch this existing casino promo hero composition. Apply ONLY the minimal " +
     "corrections needed to fix the QA issues listed below and change NOTHING else: " +
     "keep the same characters, props, palette, lighting, rendering style, proportions " +
     "and placement, identical outside the corrected spots.\n" +
     `QA issues to fix:\n${issues || "- general quality cleanup"}\n` +
     "MANDATORY constraints while fixing: the background stays pure solid white (#FFFFFF), " +
     "completely flat — remove any glow, gradients, bokeh, light rays or cast shadows on it; " +
-    "the wide central copy space (the middle half of the banner, top to bottom) must remain " +
-    "COMPLETELY EMPTY white — remove any prop, coin, sparkle or particle that entered it; " +
+    centerRule +
     "all key elements stay fully inside the frame; do not add any text, logos or watermarks."
   );
 }
@@ -100,10 +113,18 @@ export async function healComposition(opts: {
   refUrls: string[];
   variationText: string;
   brandName: string;
-  centerClearZone: { x: number; y: number; w: number; h: number };
+  /** Только у якорного формата (DI2-4); без неё чек центра не выполняется. */
+  centerClearZone?: { x: number; y: number; w: number; h: number };
+  /** Профиль чек-листа приёмки: тот же, что в генерации этого ассета. */
+  profile?: QaProfile;
+  /** Якорная композиция кампании — показывается приёмщику зависимых форматов. */
+  anchorUrl?: string | null;
+  formatLabel?: string;
   maxAttempts?: number;
 }): Promise<HealOutcome> {
   const max = opts.maxAttempts ?? AI_HEAL_MAX_ATTEMPTS;
+  const profile: QaProfile = opts.profile ?? "anchor";
+  const keepCenterClear = Boolean(opts.centerClearZone);
   const attempts: AiRefAttempt[] = [];
   // Текущий лучший кандидат — его лечим и его же отдаём, если лучше не станет.
   let best: HealWinner & { reasons: string[] } = {
@@ -115,7 +136,9 @@ export async function healComposition(opts: {
   };
 
   for (let attempt = 1; attempt <= max; attempt++) {
-    const prompt = buildHealingPrompt(best.reasons.length ? best.reasons : opts.source.reasons);
+    const prompt = buildHealingPrompt(best.reasons.length ? best.reasons : opts.source.reasons, {
+      keepCenterClear,
+    });
     const gen = await runGptImage2Edit({
       prompt,
       imageUrls: [best.imageUrl],
@@ -162,7 +185,7 @@ export async function healComposition(opts: {
     // (сломанный размер/резкость/центр) приёмщик не тратится, и такая
     // попытка не участвует в выборе лучшего.
     const tech = await validateAiAsset(buffer, opts.targetW, opts.targetH, {
-      centerClearZone: opts.centerClearZone,
+      ...(opts.centerClearZone ? { centerClearZone: opts.centerClearZone } : {}),
     });
     if (!tech.passed) {
       attempts.push({
@@ -180,6 +203,9 @@ export async function healComposition(opts: {
       refUrls: opts.refUrls.slice(0, QA_REFS_SHOWN),
       variationText: opts.variationText,
       brandName: opts.brandName,
+      profile,
+      anchorUrl: opts.anchorUrl ?? null,
+      ...(opts.formatLabel ? { formatLabel: opts.formatLabel } : {}),
     });
     const row: AiRefAttempt = {
       imageUrl: fitted.url,

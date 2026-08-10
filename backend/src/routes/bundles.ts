@@ -5,6 +5,7 @@ import { prisma } from "../lib/prisma.js";
 import {
   editAsset,
   launchGeneration,
+  listAiReferenceFormats,
   listBundleBrands,
   regenerateAsset,
 } from "../services/bundle.service.js";
@@ -90,6 +91,11 @@ bundlesRouter.get("/meta", async (_req: Request, res: Response) => {
  * Счётчики референсов вариации по базовым брендам (TASK ai-reference):
  * бейджи «7/15» и блокировка брендов с < min в мастере. Роут объявлен ДО
  * `/:id`, иначе его перехватит параметрический матч.
+ *
+ * TASK multiformat-promo (DI2-2): счётчики вложены по формату
+ * (`{ [brand]: { [assetKey]: number } }`), а `formats` перечисляет форматы,
+ * которые обязаны набрать минимум — бренд блокируется, если недобрал ХОТЯ БЫ
+ * один из них.
  */
 bundlesRouter.get("/ref-counts", async (req: Request, res: Response) => {
   const presetId = typeof req.query.presetId === "string" ? req.query.presetId.trim() : "";
@@ -97,8 +103,11 @@ bundlesRouter.get("/ref-counts", async (req: Request, res: Response) => {
     res.status(400).json({ error: "preset_id_required" });
     return;
   }
-  const counts = await refCountsByBrand(presetId);
-  res.json({ counts, min: MIN_REFS_FOR_GENERATION });
+  const [counts, formats] = await Promise.all([
+    refCountsByBrand(presetId),
+    listAiReferenceFormats(),
+  ]);
+  res.json({ counts, formats, min: MIN_REFS_FOR_GENERATION });
 });
 
 /** Project list: search + status tabs + pagination + per-status counts. */
@@ -198,7 +207,8 @@ bundlesRouter.post("/", async (req: Request, res: Response) => {
 interface AssetPreviewMeta {
   specKey: string;
   specVersion: number;
-  safeZonePct: { x: number; y: number; w: number; h: number };
+  /** null — у формата нет safe-зоны (push/pop-up без текста, DI2-4). */
+  safeZonePct: { x: number; y: number; w: number; h: number } | null;
   recommendedTextColor: string | null;
   luminance: number | null;
   textContrast: { white: number; dark: number } | null;
@@ -212,10 +222,13 @@ interface AssetPreviewMeta {
     attempts: number;
     reasons: string[];
     healing: { attempts: number; used: boolean } | null;
+    /** Оценка победителя и порог приёмки (TASK multiformat-promo, DI2-5). */
+    score: number | null;
+    threshold: number | null;
   } | null;
 }
 
-function isPctBox(v: unknown): v is AssetPreviewMeta["safeZonePct"] {
+function isPctBox(v: unknown): v is NonNullable<AssetPreviewMeta["safeZonePct"]> {
   if (typeof v !== "object" || v === null) return false;
   const b = v as Record<string, unknown>;
   return ["x", "y", "w", "h"].every((k) => typeof b[k] === "number" && Number.isFinite(b[k]));
@@ -224,13 +237,17 @@ function isPctBox(v: unknown): v is AssetPreviewMeta["safeZonePct"] {
 export function assetPreviewMeta(raw: unknown): AssetPreviewMeta | null {
   if (typeof raw !== "object" || raw === null) return null;
   const m = raw as Record<string, unknown>;
-  if (!isPctBox(m.safeZonePct)) return null;
+  // Safe-зона есть не у всех форматов (DI2-4): у push/pop-up она null, но
+  // остальные метаданные (в первую очередь вердикт приёмки) нужны CRM.
+  // Совсем чужая metadata (без specKey ai_reference/движка) — по-прежнему null.
+  const hasSafeZone = isPctBox(m.safeZonePct);
+  if (!hasSafeZone && typeof m.specKey !== "string") return null;
   const contrast = m.textContrast as Record<string, unknown> | null | undefined;
   const validator = m.validator as Record<string, unknown> | null | undefined;
   return {
     specKey: typeof m.specKey === "string" ? m.specKey : "",
     specVersion: typeof m.specVersion === "number" ? m.specVersion : 0,
-    safeZonePct: m.safeZonePct,
+    safeZonePct: hasSafeZone ? (m.safeZonePct as NonNullable<AssetPreviewMeta["safeZonePct"]>) : null,
     recommendedTextColor:
       typeof m.recommendedTextColor === "string" ? m.recommendedTextColor : null,
     luminance: typeof m.luminance === "number" ? m.luminance : null,
@@ -277,7 +294,18 @@ function projectQaMeta(raw: unknown): AssetPreviewMeta["qa"] {
       : typeof q.chosenAttempt === "number"
         ? (attempts[q.chosenAttempt] as unknown)
         : null;
-  return { passed: q.qaPassed, attempts: attempts.length, reasons: attemptReasons(chosen), healing };
+  const chosenScore =
+    chosen && typeof chosen === "object" && typeof (chosen as Record<string, unknown>).score === "number"
+      ? ((chosen as Record<string, unknown>).score as number)
+      : null;
+  return {
+    passed: q.qaPassed,
+    attempts: attempts.length,
+    reasons: attemptReasons(chosen),
+    healing,
+    score: chosenScore,
+    threshold: typeof q.threshold === "number" ? q.threshold : null,
+  };
 }
 
 /** Bundle details for the Result screen (variants + assets + summary). */

@@ -714,16 +714,22 @@ model NeuralPromptPreset {
   bundles    Bundle[]
 }
 
-/// Reference email banner for the ai_reference compose mode (TASK ai-reference,
-/// DI-R3/R5): finished 1200×600 banners uploaded per (variation × base brand).
-/// 5..15 per pair are allowed at rest; generation requires >= 5 and sends the
+/// Reference banner for the ai_reference compose mode (TASK ai-reference,
+/// DI-R3/R5): finished banners uploaded per (variation × base brand × format).
+/// 5..15 per triple are allowed at rest; generation requires >= 5 and sends the
 /// first 14 by sortOrder (nano-banana-2 /edit hard limit). Deliberately NOT
 /// tied to BrandNanoRef — that table serves the person-layer pipeline.
+///
+/// TASK multiformat-promo (DI2-1): email / popup / push have different
+/// stylistics, so references are stored per format. `assetKey` matches
+/// BundleType.assets[].key; the "email" default migrates every pre-existing
+/// row (all of them were email banners) without a data script.
 model VariationReference {
   id          String   @id @default(cuid())
   presetId    String
   preset      NeuralPromptPreset @relation(fields: [presetId], references: [id], onDelete: Cascade)
   brandName   String // BASE brand name, same values as Bundle.brandNames entries
+  assetKey    String   @default("email") // email | popup | push (BundleType asset key)
   imageUrl    String // Cloudinary secure_url
   publicId    String // Cloudinary public_id (for delete)
   width       Int
@@ -732,8 +738,10 @@ model VariationReference {
   createdById String?
   createdAt   DateTime @default(now())
 
-  @@unique([presetId, brandName, publicId])
-  @@index([presetId, brandName])
+  // The same banner may legitimately be uploaded to two formats, so publicId
+  // is unique per format, not per pair.
+  @@unique([presetId, brandName, assetKey, publicId])
+  @@index([presetId, brandName, assetKey])
 }
 
 /// One "Send to Smartico" run (D6): approved assets → Cloudinary + generated

@@ -204,3 +204,33 @@ describe("healComposition", () => {
     expect(out.attempts[0]!.reasons[0]).toContain("center");
   });
 });
+
+// TASK multiformat-promo (DI2-4): у push/pop-up copy space нет — лечение не
+// имеет права выгрызать середину кадра ради несуществующего требования.
+describe("лечение зависимых форматов (DI2-4)", () => {
+  it("keepCenterClear=false убирает требование пустого центра, инварианты фона остаются", () => {
+    const p = buildHealingPrompt(["лишняя рука"], { keepCenterClear: false });
+    expect(p).not.toContain("COMPLETELY EMPTY");
+    expect(p).toContain("this format has no reserved copy space");
+    expect(p).toContain("pure solid white");
+    expect(p).toContain("do not add any text");
+  });
+
+  it("без centerClearZone: чек центра не выполняется, приёмка идёт профилем secondary", async () => {
+    const { centerClearZone: _drop, ...withoutZone } = OPTS;
+    await healComposition({
+      ...withoutZone,
+      profile: "secondary",
+      anchorUrl: "https://cdn/email-base.png",
+      formatLabel: "Push",
+      maxAttempts: 1,
+    });
+    const techOpts = validator.validateAiAsset.mock.calls[0]![3];
+    expect(techOpts).toEqual({});
+    const [qaArgs] = reviewer.reviewComposition.mock.calls[0]!;
+    expect(qaArgs.profile).toBe("secondary");
+    expect(qaArgs.anchorUrl).toBe("https://cdn/email-base.png");
+    const [genArgs] = fal.runGptImage2Edit.mock.calls[0]!;
+    expect(genArgs.prompt).not.toContain("COMPLETELY EMPTY");
+  });
+});

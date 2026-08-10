@@ -14,6 +14,15 @@ import { runVisionQa } from "./fal.js";
  * requestCreativeBrief (нейтральный фолбэк) в Задании 3. Неразобранный ответ
  * после ре-запроса — наоборот брак попытки (`qa-unparseable`): модель ответила,
  * но контракт JSON нарушен, доверять такому «да» нельзя.
+ *
+ * TASK multiformat-promo:
+ *  - DI2-4: чек-лист зависит от ФОРМАТА. У якоря (email) центральная полоса
+ *    обязана быть пустой — туда ляжет текст; у push/pop-up текста не будет,
+ *    поэтому требование пустого центра снято, а вместо него добавлен пункт
+ *    сверки стиля с якорной композицией кампании.
+ *  - DI2-5: вердикт проходит ЧИСЛОВОЙ порог `AI_REF_QA_THRESHOLD` (дефолт 80).
+ *    Раньше слабая, но формально `pass: true` картинка принималась и человек
+ *    жал Regenerate руками; теперь она уходит в авто-ретрай/лечение.
  */
 
 export interface QaVerdict {
@@ -28,27 +37,84 @@ export interface QaVerdict {
 /** Сколько референсов показываем приёмщику рядом с результатом (первые по порядку). */
 export const QA_REFS_SHOWN = 3;
 
-export const QA_SYSTEM_PROMPT = [
-  // A-2 (2026-08-05): композиция намеренно на белом фоне под вырезание;
-  // белый фон и пустой центр — требование, а не расхождение с референсами.
-  "You are a strict QA reviewer («Приемщик») for casino email hero compositions (1200×600).",
-  "The FIRST image is the generated composition under review. The remaining images are reference banners of the same brand — the ground truth for style.",
-  "IMPORTANT: the composition is INTENTIONALLY rendered on a plain solid white background for later cut-out, even if the reference banners have scenic backgrounds. A white background is correct and must NEVER be reported as a style mismatch.",
+/** Профиль чек-листа: якорь кампании (email) или зависимый формат (push/pop-up). */
+export type QaProfile = "anchor" | "secondary";
+
+export const DEFAULT_QA_THRESHOLD = 80;
+
+/**
+ * Порог приёмки (DI2-5): одно общее число на все форматы, ENV меняется без
+ * деплоя кода. Мусорные значения игнорируются в пользу дефолта.
+ */
+export function qaThreshold(): number {
+  const raw = Number.parseInt(process.env.AI_REF_QA_THRESHOLD ?? "", 10);
+  if (!Number.isFinite(raw)) return DEFAULT_QA_THRESHOLD;
+  return Math.max(0, Math.min(100, raw));
+}
+
+const COMMON_HEAD = [
+  "You are a strict QA reviewer («Приемщик») for casino promo hero compositions.",
+  "The FIRST image is the generated composition under review.",
+];
+
+const COMMON_TAIL = [
+  'Respond with ONLY a JSON object, no prose, no markdown fences: {"pass": boolean, "score": number, "reasons": string[]}.',
+  '"score" is 0-100 overall quality. "reasons" lists concrete failures (empty if pass). Write reasons in Russian.',
+];
+
+/** Текстовое правило (A-1) — одинаково для всех форматов. */
+const TEXT_RULE =
+  "TEXT: the ONLY lettering allowed is single short casino words organically placed on props (slot reels, chips, crates, medallions). The allowed list includes, non-exhaustively: FS, FREE SPINS, SCATTER, BONUS, VIP, WILD, 777, JACKPOT, MEGA WIN, RELOAD, SPIN. Never flag a word from this list or a similar single casino term. FAIL only for: phrases or sentences, headlines, CTA buttons, logos, brand names, watermarks.";
+
+const ARTIFACTS_RULE =
+  "ANATOMY/ARTIFACTS: no deformed faces or hands, no extra limbs, no duplicated or melted objects, no visible generation artifacts. Intentional depth-of-field blur on small distant props is good design, NOT an artifact.";
+
+const WHITE_BG_NOTE =
+  "IMPORTANT: the composition is INTENTIONALLY rendered on a plain solid white background for later cut-out, even if the reference banners have scenic backgrounds. A white background is correct and must NEVER be reported as a style mismatch.";
+
+/** Чек-лист якорного формата (email 1200×600) — прежний, A-2/A-3. */
+const ANCHOR_CHECKLIST = [
+  "The remaining images are reference banners of the same brand — the ground truth for style.",
+  WHITE_BG_NOTE,
   "Evaluate the generated composition against this checklist:",
   "1. STYLE: palette, prop family, character style, lighting and rendering quality must match the reference banners. Ignore background differences (see above).",
   "2. BRIEF: the composition must express the campaign brief provided in the user prompt.",
   "3. BACKGROUND & CENTER: the background must be plain solid white with no scenery, gradients, glow or bokeh. The central band (the middle ~46% of the width, top to bottom) must be COMPLETELY EMPTY: any plate, oval, panel, frame, character part — and even a single small floating coin, gem, sparkle or particle — inside that band is a FAIL. The only exception is one or two tiny decorative props near the very bottom edge of the band. A headline and CTA will be overlaid there later.",
-  "4. TEXT: the ONLY lettering allowed is single short casino words organically placed on props (slot reels, chips, crates, medallions). The allowed list includes, non-exhaustively: FS, FREE SPINS, SCATTER, BONUS, VIP, WILD, 777, JACKPOT, MEGA WIN, RELOAD, SPIN. Never flag a word from this list or a similar single casino term. FAIL only for: phrases or sentences, headlines, CTA buttons, logos, brand names, watermarks.",
-  "5. ANATOMY/ARTIFACTS: no deformed faces or hands, no extra limbs, no duplicated or melted objects, no visible generation artifacts. Intentional depth-of-field blur on small distant props is good design, NOT an artifact.",
+  `4. ${TEXT_RULE}`,
+  `5. ${ARTIFACTS_RULE}`,
   "6. EMAIL HERO FITNESS: a clear designer-grade focal hierarchy (a large anchor group of props in a lower corner, the main character on the opposite side, smaller props around); the character and key props fully inside the frame, not cut by the canvas edges.",
-  'Respond with ONLY a JSON object, no prose, no markdown fences: {"pass": boolean, "score": number, "reasons": string[]}.',
-  '"score" is 0-100 overall quality. "reasons" lists concrete failures (empty if pass). Write reasons in Russian.',
-].join("\n");
+];
+
+/**
+ * Чек-лист зависимого формата (push / pop-up, DI2-4): текста на нём не будет,
+ * поэтому пустой центр не требуется; зато добавлена сверка с якорем кампании.
+ */
+const SECONDARY_CHECKLIST = [
+  "The SECOND image is the approved anchor creative of the SAME promo campaign (another format). The remaining images are reference banners of the same brand for this format.",
+  WHITE_BG_NOTE,
+  "Evaluate the generated composition against this checklist:",
+  "1. STYLE: palette, prop family, character style, lighting and rendering quality must match the reference banners. Ignore background differences (see above).",
+  "2. BRIEF: the composition must express the campaign brief provided in the user prompt.",
+  "3. CAMPAIGN STYLE MATCH: it must read as the SAME campaign as the anchor creative — same palette, same character design and outfit, same prop family, same lighting and rendering. A different character, a different color scheme or a different rendering technique is a FAIL. Note: a different layout, crop or aspect ratio is CORRECT and must never be reported — only the style has to match.",
+  "4. BACKGROUND: the background must be plain solid white with no scenery, gradients, glow, bokeh or cast shadows. There is NO required empty copy space in this format — props and the character may occupy the center freely.",
+  `5. ${TEXT_RULE}`,
+  `6. ${ARTIFACTS_RULE}`,
+  "7. FORMAT FITNESS: the composition must read well in its own aspect ratio — a clear focal hierarchy, the character and key props fully inside the frame with a margin from the edges, nothing important cut off.",
+];
+
+export function buildQaSystemPrompt(profile: QaProfile = "anchor"): string {
+  const checklist = profile === "secondary" ? SECONDARY_CHECKLIST : ANCHOR_CHECKLIST;
+  return [...COMMON_HEAD, ...checklist, ...COMMON_TAIL].join("\n");
+}
+
+/** Обратная совместимость: прежняя константа = чек-лист якорного формата. */
+export const QA_SYSTEM_PROMPT = buildQaSystemPrompt("anchor");
 
 /** Пользовательский промпт: бриф вариации + напоминание формата. */
-export function buildQaPrompt(variationText: string, brandName: string): string {
+export function buildQaPrompt(variationText: string, brandName: string, formatLabel?: string): string {
   return [
     `Brand: ${brandName}.`,
+    ...(formatLabel ? [`Format: ${formatLabel}.`] : []),
     `Campaign brief: ${variationText.trim() || "(not specified)"}`,
     "Review the first image against the checklist and answer with the JSON object only.",
   ].join("\n");
@@ -81,19 +147,44 @@ export function parseVerdict(text: string): QaVerdict | null {
 }
 
 /**
+ * Порог DI2-5: вердикт модели «принято» отменяется, если score ниже порога.
+ * Причина дописывается человекочитаемо — она уходит и в бейдж CRM, и в промпт
+ * коррекции auto-healing.
+ */
+export function applyThreshold(verdict: QaVerdict, threshold = qaThreshold()): QaVerdict {
+  if (!verdict.pass || verdict.score >= threshold) return verdict;
+  return {
+    ...verdict,
+    pass: false,
+    reasons: [
+      `оценка приёмки ${verdict.score} ниже порога ${threshold}`,
+      ...verdict.reasons,
+    ].slice(0, 10),
+  };
+}
+
+/**
  * Стадия B: вердикт приёмщика по сгенерированной композиции.
- * `refUrls` — референсы пары (передаются первые QA_REFS_SHOWN).
+ * `refUrls` — референсы формата (передаются первые QA_REFS_SHOWN);
+ * `anchorUrl` — якорная композиция кампании, показывается зависимым форматам
+ * ВТОРОЙ картинкой (порядок описан в SECONDARY_CHECKLIST).
  */
 export async function reviewComposition(opts: {
   imageUrl: string;
   refUrls: string[];
   variationText: string;
   brandName: string;
+  profile?: QaProfile;
+  anchorUrl?: string | null;
+  formatLabel?: string;
 }): Promise<QaVerdict> {
-  const imageUrls = [opts.imageUrl, ...opts.refUrls.slice(0, QA_REFS_SHOWN)];
-  const prompt = buildQaPrompt(opts.variationText, opts.brandName);
+  const profile: QaProfile = opts.profile ?? "anchor";
+  const systemPrompt = buildQaSystemPrompt(profile);
+  const anchorPart = profile === "secondary" && opts.anchorUrl ? [opts.anchorUrl] : [];
+  const imageUrls = [opts.imageUrl, ...anchorPart, ...opts.refUrls.slice(0, QA_REFS_SHOWN)];
+  const prompt = buildQaPrompt(opts.variationText, opts.brandName, opts.formatLabel);
 
-  const first = await runVisionQa({ prompt, imageUrls, systemPrompt: QA_SYSTEM_PROMPT });
+  const first = await runVisionQa({ prompt, imageUrls, systemPrompt });
   if (!first.success || !first.output) {
     return {
       pass: true,
@@ -103,17 +194,17 @@ export async function reviewComposition(opts: {
     };
   }
   const verdict = parseVerdict(first.output);
-  if (verdict) return verdict;
+  if (verdict) return applyThreshold(verdict);
 
   // Один ре-запрос со строгим напоминанием формата (R-2).
   const retry = await runVisionQa({
     prompt: `${prompt}\nYour previous answer was not valid JSON. Respond with ONLY the JSON object.`,
     imageUrls,
-    systemPrompt: QA_SYSTEM_PROMPT,
+    systemPrompt,
   });
   if (retry.success && retry.output) {
     const second = parseVerdict(retry.output);
-    if (second) return second;
+    if (second) return applyThreshold(second);
   }
   return { pass: false, score: 0, reasons: ["qa-unparseable: приёмщик не вернул валидный JSON"] };
 }
