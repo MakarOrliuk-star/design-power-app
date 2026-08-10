@@ -9,6 +9,7 @@
 // поэтому после выбора бренда появляются ВКЛАДКИ ФОРМАТОВ — по одной на
 // каждый ассет, у которого в /admin включён режим ai_reference.
 import { ref, computed, onMounted, watch } from "vue";
+import { effectiveRefCount, toneLabel } from "~/utils/refGating";
 
 const api = useApi();
 const store = useBundlesStore();
@@ -113,8 +114,12 @@ async function deletePreset(p: Preset) {
   }
 }
 
-// ---- Референсы тройки «вариация × бренд × формат» ----
+// ---- Референсы «вариация × бренд(тон) × формат» ----
 const selectedBrand = ref<string | null>(null);
+// Тон-вариант (DI2-10): персонажа задают референсы, поэтому у (Men) и (Women)
+// должны быть РАЗНЫЕ пулы. `selectedTone` — это и есть имя, под которым
+// хранятся строки: базовое («Betnella» = общий пул) либо полное имя варианта.
+const selectedTone = ref<string | null>(null);
 const formats = ref<RefFormat[]>([]);
 const selectedFormat = ref<string | null>(null);
 const refs = ref<RefRow[]>([]);
@@ -124,18 +129,62 @@ const uploadBusy = ref(false);
 const uploadReport = ref<string[]>([]);
 
 const tripleReady = computed(() =>
-  Boolean(selectedPresetId.value && selectedBrand.value && selectedFormat.value),
+  Boolean(selectedPresetId.value && selectedTone.value && selectedFormat.value),
 );
 
-/** Сколько референсов у бренда в конкретном формате. */
-function countOf(brand: string | null, format: string | null): number {
-  if (!brand || !format) return 0;
-  return counts.value[brand]?.[format] ?? 0;
+/**
+ * Тон-варианты выбранного бренда: «Общие» (базовое имя, работает для обоих
+ * полов) + по одному пункту на каждый существующий вариант. У брендов без
+ * разделения список схлопывается в один пункт и переключатель не рисуется.
+ */
+const toneOptions = computed<Array<{ key: string; label: string; own: boolean }>>(() => {
+  const group = store.brands.find((b) => b.key === selectedBrand.value);
+  if (!group) return [];
+  const genderVariants = group.variants.filter((v) => v.name !== group.key);
+  if (genderVariants.length === 0) return [{ key: group.key, label: "Общие", own: false }];
+  return [
+    { key: group.key, label: "Общие", own: false },
+    ...genderVariants.map((v) => ({
+      key: v.name,
+      label: toneLabel(v.displayName, group.key) || v.displayName,
+      own: true,
+    })),
+  ];
+});
+const showToneSwitch = computed(() => toneOptions.value.length > 1);
+
+/** Сколько референсов у выбранного тона в конкретном формате. */
+function countOf(tone: string | null, format: string | null): number {
+  if (!tone || !format) return 0;
+  return counts.value[tone]?.[format] ?? 0;
 }
 
-/** Сумма по всем форматам — подпись бренда в селекторе. */
+/**
+ * Фактический пул тона (зеркало серверного правила): свои референсы, а если их
+ * нет — общие бренда. По нему и рисуется счётчик на вкладке формата.
+ */
+function effectiveCount(format: string): number {
+  const base = selectedBrand.value;
+  const tone = selectedTone.value;
+  if (!base || !tone) return 0;
+  return effectiveRefCount(counts.value, base, tone, format);
+}
+
+/** true — пул тона пустой и в дело идут общие референсы бренда. */
+function inheritsBase(format: string): boolean {
+  const base = selectedBrand.value;
+  const tone = selectedTone.value;
+  return Boolean(base && tone && tone !== base && countOf(tone, format) === 0);
+}
+
+/** Сумма по всем форматам и тонам — подпись бренда в селекторе. */
 function brandTotal(brand: string): number {
-  return Object.values(counts.value[brand] ?? {}).reduce((s, n) => s + n, 0);
+  const group = store.brands.find((b) => b.key === brand);
+  const names = [brand, ...(group?.variants.map((v) => v.name) ?? [])];
+  return [...new Set(names)].reduce(
+    (sum, name) => sum + Object.values(counts.value[name] ?? {}).reduce((s, n) => s + n, 0),
+    0,
+  );
 }
 
 async function fetchFormats() {
@@ -161,7 +210,7 @@ async function fetchRefs() {
     const res = await api<{ refs: RefRow[]; counts: RefCounts }>("/api/crm-admin/bundle-refs", {
       query: {
         presetId: selectedPresetId.value,
-        brandName: selectedBrand.value,
+        brandName: selectedTone.value,
         assetKey: selectedFormat.value,
       },
     });
@@ -174,7 +223,12 @@ async function fetchRefs() {
   }
 }
 
-watch([selectedPresetId, selectedBrand, selectedFormat], () => {
+// Смена бренда сбрасывает тон на «Общие» — иначе с бренда с разделением
+// можно унести чужой ключ варианта на бренд, где его нет.
+watch(selectedBrand, (brand) => {
+  selectedTone.value = brand;
+});
+watch([selectedPresetId, selectedTone, selectedFormat], () => {
   uploadReport.value = [];
   void fetchRefs();
 });
@@ -190,7 +244,7 @@ async function onFilesPicked(e: Event) {
   try {
     const form = new FormData();
     form.append("presetId", selectedPresetId.value!);
-    form.append("brandName", selectedBrand.value!);
+    form.append("brandName", selectedTone.value!);
     form.append("assetKey", selectedFormat.value!);
     for (const f of files) form.append("files", f);
     const res = await api<{ results: Array<{ name: string; ok: boolean; reason?: string }> }>(
@@ -231,7 +285,7 @@ async function moveRef(index: number, delta: -1 | 1) {
       method: "POST",
       body: {
         presetId: selectedPresetId.value,
-        brandName: selectedBrand.value,
+        brandName: selectedTone.value,
         assetKey: selectedFormat.value,
         ids: next.map((r) => r.id),
       },
@@ -337,6 +391,21 @@ onMounted(() => {
           чтобы загружать референсы.
         </p>
         <template v-else>
+          <!-- Тон-варианты (DI2-10): персонажа задают референсы, поэтому у
+               (Men) и (Women) могут быть свои пулы. «Общие» — один пул на оба. -->
+          <div v-if="showToneSwitch" class="tone">
+            <button
+              v-for="t in toneOptions"
+              :key="t.key"
+              class="tone__item"
+              :class="{ 'tone__item--on': selectedTone === t.key }"
+              type="button"
+              :title="t.own ? 'Свой пул этого тона; пустой — берутся общие' : 'Общий пул: работает для обоих тонов'"
+              @click="selectedTone = t.key"
+            >
+              {{ t.label }}
+            </button>
+          </div>
           <!-- Вкладки форматов (DI2-1): у email, push и pop-up свои пулы. -->
           <nav class="tabs">
             <button
@@ -345,21 +414,31 @@ onMounted(() => {
               class="tabs__item"
               :class="{
                 'tabs__item--on': selectedFormat === f.key,
-                'tabs__item--low': countOf(selectedBrand, f.key) < MIN_REFS,
+                'tabs__item--low': effectiveCount(f.key) < MIN_REFS,
               }"
               type="button"
               :title="f.isAnchor ? 'Якорь кампании: задаёт стиль остальным форматам' : `${f.width}×${f.height}`"
               @click="selectedFormat = f.key"
             >
               {{ f.label }}<span v-if="f.isAnchor" class="tabs__anchor" title="Якорь кампании">★</span>
-              <b>{{ countOf(selectedBrand, f.key) }}</b>
+              <b :title="inheritsBase(f.key) ? 'Свой пул пуст — используются общие референсы бренда' : undefined">
+                {{ effectiveCount(f.key) }}<template v-if="inheritsBase(f.key)">*</template>
+              </b>
             </button>
           </nav>
 
-          <p v-if="refs.length < MIN_REFS" class="panel__warn">
+          <p
+            v-if="selectedFormat && inheritsBase(selectedFormat)"
+            class="panel__note panel__note--hint"
+          >
+            Свой пул этого тона пуст — в генерацию пойдут общие референсы бренда
+            ({{ effectiveCount(selectedFormat) }} шт.), и пол героя будет зависеть от них.
+            Загрузите сюда 5–15 баннеров, чтобы задать его явно.
+          </p>
+          <p v-else-if="refs.length < MIN_REFS" class="panel__warn">
             Для генерации нужно минимум {{ MIN_REFS }} референсов формата
             «{{ currentFormat?.label ?? selectedFormat }}» — сейчас {{ refs.length }}.
-            Бренд без полного набора по всем форматам в мастер не попадёт.
+            Бренд без полного набора по всем форматам и тонам в мастер не попадёт.
           </p>
           <ul v-if="uploadReport.length" class="panel__report">
             <li v-for="(r, i) in uploadReport" :key="i">✗ {{ r }}</li>
@@ -645,6 +724,33 @@ onMounted(() => {
 }
 .upload--busy {
   opacity: 0.6;
+}
+
+.tone {
+  display: inline-flex;
+  gap: 2px;
+  background: var(--color-segment);
+  border-radius: var(--radius-pill);
+  padding: 2px;
+  align-self: flex-start;
+}
+.tone__item {
+  border: none;
+  background: none;
+  color: var(--color-grey);
+  border-radius: var(--radius-pill);
+  padding: 4px 12px;
+  font-size: 11.5px;
+  font-weight: 600;
+  cursor: pointer;
+}
+.tone__item--on {
+  background: var(--color-white);
+  color: var(--color-text);
+}
+.panel__note--hint {
+  border-left: 2px solid var(--color-accent);
+  padding-left: 8px;
 }
 
 .tabs {

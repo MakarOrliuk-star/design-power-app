@@ -77,6 +77,30 @@ export function countFor(counts: RefCounts, brandName: string, assetKey: string)
 }
 
 /**
+ * Пул тон-варианта (TASK multiformat-promo, DI2-10). Персонажа в ai_reference
+ * задают именно референсы, поэтому «Betnella(Men)» и «Betnella(Women)» должны
+ * тянуть РАЗНЫЕ пулы — иначе пол героя в обоих комплектах случаен.
+ *
+ * Правило: у варианта есть свои референсы (хотя бы один) → берём их; пул
+ * пустой → падаем на общий пул базового бренда. Фолбэк делает разделение
+ * опциональным и побрендовым: уже загруженные общие пулы продолжают работать.
+ * Начатый, но недобранный пул варианта НЕ подменяется общим — иначе админ
+ * молча получил бы смесь полов вместо явной ошибки.
+ */
+export function resolveRefPoolName(
+  counts: RefCounts,
+  brandName: string,
+  baseBrandName: string,
+  assetKey: string,
+): { poolName: string; count: number } {
+  if (brandName !== baseBrandName) {
+    const own = countFor(counts, brandName, assetKey);
+    if (own > 0) return { poolName: brandName, count: own };
+  }
+  return { poolName: baseBrandName, count: countFor(counts, baseBrandName, assetKey) };
+}
+
+/**
  * Референсы, уходящие в генерацию: первые MAX_EDIT_REFS по порядку админа.
  * Бросает, если меньше MIN_REFS_FOR_GENERATION — процессор переводит ассет в
  * FAILED с этой причиной (гейт в роуте generate должен был отсечь раньше).
@@ -85,11 +109,18 @@ export async function pickGenerationRefs(
   presetId: string,
   brandName: string,
   assetKey: string,
+  /** Базовое имя бренда: пул тон-варианта пуст → берём общий (DI2-10). */
+  baseBrandName?: string,
 ): Promise<VariationRefDto[]> {
-  const refs = await listRefs(presetId, brandName, assetKey);
+  let poolName = brandName;
+  let refs = await listRefs(presetId, brandName, assetKey);
+  if (refs.length === 0 && baseBrandName && baseBrandName !== brandName) {
+    poolName = baseBrandName;
+    refs = await listRefs(presetId, baseBrandName, assetKey);
+  }
   if (refs.length < MIN_REFS_FOR_GENERATION) {
     throw new Error(
-      `ai_reference: у бренда "${brandName}" (формат ${assetKey}) ${refs.length} референсов, нужно >= ${MIN_REFS_FOR_GENERATION}`,
+      `ai_reference: у бренда "${poolName}" (формат ${assetKey}) ${refs.length} референсов, нужно >= ${MIN_REFS_FOR_GENERATION}`,
     );
   }
   return refs.slice(0, MAX_EDIT_REFS);

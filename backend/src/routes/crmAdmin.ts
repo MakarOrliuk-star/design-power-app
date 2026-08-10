@@ -144,10 +144,14 @@ export interface RefUploadResult {
   reason?: string;
 }
 
-/** Базовый бренд должен существовать среди активных (те же ключи, что в мастере). */
-async function isKnownBaseBrand(brandName: string): Promise<boolean> {
+/**
+ * Адресат референсов — либо базовый бренд («Betnella» = общий пул), либо
+ * конкретный тон-вариант («Betnella(Men)» = свой пул, DI2-10). Оба варианта
+ * берутся из тех же активных брендов, что видит мастер.
+ */
+async function isKnownBrandTarget(brandName: string): Promise<boolean> {
   const groups = await listBundleBrands();
-  return groups.some((g) => g.key === brandName);
+  return groups.some((g) => g.key === brandName || g.variants.some((v) => v.name === brandName));
 }
 
 /**
@@ -215,8 +219,11 @@ crmAdminRouter.post("/bundle-refs", async (req: Request, res: Response) => {
       res.status(404).json({ error: "preset_not_found" });
       return;
     }
-    if (!(await isKnownBaseBrand(brandName))) {
-      res.status(404).json({ error: "brand_not_found", hint: "ожидается БАЗОВОЕ имя бренда" });
+    if (!(await isKnownBrandTarget(brandName))) {
+      res.status(404).json({
+        error: "brand_not_found",
+        hint: "ожидается имя бренда или его тон-варианта",
+      });
       return;
     }
     // Формат должен быть реально включён в ai_reference — иначе загруженные

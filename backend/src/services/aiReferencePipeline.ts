@@ -350,8 +350,10 @@ export async function processAiReferenceAsset(opts: {
   let refs;
   try {
     // Референсы — строго своего формата (DI2-2): у email, push и pop-up
-    // разная стилистика, фолбэка на чужой пул нет.
-    refs = await pickGenerationRefs(bundle.presetId, baseBrand, assetKey);
+    // разная стилистика, фолбэка на чужой ФОРМАТ нет. По тону наоборот:
+    // сначала пул конкретного варианта ("Betnella(Men)"), и только если он
+    // пуст — общий пул бренда (DI2-10).
+    refs = await pickGenerationRefs(bundle.presetId, opts.brandName, assetKey, baseBrand);
   } catch (err) {
     await fail(err instanceof Error ? err.message : String(err));
     return { ok: false };

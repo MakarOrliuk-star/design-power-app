@@ -9,6 +9,7 @@ import {
   pickGenerationRefs,
   refCountsByBrand,
   countFor,
+  resolveRefPoolName,
   refsFolder,
   brandSlug,
   MAX_EDIT_REFS,
@@ -73,6 +74,74 @@ describe("refCountsByBrand (TASK multiformat-promo, DI2-2)", () => {
     expect(countFor(counts, "Betnella", "push")).toBe(5);
     expect(countFor(counts, "Betnella", "popup")).toBe(0);
     expect(countFor(counts, "Unknown", "email")).toBe(0);
+  });
+});
+
+// Тон-варианты (TASK multiformat-promo, DI2-10): в ai_reference персонажа
+// задают референсы, поэтому у (Men) и (Women) должны быть свои пулы — иначе
+// пол героя в обоих комплектах случаен.
+describe("resolveRefPoolName / фолбэк тона", () => {
+  const counts = {
+    Betnella: { email: 8, push: 7 },
+    "Betnella(Men)": { email: 6 },
+    "Betnella(Women)": { email: 2 },
+  };
+
+  it("свой непустой пул варианта побеждает общий", () => {
+    expect(resolveRefPoolName(counts, "Betnella(Men)", "Betnella", "email")).toEqual({
+      poolName: "Betnella(Men)",
+      count: 6,
+    });
+  });
+
+  it("пустой пул варианта наследует общий пул бренда", () => {
+    expect(resolveRefPoolName(counts, "Betnella(Men)", "Betnella", "push")).toEqual({
+      poolName: "Betnella",
+      count: 7,
+    });
+  });
+
+  it("начатый, но недобранный пул НЕ подменяется общим (иначе смесь полов молча)", () => {
+    expect(resolveRefPoolName(counts, "Betnella(Women)", "Betnella", "email")).toEqual({
+      poolName: "Betnella(Women)",
+      count: 2,
+    });
+  });
+
+  it("бренд без тон-вариантов работает как раньше", () => {
+    expect(resolveRefPoolName(counts, "Betnella", "Betnella", "email")).toEqual({
+      poolName: "Betnella",
+      count: 8,
+    });
+  });
+});
+
+describe("pickGenerationRefs — фолбэк на общий пул (DI2-10)", () => {
+  it("пул варианта пуст → читаем общий пул базового бренда", async () => {
+    db.variationReference.findMany
+      .mockResolvedValueOnce([]) // Betnella(Men)
+      .mockResolvedValueOnce(refRows(6)); // Betnella
+    const picked = await pickGenerationRefs("p1", "Betnella(Men)", "email", "Betnella");
+    expect(picked).toHaveLength(6);
+    expect(db.variationReference.findMany).toHaveBeenNthCalledWith(
+      2,
+      expect.objectContaining({
+        where: { presetId: "p1", brandName: "Betnella", assetKey: "email" },
+      }),
+    );
+  });
+
+  it("у варианта свои референсы → общий пул не читается вовсе", async () => {
+    db.variationReference.findMany.mockResolvedValue(refRows(7));
+    await pickGenerationRefs("p1", "Betnella(Men)", "email", "Betnella");
+    expect(db.variationReference.findMany).toHaveBeenCalledTimes(1);
+  });
+
+  it("в ошибке назван пул, который реально проверяли", async () => {
+    db.variationReference.findMany.mockResolvedValueOnce([]).mockResolvedValueOnce(refRows(3));
+    await expect(pickGenerationRefs("p1", "Betnella(Men)", "push", "Betnella")).rejects.toThrow(
+      'у бренда "Betnella" (формат push) 3 референсов',
+    );
   });
 });
 

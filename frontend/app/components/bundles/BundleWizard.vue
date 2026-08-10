@@ -63,9 +63,10 @@ watch(
   },
 );
 
-/** Худший формат бренда — его число и показывает бейдж (DI2-2). */
+/** Худший формат бренда по всем тон-вариантам — его и показывает бейдж (DI2-2). */
 function brandRefCount(key: string): number {
-  return worstRefCount(store.refCounts, store.refFormats, key);
+  const variants = store.brands.find((b) => b.key === key)?.variants ?? [];
+  return worstRefCount(store.refCounts, store.refFormats, key, variants);
 }
 /** Подсказка «каких форматов не хватает» — иначе бренд молча заблокирован. */
 function brandMissingHint(key: string): string {

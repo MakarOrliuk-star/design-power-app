@@ -303,7 +303,13 @@ export const useBundlesStore = defineStore("bundles", () => {
 
   /** Форматы бренда, недобравшие минимум — пусто = бренд готов к генерации. */
   function missingRefFormats(brandKey: string): MissingFormat[] {
-    return missingRefFormatsFor(refCounts.value, refFormats.value, refCountsMin.value, brandKey);
+    return missingRefFormatsFor(
+      refCounts.value,
+      refFormats.value,
+      refCountsMin.value,
+      brandKey,
+      brands.value.find((b) => b.key === brandKey)?.variants ?? [],
+    );
   }
 
   // ---- Selected bundle (Result screen, Phase 5) ----
