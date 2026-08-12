@@ -157,7 +157,7 @@ async function onDelete(b: MyBrand) {
             <div v-if="expandedId === b.id" class="tests">
               <div v-if="testsLoading" class="tests__state">Загрузка тестов…</div>
               <div v-else-if="tests.length === 0" class="tests__state">
-                Сохранённых тестов пока нет.
+                Тестов пока нет.
               </div>
               <div v-else class="tests__row">
                 <a

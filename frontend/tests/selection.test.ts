@@ -14,7 +14,7 @@ describe("selection", () => {
     expect(areAllSelected(["a", "b"], new Set(["a", "b"]))).toBe(true);
   });
 
-  it("toggleSelect / toggleSelectAll drive selectedImages reactively", async () => {
+  it("toggleSelect / selectAll / clearSelection drive selectedImages reactively", async () => {
     const images = [makeImage(), makeImage(), makeImage()];
     const api = makeApi({ images, total: 3, hasMore: false });
     const { result, unmount } = withSetup(() => useResult({ api, gen: makeGen() }));
@@ -29,13 +29,30 @@ describe("selection", () => {
     result.toggleSelect(images[0]!.id);
     expect(result.isSelected(images[0]!.id)).toBe(false);
 
-    // Select all → every image selected; toggling again clears.
-    result.toggleSelectAll();
+    // Задача 1: two one-way actions, not a toggle. "Select all" twice must stay
+    // selected — only "Clear All" empties the selection.
+    result.selectAll();
     expect(result.allSelected.value).toBe(true);
+    expect(result.hasSelection.value).toBe(true);
     expect(result.selectedImages.value).toHaveLength(3);
-    result.toggleSelectAll();
+    result.selectAll();
+    expect(result.selectedImages.value).toHaveLength(3);
+
+    result.clearSelection();
     expect(result.allSelected.value).toBe(false);
+    expect(result.hasSelection.value).toBe(false);
     expect(result.selectedImages.value).toHaveLength(0);
+
+    unmount();
+  });
+
+  it("clearSelection on an empty selection keeps the same Set (no watcher churn)", async () => {
+    const api = makeApi({ images: [], total: 0, hasMore: false });
+    const { result, unmount } = withSetup(() => useResult({ api, gen: makeGen() }));
+
+    const before = result.selected.value;
+    result.clearSelection();
+    expect(result.selected.value).toBe(before);
 
     unmount();
   });

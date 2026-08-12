@@ -211,6 +211,7 @@ describe("POST /api/my-brands/editable/:id/test — draft test", () => {
       brandId: "b1",
       prompt: "a dog on a cloud",
       aspectRatio: "9:16",
+      draft: true, // задача 5: the preview stays out of Results
       overrides: {
         personPrompt: "draft system prompt",
         referenceImages: ["https://cdn/new-ref.png"],
@@ -221,7 +222,7 @@ describe("POST /api/my-brands/editable/:id/test — draft test", () => {
     expect(services.updateBrandAudited).not.toHaveBeenCalled();
   });
 
-  it("omits overrides entirely when none are sent (plain saved-state test)", async () => {
+  it("omits overrides entirely when none are sent, but stays a draft run", async () => {
     db.brandFindUnique.mockResolvedValue({ id: "b1" });
     services.createBrandTestBatch.mockResolvedValue({ batchId: "bt1", generationId: "g1" });
 
@@ -235,6 +236,7 @@ describe("POST /api/my-brands/editable/:id/test — draft test", () => {
       brandId: "b1",
       prompt: "x",
       aspectRatio: "9:16",
+      draft: true,
     });
   });
 

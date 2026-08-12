@@ -474,7 +474,8 @@ generateRouter.post("/generate/inpaint", async (req: Request, res: Response) => 
 // Result page tabs (TASK §3). Content type is derived from actionType:
 //   FULL / NANO_REF -> Person, CREATE_ITEM -> Item. There is no BACKGROUND
 //   pipeline yet, so that tab returns nothing (Phase 0 decision). Edited images
-//   (isEdit=true) live only in the "edited" tab and are excluded elsewhere.
+//   (isEdit=true) show up in "generated" (= General) and "edited"; the typed
+//   Person/Item tabs stay edit-free (задача 3).
 type ContentType = "Person" | "Item" | "Background" | "Tournament";
 function contentTypeOf(actionType: "FULL" | "CREATE_ITEM" | "NANO_REF" | "TOURNAMENT"): ContentType {
   if (actionType === "TOURNAMENT") return "Tournament";
@@ -501,9 +502,10 @@ function tabWhere(
       return { actionType: "TOURNAMENT" };
     case "generated":
     default:
-      // Tournament results live in their own Result tab ("Tournament Pack",
-      // Phase 6) — keep them out of the generic gallery tabs.
-      return { isEdit: false, actionType: { not: "TOURNAMENT" } };
+      // "General" (задача 3): EVERYTHING the user generated, edits included —
+      // the Edited tab stays the edits-only view. Tournament results live in
+      // their own tab ("Tournament Pack", Phase 6), so they stay excluded.
+      return { actionType: { not: "TOURNAMENT" } };
   }
 }
 

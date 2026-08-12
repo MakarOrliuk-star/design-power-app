@@ -267,8 +267,6 @@ const testAspect = ref<"1:1" | "9:16">("9:16");
 const testRunning = ref(false);
 const testError = ref("");
 const testImageUrl = ref<string | null>(null);
-const testGenerationId = ref<string | null>(null);
-const testSaved = ref(false);
 let pollTimer: ReturnType<typeof setTimeout> | null = null;
 
 function resetTest() {
@@ -279,8 +277,6 @@ function resetTest() {
   testRunning.value = false;
   testError.value = "";
   testImageUrl.value = null;
-  testGenerationId.value = null;
-  testSaved.value = false;
 }
 
 async function runTest() {
@@ -288,12 +284,11 @@ async function runTest() {
   testRunning.value = true;
   testError.value = "";
   testImageUrl.value = null;
-  testGenerationId.value = null;
-  testSaved.value = false;
   try {
     // Edit-any mode tests the DRAFT (unsaved) state — prompts/refs/model ride
-    // as overrides and nothing is written to the brand until «Сохранить».
-    const { batchId, generationId } = isEditAny.value
+    // as overrides; the BRAND itself changes only via the form's «Сохранить».
+    // The resulting image always lands in Results (задача 5).
+    const { batchId } = isEditAny.value
       ? await store.runDraftTest(brandId.value, {
           prompt: testPrompt.value.trim(),
           aspectRatio: testAspect.value,
@@ -301,7 +296,6 @@ async function runTest() {
           referenceImages: draft.value.referenceImages.map((s) => s.trim()).filter(Boolean),
         })
       : await store.runTest(brandId.value, testPrompt.value.trim(), testAspect.value);
-    testGenerationId.value = generationId;
     pollTest(batchId);
   } catch {
     testRunning.value = false;
@@ -328,16 +322,6 @@ function pollTest(batchId: string) {
       pollTest(batchId); // transient poll error → keep trying
     }
   }, 3000);
-}
-
-async function saveTestResult() {
-  if (!brandId.value || !testGenerationId.value || testSaved.value) return;
-  try {
-    await store.saveTest(brandId.value, testGenerationId.value);
-    testSaved.value = true;
-  } catch {
-    testError.value = "Не удалось сохранить результат.";
-  }
 }
 
 function close() {
@@ -378,22 +362,17 @@ onBeforeUnmount(() => {
             </template>
           </p>
 
-          <label v-if="isEditAny" class="field">
+          <!-- Searchable picker (задача 6). It only REQUESTS a switch — the
+               unsaved-changes guard lives in selectEditable(). -->
+          <div v-if="isEditAny" class="field">
             <span class="field__label">Бренд</span>
-            <select
-              class="input"
-              :value="brandId ?? ''"
-              :disabled="editableLoading"
-              @change="selectEditable(($event.target as HTMLSelectElement).value)"
-            >
-              <option value="" disabled>
-                {{ editableLoading ? "Загрузка…" : "Выберите бренд" }}
-              </option>
-              <option v-for="b in store.editableBrands" :key="b.id" :value="b.id">
-                {{ b.name }}{{ b.isActive ? "" : " (выключен)" }}
-              </option>
-            </select>
-          </label>
+            <SuperDesignerBrandCombobox
+              :brands="store.editableBrands"
+              :model-value="brandId"
+              :loading="editableLoading"
+              @select="selectEditable"
+            />
+          </div>
 
           <form
             :class="['form', { 'form--off': isEditAny && !created }]"
@@ -602,20 +581,22 @@ onBeforeUnmount(() => {
             </div>
           </div>
 
+          <!-- Задача 5: no «Сохранить» step. A test of the SAVED brand goes to
+               the common Results pool by itself; a draft test (edit-any mode)
+               stays a preview — it doesn't match the stored brand. -->
           <div class="test-foot">
-            <button
-              class="btn btn--ghost"
-              type="button"
-              :disabled="!testImageUrl || testSaved"
-              @click="saveTestResult"
-            >
-              <svg viewBox="0 0 24 24" width="18" height="18" fill="none" aria-hidden="true">
-                <path d="M5 5h11l3 3v11H5z" stroke="currentColor" stroke-width="1.6" stroke-linejoin="round" />
-                <path d="M8 5v5h7V5M8 19v-5h8v5" stroke="currentColor" stroke-width="1.6" stroke-linejoin="round" />
+            <span v-if="testImageUrl && !isEditAny" class="test-badge">
+              <svg viewBox="0 0 24 24" width="15" height="15" fill="none" aria-hidden="true">
+                <path d="M5 12.5l4 4 10-10" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" />
               </svg>
-              {{ testSaved ? "Сохранено ✓" : "Сохранить" }}
-            </button>
-            <span v-if="testSaved" class="test-foot__hint">Картинка добавлена в Results.</span>
+              Картинка добавлена в Results
+            </span>
+            <span v-else class="test-foot__hint">
+              <template v-if="isEditAny">
+                Предпросмотр черновика — в Results не сохраняется.
+              </template>
+              <template v-else>Готовый результат автоматически попадёт в Results.</template>
+            </span>
           </div>
         </section>
       </div>
@@ -962,6 +943,17 @@ onBeforeUnmount(() => {
 .test-foot__hint {
   font-size: 13px;
   color: var(--color-grey);
+}
+.test-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  padding: 6px 12px;
+  border-radius: var(--radius-pill);
+  background: rgba(138, 56, 245, 0.12);
+  border: 1px solid rgba(138, 56, 245, 0.3);
+  font-size: 13px;
+  color: var(--color-accent);
 }
 
 /* small screens: the fixed frame can't fit — fall back to a scrollable stack */

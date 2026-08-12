@@ -124,6 +124,21 @@ export function areAllSelected(ids: string[], selected: Set<string>): boolean {
 }
 
 /**
+ * Validate a tab coming from the URL (`?tab=`). Anything unknown — or a tab that
+ * is disabled (Background has no pipeline) — falls back to "generated", so a
+ * stale/hand-edited link can never strand the page on an empty view.
+ */
+export function parseTab(raw: unknown, tabs = RESULT_TABS): TabKey {
+  const hit = tabs.find((t) => t.key === raw && !t.disabled);
+  return hit ? hit.key : "generated";
+}
+
+/** Validate a selection mode coming from the URL (`?mode=`); default ALL. */
+export function parseMode(raw: unknown): SelectMode {
+  return raw === "EACH" ? "EACH" : "ALL";
+}
+
+/**
  * Real-time merge (TASK §6): prepend only images whose id isn't already shown.
  * Duplicates are ignored so polling never double-inserts. Returns the (possibly
  * unchanged) list plus how many were genuinely new.
@@ -271,11 +286,21 @@ export function useResult(deps: {
    *  and the browser-download side effect, injected like in ArchiveDeps. */
   apiBase?: string;
   download?: (url: string) => void;
+  /**
+   * Tab/mode restored from the URL (задача 4). The router itself stays in the
+   * page — this composable must remain Nuxt-free so it can be unit-tested — so
+   * `result.vue` reads `route.query` into `initial` and pushes changes back
+   * through `onStateChange`.
+   */
+  initial?: { tab?: unknown; mode?: unknown };
+  onStateChange?: (state: { tab: TabKey; mode: SelectMode }) => void;
 }) {
-  const { api, gen, apiBase = "", download } = deps;
+  const { api, gen, apiBase = "", download, onStateChange } = deps;
 
-  const activeTab = ref<TabKey>("generated");
-  const selectMode = ref<SelectMode>("ALL");
+  // Restored straight into the refs (not via selectTab) so mounting issues
+  // exactly ONE gallery request instead of a default load plus a tab switch.
+  const activeTab = ref<TabKey>(parseTab(deps.initial?.tab));
+  const selectMode = ref<SelectMode>(parseMode(deps.initial?.mode));
 
   const images = ref<GalleryImage[]>([]);
   const total = ref(0);
@@ -317,6 +342,17 @@ export function useResult(deps: {
     void load();
   }
 
+  /** «Обновить»: re-read the current tab only (the Tournament tab reloads itself). */
+  function reload() {
+    newReadyCount.value = 0;
+    void load(true);
+  }
+
+  // Mirror tab/mode into the URL (`?tab=&mode=`) so a reload keeps the view.
+  watch([activeTab, selectMode], ([tab, mode]) =>
+    onStateChange?.({ tab: tab as TabKey, mode: mode as SelectMode }),
+  );
+
   // ---- Selection ----
   const selected = ref<Set<string>>(new Set());
   function toggleSelect(id: string) {
@@ -331,8 +367,18 @@ export function useResult(deps: {
 
   const allImageIds = computed(() => images.value.map((i) => i.id));
   const allSelected = computed(() => areAllSelected(allImageIds.value, selected.value));
-  function toggleSelectAll() {
-    selected.value = allSelected.value ? new Set() : new Set(allImageIds.value);
+  const hasSelection = computed(() => selected.value.size > 0);
+  /**
+   * «Select all» / «Clear All» (задача 1) are two one-way actions, not a toggle:
+   * with many images ticked the Scale panel goes dark (it needs exactly one), and
+   * a toggle made clearing depend on whether *everything* happened to be selected.
+   */
+  function selectAll() {
+    selected.value = new Set(allImageIds.value);
+  }
+  function clearSelection() {
+    if (!selected.value.size) return;
+    selected.value = new Set();
   }
 
   const selectedImages = computed(() => images.value.filter((i) => selected.value.has(i.id)));
@@ -387,12 +433,12 @@ export function useResult(deps: {
       // Track in the generator store → toolbar progress + completion toast + drives
       // the Result-page auto-refresh below (TASK §6).
       gen.addBatch(res.batchId, "item");
-      editMsg.value = "Отправлено! Результат появится во вкладке Edited.";
+      // Задача 2: no redirect to Edited — the user stays where they are. The
+      // running batch starts the poller, which merges the finished images into
+      // the current tab (General now includes edits, задача 3). Prompts are kept
+      // on purpose so the same instruction can be re-run on another selection.
+      editMsg.value = "Отправлено — результат появится в General и Edited.";
       selected.value = new Set();
-      editPrompt.value = "";
-      perEditPrompts.value = {};
-      activeTab.value = "edited";
-      void load();
     } catch (e: unknown) {
       const code = (e as { data?: { error?: string } })?.data?.error;
       editError.value =
@@ -594,12 +640,15 @@ export function useResult(deps: {
     hasMore,
     loading,
     load,
+    reload,
     // selection
     selected,
     toggleSelect,
     isSelected,
     allSelected,
-    toggleSelectAll,
+    hasSelection,
+    selectAll,
+    clearSelection,
     selectedImages,
     // zip export
     exportZip,

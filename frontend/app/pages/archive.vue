@@ -27,8 +27,9 @@ const {
   load,
   isSelected,
   toggleSelect,
-  allSelected,
-  toggleSelectAll,
+  hasSelection,
+  selectAll,
+  clearSelection,
   selectedImages,
   copyUrl,
   downloadOne,
@@ -202,9 +203,19 @@ const viewerItems = computed(() =>
             </svg>
           </span>
         </div>
-        <button v-if="!isTournament" class="select-all" type="button" @click="toggleSelectAll">
-          {{ allSelected ? "Deselect all" : "Select all" }}
-        </button>
+        <!-- Same pair as on Result (задача 1): «Select all» only selects, «Clear
+             All» only clears — no toggle. -->
+        <template v-if="!isTournament">
+          <button class="select-all" type="button" @click="selectAll">Select all</button>
+          <button
+            class="select-all select-all--clear"
+            type="button"
+            :disabled="!hasSelection"
+            @click="clearSelection"
+          >
+            Clear All
+          </button>
+        </template>
       </div>
 
       <!-- Grid -->
@@ -553,8 +564,15 @@ const viewerItems = computed(() =>
   color: var(--color-text);
   white-space: nowrap;
 }
-.select-all:hover {
+.select-all:hover:not(:disabled) {
   color: var(--color-accent);
+}
+.select-all--clear {
+  color: var(--color-grey);
+}
+.select-all:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
 }
 
 /* ---- grid lane (local scroll) ---- */

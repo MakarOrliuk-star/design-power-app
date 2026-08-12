@@ -64,7 +64,13 @@ myBrandsRouter.get("/", async (req: Request, res: Response) => {
       categories: { select: { categoryId: true } },
       nanoRef: { select: { referenceImages: true, stylePrompt: true } },
       prompts: { where: { type: "PERSON" }, select: { content: true } },
-      _count: { select: { testGenerations: { where: { isTest: false, status: "DONE" } } } },
+      // «Тесты (N)» counts runs from the test panel that landed in Results
+      // (задача 5) — draft runs of unsaved values are excluded, see /:id/tests.
+      _count: {
+        select: {
+          testGenerations: { where: { isBrandTest: true, isTest: false, status: "DONE" } },
+        },
+      },
     },
   });
   const categories = await prisma.brandCategory.findMany({
@@ -215,28 +221,11 @@ myBrandsRouter.post("/:id/test", async (req: Request, res: Response) => {
   }
 });
 
-// ---- «Сохранить»: keep a finished test image → it lands in Results ----
-myBrandsRouter.post("/:id/test/:generationId/save", async (req: Request, res: Response) => {
-  const own = await loadOwnBrand(req, res);
-  if (!own) return;
-  const generationId = String(req.params.generationId ?? "");
-  const gen = await prisma.generation.findUnique({
-    where: { id: generationId },
-    select: { id: true, userId: true, brandId: true, isTest: true, status: true },
-  });
-  if (!gen || gen.brandId !== own.id || gen.userId !== req.user!.sub) {
-    res.status(404).json({ error: "generation_not_found" });
-    return;
-  }
-  if (gen.status !== "DONE") {
-    res.status(409).json({ error: "not_done" });
-    return;
-  }
-  if (gen.isTest) {
-    await prisma.generation.update({ where: { id: gen.id }, data: { isTest: false } });
-  }
-  res.json({ ok: true });
-});
+// NOTE (задача 5): there is no «Сохранить» step anymore. Test runs are created
+// visible (isBrandTest=true, isTest=false) and go straight to the common Results
+// pool, so POST /:id/test/:generationId/save is gone. It was also broken by
+// design for «Редактировать стиль»: it went through loadOwnBrand(), so testing a
+// brand the caller does not own always 404'd.
 
 // ============================================================
 // «Edit current style» (TASK download-and-edit-style §2): a super-designer may
@@ -371,6 +360,10 @@ myBrandsRouter.post("/editable/:id/test", async (req: Request, res: Response) =>
       brandId: id,
       prompt,
       aspectRatio,
+      // This endpoint always tests UNSAVED modal values, so the result stays out
+      // of Results — it would otherwise appear under the brand's name without
+      // matching the stored brand (задача 5).
+      draft: true,
       ...(Object.keys(overrides).length ? { overrides } : {}),
     });
     res.json(result);
@@ -379,7 +372,11 @@ myBrandsRouter.post("/editable/:id/test", async (req: Request, res: Response) =>
   }
 });
 
-// ---- Saved test results for a brand (Library) ----
+// ---- Test results for a brand (Library) ----
+// Matched by ORIGIN (isBrandTest) — задача 5 made saved-state test runs visible
+// in Results, so `isTest: false` alone would now catch the brand's regular
+// images too. Draft runs from «Редактировать стиль» stay out (isTest=true):
+// they are throwaway previews of unsaved values.
 myBrandsRouter.get("/:id/tests", async (req: Request, res: Response) => {
   const own = await loadOwnBrand(req, res);
   if (!own) return;
@@ -388,6 +385,7 @@ myBrandsRouter.get("/:id/tests", async (req: Request, res: Response) => {
       brandId: own.id,
       userId: req.user!.sub,
       actionType: "NANO_REF",
+      isBrandTest: true,
       isTest: false,
       status: "DONE",
       generatedImageUrl: { not: null },

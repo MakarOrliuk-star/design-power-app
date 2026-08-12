@@ -9,6 +9,8 @@ useHead({ title: "Design Power — Result" });
 
 const gen = useGeneratorStore();
 const config = useRuntimeConfig();
+const route = useRoute();
+const router = useRouter();
 
 const {
   TABS,
@@ -19,9 +21,12 @@ const {
   hasMore,
   loading,
   load,
+  reload,
   toggleSelect,
   isSelected,
-  toggleSelectAll,
+  hasSelection,
+  selectAll,
+  clearSelection,
   selectedImages,
   exportZip,
   exporting,
@@ -48,14 +53,42 @@ const {
   gen,
   apiBase: config.public.apiBase,
   download: downloadUrl,
+  // Задача 4: the active tab + All/Each mode live in the URL, so F5 (and a
+  // shared link) restores the view. `replace` keeps Back leaving the page
+  // instead of walking back through every tab the user clicked.
+  initial: { tab: route.query.tab, mode: route.query.mode },
+  onStateChange: ({ tab, mode }) => {
+    void router.replace({ query: { ...route.query, tab, mode } });
+  },
 });
 
-// The Tournament tab owns its selection (useTournamentPack) — the bar's
-// "Select all" delegates to it there; All/Each is passed down as a prop.
-const packRef = ref<{ toggleSelectAll: () => void } | null>(null);
+// The Tournament tab owns its data + selection (useTournamentPack) — the bar's
+// buttons delegate to it there; All/Each is passed down as a prop.
+const packRef = ref<{
+  selectAll: () => void;
+  clearSelection: () => void;
+  selectedCount: number;
+  loading: boolean;
+  reload: () => void;
+} | null>(null);
+const isTournament = computed(() => activeTab.value === "tournament");
+/** Drives «Clear All» / «Обновить» — the Tournament tab reports its own state. */
+const canClear = computed(() =>
+  isTournament.value ? (packRef.value?.selectedCount ?? 0) > 0 : hasSelection.value,
+);
+const busy = computed(() => (isTournament.value ? !!packRef.value?.loading : loading.value));
+
 function onSelectAll() {
-  if (activeTab.value === "tournament") packRef.value?.toggleSelectAll();
-  else toggleSelectAll();
+  if (isTournament.value) packRef.value?.selectAll();
+  else selectAll();
+}
+function onClearAll() {
+  if (isTournament.value) packRef.value?.clearSelection();
+  else clearSelection();
+}
+function onReload() {
+  if (isTournament.value) packRef.value?.reload();
+  else reload();
 }
 
 // Per-card copy-link with "copied!" feedback (icon flips to a checkmark).
@@ -131,7 +164,7 @@ const viewerItems = computed(() =>
           <!-- ZIP download of the ticked images. Regular gallery tabs only — the
                Tournament tab has its own DES-numbered export. -->
           <button
-            v-if="activeTab !== 'tournament'"
+            v-if="!isTournament"
             class="iconbtn"
             type="button"
             aria-label="Download ZIP"
@@ -144,7 +177,30 @@ const viewerItems = computed(() =>
               <path d="M5 19h14" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" />
             </svg>
           </button>
+          <!-- Refresh only the ACTIVE tab (задача 4) — no full page reload, so
+               the tab, the mode and the scroll position survive. -->
+          <button
+            class="iconbtn"
+            type="button"
+            aria-label="Обновить"
+            title="Обновить эту вкладку"
+            :disabled="busy"
+            @click="onReload"
+          >
+            <svg viewBox="0 0 24 24" width="18" height="18" fill="none">
+              <path d="M20 12a8 8 0 10-2.3 5.7" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" />
+              <path d="M20 6v5h-5" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" />
+            </svg>
+          </button>
           <button class="select-all" type="button" @click="onSelectAll">Select all</button>
+          <button
+            class="select-all select-all--clear"
+            type="button"
+            :disabled="!canClear"
+            @click="onClearAll"
+          >
+            Clear All
+          </button>
           <div class="seg" role="group" aria-label="Selection mode">
             <button
               type="button"
@@ -164,10 +220,9 @@ const viewerItems = computed(() =>
            shared right panel; DES ZIP export. The bar's Select all / All-Each
            applies here too. An edit batch queued from the tab jumps to Edited. -->
       <ResultTournamentPack
-        v-if="activeTab === 'tournament'"
+        v-if="isTournament"
         ref="packRef"
         :select-mode="selectMode"
-        @edited="selectTab('edited')"
       />
 
       <!-- Gallery lane + Edit panel -->
@@ -506,8 +561,15 @@ const viewerItems = computed(() =>
   font-size: 15px;
   color: var(--color-text);
 }
-.select-all:hover {
+.select-all:hover:not(:disabled) {
   color: var(--color-accent);
+}
+.select-all--clear {
+  color: var(--color-grey);
+}
+.select-all:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
 }
 .seg {
   display: inline-flex;

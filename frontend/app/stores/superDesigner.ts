@@ -254,11 +254,7 @@ export const useSuperDesignerStore = defineStore("superDesigner", () => {
     return await useApi()<BatchStatusLite>(`/api/batches/${batchId}`);
   }
 
-  /** «Сохранить»: the test image lands in Results (isTest → false). */
-  async function saveTest(brandId: string, generationId: string): Promise<void> {
-    await useApi()(`/api/my-brands/${brandId}/test/${generationId}/save`, { method: "POST" });
-  }
-
+  /** Test runs of a brand (задача 5: they are in Results from the start). */
   async function loadTests(brandId: string): Promise<SavedTest[]> {
     const res = await useApi()<{ tests: SavedTest[] }>(`/api/my-brands/${brandId}/tests`);
     return res.tests;
@@ -290,7 +286,6 @@ export const useSuperDesignerStore = defineStore("superDesigner", () => {
     uploadRef,
     runTest,
     pollTest,
-    saveTest,
     loadTests,
   };
 });

@@ -276,10 +276,16 @@ model Generation {
   actionType        ActionType
   isEdit            Boolean          @default(false)
   // Brand test run (TASK super-designer, actionType=NANO_REF): created from the
-  // "Протестировать бренд" panel. isTest=true keeps it OUT of Results/Archive
-  // until the user hits «Сохранить» (flips to false). brandId survives brand
-  // renames so Library keeps showing saved tests; SetNull on brand deletion.
+  // "Протестировать бренд" panel. brandId survives brand renames so Library
+  // keeps showing tests; SetNull on brand deletion.
+  //   isTest      = hidden from Results/Archive. Since задача 5 a test of the
+  //                 brand's SAVED state is created visible; only DRAFT runs from
+  //                 «Редактировать стиль» (and historic never-saved tests) keep
+  //                 this true — they don't match the stored brand.
+  //   isBrandTest = ORIGIN marker: the row came from the test panel. Library
+  //                 («Тесты (N)») filters on this, the gallery ignores it.
   isTest            Boolean          @default(false)
+  isBrandTest       Boolean          @default(false)
   brandId           String?
   brand             Brand?           @relation(fields: [brandId], references: [id], onDelete: SetNull)
   // Tournaments page (actionType=TOURNAMENT only, null elsewhere). The final

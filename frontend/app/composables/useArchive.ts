@@ -166,8 +166,14 @@ export function useArchive(deps: ArchiveDeps) {
   }
   const allImageIds = computed(() => images.value.map((i) => i.id));
   const allSelected = computed(() => areAllSelected(allImageIds.value, selected.value));
-  function toggleSelectAll() {
-    selected.value = allSelected.value ? new Set() : new Set(allImageIds.value);
+  const hasSelection = computed(() => selected.value.size > 0);
+  /** «Select all» / «Clear All» — two one-way actions, mirroring useResult (задача 1). */
+  function selectAll() {
+    selected.value = new Set(allImageIds.value);
+  }
+  function clearSelection() {
+    if (!selected.value.size) return;
+    selected.value = new Set();
   }
   const selectedImages: ComputedRef<GalleryImage[]> = computed(() =>
     images.value.filter((i) => selected.value.has(i.id)),
@@ -282,7 +288,9 @@ export function useArchive(deps: ArchiveDeps) {
     toggleSelect,
     isSelected,
     allSelected,
-    toggleSelectAll,
+    hasSelection,
+    selectAll,
+    clearSelection,
     selectedImages,
     // actions
     copyUrl,

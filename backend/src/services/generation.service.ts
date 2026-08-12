@@ -216,16 +216,24 @@ export async function createItemBatch(p: ItemParams): Promise<CreateBatchResult>
 
 /**
  * Brand test run (TASK super-designer, «Протестировать бренд»). One NANO_REF
- * Person generation locked to the given brand, marked isTest=true so it stays
- * out of Results/Archive until the user hits «Сохранить». Reuses the standard
- * person queue/worker; the i-th-ref pairing degenerates to refs[0] (count=1),
- * matching what a Home generation of this brand would use.
+ * Person generation locked to the given brand, always tagged isBrandTest so
+ * Library can list it under «Тесты». Visibility depends on WHAT was tested
+ * (задача 5):
+ *   • the brand's SAVED state → created visible, lands in the common Results
+ *     pool right away (no «Сохранить» step);
+ *   • a DRAFT from «Редактировать стиль» (`draft: true`) → created hidden
+ *     (isTest), because the image does not match the stored brand and would
+ *     otherwise pollute Results under that brand's name.
+ * Reuses the standard person queue/worker; the i-th-ref pairing degenerates to
+ * refs[0] (count=1), matching a Home generation of this brand.
  */
 export async function createBrandTestBatch(p: {
   userId: string;
   brandId: string;
   prompt: string;
   aspectRatio: string;
+  /** Test of unsaved modal values — keeps the result out of Results. */
+  draft?: boolean;
   // Draft edit-modal values (TASK download-and-edit-style §2): test the UNSAVED
   // state. referenceImages land on the Generation row as usual; personPrompt /
   // imageModel ride on Job.draftOverrides for the person processor.
@@ -268,7 +276,8 @@ export async function createBrandTestBatch(p: {
       userId: p.userId,
       brandName: brand.name,
       brandId: brand.id,
-      isTest: true,
+      isBrandTest: true,
+      ...(p.draft ? { isTest: true } : {}),
       description: p.prompt,
       referenceImages: imageUrls,
       actionType: "NANO_REF",

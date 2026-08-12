@@ -23,7 +23,6 @@ import { downloadUrl } from "~/utils/download";
 const props = withDefaults(defineProps<{ selectMode?: SelectMode }>(), {
   selectMode: "ALL",
 });
-const emit = defineEmits<{ (e: "edited"): void }>();
 
 const config = useRuntimeConfig();
 const gen = useGeneratorStore();
@@ -37,13 +36,15 @@ const {
   isSelected,
   selectedCount,
   selectedImages,
-  toggleSelectAll,
+  selectAll,
+  clearSelection,
   batchState,
   toggleBatch,
   editPrompt,
   perEditPrompts,
   editing,
   editError,
+  editMsg,
   runEdit,
   panelScaleImage,
   setScaleTarget,
@@ -60,11 +61,13 @@ const {
   apiBase: config.public.apiBase as string,
   download: downloadUrl,
   gen,
-  onEdited: () => emit("edited"),
 });
 
-// The bar's "Select all" lives in result.vue — it delegates here on this tab.
-defineExpose({ toggleSelectAll });
+// The bar's «Select all» / «Clear All» / «Обновить» live in result.vue — they
+// delegate here on this tab (this tab owns its own data + selection).
+// `selectedCount` is a ref — the exposed proxy unwraps it, so the page reads it
+// as a plain number to drive the «Clear All» disabled state.
+defineExpose({ selectAll, clearSelection, selectedCount, loading, reload: () => void load(true) });
 
 // ---- Mask/scale editor: the panel's ScalePanel targets the pencil'd card,
 // else the single ticked image (panelScaleImage). A card's pencil opens the
@@ -257,6 +260,7 @@ const viewerItems = computed(() =>
           </template>
 
           <p v-if="editError" class="edit-feedback edit-feedback--error">{{ editError }}</p>
+          <p v-else-if="editMsg" class="edit-feedback edit-feedback--ok">{{ editMsg }}</p>
         </div>
 
         <button
@@ -670,6 +674,9 @@ const viewerItems = computed(() =>
 }
 .edit-feedback--error {
   color: var(--color-stop-hover);
+}
+.edit-feedback--ok {
+  color: var(--color-accent);
 }
 .edit-btn {
   display: inline-flex;
