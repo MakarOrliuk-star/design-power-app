@@ -232,8 +232,7 @@ describe("useTournamentPack — selection + export flow", () => {
     const api = vi.fn(async () => ({ batches, total: batches.length, hasMore: false }));
     const download = vi.fn();
     const genStore = reactive({ runningCount: 0, addBatch: vi.fn() });
-    const onEdited = vi.fn();
-    return { api: api as never, apiBase: "https://api", download, gen: genStore, onEdited };
+    return { api: api as never, apiBase: "https://api", download, gen: genStore };
   }
 
   it("exports the ticked ids through the DES endpoint; no-op when nothing ticked", async () => {
@@ -288,7 +287,7 @@ describe("useTournamentPack — selection + export flow", () => {
     unmount();
   });
 
-  it("runEdit posts the ticked ids to /api/generate/edit and hands off to Edited", async () => {
+  it("runEdit posts the ticked ids to /api/generate/edit and stays on the tab", async () => {
     const g1 = gen();
     const batch: PackBatch = {
       id: "b1",
@@ -316,9 +315,9 @@ describe("useTournamentPack — selection + export flow", () => {
       body: { generationIds: [g1.id], prompt: "make it neon" },
     });
     expect(deps.gen.addBatch).toHaveBeenCalledWith("edit-b1", "item");
-    expect(deps.onEdited).toHaveBeenCalled();
     expect(result.selected.value.size).toBe(0); // selection cleared
-    expect(result.editPrompt.value).toBe("");
+    expect(result.editPrompt.value).toBe("make it neon"); // задача 2: kept for a re-run
+    expect(result.editMsg.value).toContain("General");
     unmount();
   });
 
@@ -389,7 +388,7 @@ describe("useTournamentPack — selection + export flow", () => {
     unmount();
   });
 
-  it("toggleSelectAll ticks every exportable image across batches, then clears", async () => {
+  it("selectAll ticks every exportable image across batches; clearSelection empties it", async () => {
     const g1 = gen();
     const g2 = gen();
     const failed = gen({ status: "FAILED", generatedImageUrl: null });
@@ -400,9 +399,11 @@ describe("useTournamentPack — selection + export flow", () => {
     const { result, unmount } = withSetup(() => useTournamentPack(deps));
     await vi.waitFor(() => expect(result.batches.value).toHaveLength(2));
 
-    result.toggleSelectAll();
+    result.selectAll();
     expect([...result.selected.value].sort()).toEqual([g1.id, g2.id].sort());
-    result.toggleSelectAll(); // all selected -> clears
+    result.selectAll(); // задача 1: one-way — a second press keeps the selection
+    expect(result.selected.value.size).toBe(2);
+    result.clearSelection();
     expect(result.selected.value.size).toBe(0);
     unmount();
   });

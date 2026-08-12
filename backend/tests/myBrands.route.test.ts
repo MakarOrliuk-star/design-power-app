@@ -143,9 +143,9 @@ describe("POST /api/my-brands", () => {
 });
 
 /**
- * BE Test — «Протестировать бренд» + «Сохранить» flow. A test run may only
- * target the caller's own brand; save flips isTest → false ONLY for a DONE
- * generation that belongs to both the brand and the caller.
+ * BE Test — «Протестировать бренд». A test run may only target the caller's own
+ * brand. Since задача 5 there is no «Сохранить» step: the run is created visible
+ * (isBrandTest), so the save route is gone.
  */
 describe("brand test flow", () => {
   it("runs a test on an own brand with the given prompt/aspect", async () => {
@@ -171,33 +171,25 @@ describe("brand test flow", () => {
     expect(services.createBrandTestBatch).not.toHaveBeenCalled();
   });
 
-  it("save flips isTest → false for the owner's DONE generation", async () => {
+  it("no longer exposes the «Сохранить» route (задача 5)", async () => {
     db.brandFindUnique.mockResolvedValue(ownBrand());
-    db.genFindUnique.mockResolvedValue({
-      id: "g1", userId: ME, brandId: "b1", isTest: true, status: "DONE",
-    });
-    const res = await request(makeApp()).post("/api/my-brands/b1/test/g1/save");
-    expect(res.status).toBe(200);
-    expect(db.genUpdate).toHaveBeenCalledWith({ where: { id: "g1" }, data: { isTest: false } });
-  });
-
-  it("404s saving someone else's generation", async () => {
-    db.brandFindUnique.mockResolvedValue(ownBrand());
-    db.genFindUnique.mockResolvedValue({
-      id: "g1", userId: "intruder", brandId: "b1", isTest: true, status: "DONE",
-    });
     const res = await request(makeApp()).post("/api/my-brands/b1/test/g1/save");
     expect(res.status).toBe(404);
     expect(db.genUpdate).not.toHaveBeenCalled();
   });
 
-  it("409s saving an unfinished generation", async () => {
+  it("lists test runs by ORIGIN, excluding hidden draft previews", async () => {
     db.brandFindUnique.mockResolvedValue(ownBrand());
-    db.genFindUnique.mockResolvedValue({
-      id: "g1", userId: ME, brandId: "b1", isTest: true, status: "PROCESSING",
+    db.genFindMany.mockResolvedValue([]);
+    const res = await request(makeApp()).get("/api/my-brands/b1/tests");
+    expect(res.status).toBe(200);
+    expect(db.genFindMany.mock.calls[0]![0].where).toMatchObject({
+      brandId: "b1",
+      userId: ME,
+      isBrandTest: true,
+      isTest: false,
+      status: "DONE",
     });
-    const res = await request(makeApp()).post("/api/my-brands/b1/test/g1/save");
-    expect(res.status).toBe(409);
   });
 });
 

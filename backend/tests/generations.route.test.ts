@@ -141,6 +141,17 @@ describe("GET /api/generations — tab filters", () => {
     expect(lastWhere().actionType).toEqual({ not: "TOURNAMENT" });
   });
 
+  it("generated (= General) INCLUDES edits, unlike the typed tabs (задача 3)", async () => {
+    await request(makeApp()).get("/api/generations?tab=generated");
+    expect(lastWhere()).not.toHaveProperty("isEdit");
+
+    // Person/Item stay edit-free — only General and Edited show edited images.
+    for (const tab of ["person", "item"]) {
+      await request(makeApp()).get(`/api/generations?tab=${tab}`);
+      expect(lastWhere().isEdit, tab).toBe(false);
+    }
+  });
+
   it("tournament rows map to contentType 'Tournament' and expose tourFileName", async () => {
     db.count.mockResolvedValue(1);
     db.findMany.mockResolvedValue([
@@ -157,7 +168,7 @@ describe("GET /api/generations — tab filters", () => {
     expect(res.body.error).toBe("invalid_query");
   });
 
-  it("every tab EXCLUDES unsaved brand-test runs (isTest=false, TASK super-designer)", async () => {
+  it("every tab still EXCLUDES hidden rows (isTest=false — legacy unsaved tests)", async () => {
     for (const tab of ["", "?tab=person", "?tab=edited", "?tab=tournament"]) {
       await request(makeApp()).get(`/api/generations${tab}`);
       expect(lastWhere().isTest).toBe(false);

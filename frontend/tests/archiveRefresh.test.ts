@@ -51,4 +51,28 @@ describe("archive real-time refresh", () => {
 
     unmount();
   });
+
+  it("selectAll / clearSelection are one-way, like on Result (задача 1)", async () => {
+    const a = makeImage();
+    const b = makeImage();
+    const api = makeApi({ images: [a, b], total: 2, hasMore: false });
+    const { result, unmount } = withSetup(() =>
+      useArchive({ api, apiBase: "", download: vi.fn(), gen: { runningCount: 0 }, copy: vi.fn() }),
+    );
+
+    await result.load();
+    await nextTick();
+
+    result.selectAll();
+    expect(result.allSelected.value).toBe(true);
+    expect(result.hasSelection.value).toBe(true);
+    result.selectAll(); // second press keeps the selection
+    expect(result.selectedImages.value).toHaveLength(2);
+
+    result.clearSelection();
+    expect(result.hasSelection.value).toBe(false);
+    expect(result.selectedImages.value).toHaveLength(0);
+
+    unmount();
+  });
 });

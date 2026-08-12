@@ -286,8 +286,6 @@ export interface PackDeps {
   apiBase: string;
   download: (url: string) => void;
   gen: PackGen;
-  /** Called after an edit batch is queued (the page switches to Edited). */
-  onEdited?: () => void;
 }
 
 export function useTournamentPack(deps: PackDeps) {
@@ -339,6 +337,9 @@ export function useTournamentPack(deps: PackDeps) {
   }
   const selectedCount = computed(() => selected.value.size);
   function clearSelection() {
+    // Reassigning fires the `selected` watch (it drops the pencil scale target),
+    // so a no-op clear must stay a no-op.
+    if (!selected.value.size) return;
     selected.value = new Set();
   }
   /** The live rows behind the ticks (drives the Edit panel + Scale target). */
@@ -349,11 +350,12 @@ export function useTournamentPack(deps: PackDeps) {
       ),
     ),
   );
-  /** Bar's "Select all" (result.vue delegates here on the Tournament tab). */
-  function toggleSelectAll() {
-    const ids = exportableIds(batches.value);
-    const all = ids.length > 0 && ids.every((id) => selected.value.has(id));
-    selected.value = all ? new Set() : new Set(ids);
+  /**
+   * Bar's «Select all» / «Clear All» (result.vue delegates here on the Tournament
+   * tab). Two one-way actions, mirroring useResult — see задача 1.
+   */
+  function selectAll() {
+    selected.value = new Set(exportableIds(batches.value));
   }
 
   // ---- Whole-batch (session) checkbox ----
@@ -379,8 +381,10 @@ export function useTournamentPack(deps: PackDeps) {
   const perEditPrompts = ref<Record<string, string>>({});
   const editing = ref(false);
   const editError = ref("");
+  const editMsg = ref("");
   async function runEdit(mode: SelectMode = "ALL") {
     if (editing.value) return;
+    editMsg.value = "";
     const built = buildEditBody(mode, selectedImages.value, editPrompt.value, perEditPrompts.value);
     if (!built.ok) {
       if (built.error !== "no_selection") editError.value = built.error;
@@ -395,10 +399,10 @@ export function useTournamentPack(deps: PackDeps) {
       });
       // Toolbar progress + completion toast, like every other edit.
       gen.addBatch(res.batchId, "item");
-      editPrompt.value = "";
-      perEditPrompts.value = {};
+      // Задача 2: the tab no longer jumps to Edited, so the panel says where the
+      // result will show up. Prompts stay for a repeat run (same as useResult).
       clearSelection();
-      deps.onEdited?.();
+      editMsg.value = "Отправлено — результат появится в General и Edited.";
     } catch (e: unknown) {
       const code = (e as { data?: { error?: string } })?.data?.error;
       editError.value =
@@ -590,13 +594,14 @@ export function useTournamentPack(deps: PackDeps) {
     selectedCount,
     clearSelection,
     selectedImages,
-    toggleSelectAll,
+    selectAll,
     batchState,
     toggleBatch,
     editPrompt,
     perEditPrompts,
     editing,
     editError,
+    editMsg,
     runEdit,
     scaleImage,
     panelScaleImage,
