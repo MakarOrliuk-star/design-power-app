@@ -51,11 +51,40 @@ export interface AiRefAttempt {
  * формата: у push/pop-up copy space не нужен, и требование пустой середины
  * выгрызло бы центр баннера при лечении постороннего дефекта.
  */
+/**
+ * Инвариант анатомии для ретуши (правка 2026-08-15). Формулировка отличается
+ * от генерации: там задача «нарисуй правильно», здесь — «почини руку, если о
+ * ней замечание, и не сломай, если замечание про другое». Число пальцев берём
+ * с самой картинки: референсов при лечении нет по построению (лечим по одной
+ * картинке, чтобы модель не пересочинила композицию), поэтому эталон — тот
+ * тип рук, который уже нарисован у героя.
+ */
+const ANATOMY_RULE =
+  "the hero's hands must end up anatomically correct: keep the same KIND of hand the character already has " +
+  "(human hand, gloved cartoon hand, animal paw, hoof) and give every hand the correct number of digits — " +
+  "exactly five (four fingers and a thumb) on a human or humanoid hand, and the same count on both hands. " +
+  "If any issue above is about hands, fingers, limbs or anatomy, redraw that hand completely until it is " +
+  "correct — this is the one place where you MAY change the drawing beyond a minimal retouch; if a correct " +
+  "hand is impossible in this pose, hide it behind a prop or behind the body instead. Never leave fused, " +
+  "extra, missing or backwards-bent fingers, and never break a hand that was already correct; ";
+
 export function buildHealingPrompt(
   reasons: string[],
-  opts?: { keepCenterClear?: boolean; gender?: "male" | "female" | null },
+  opts?: {
+    keepCenterClear?: boolean;
+    gender?: "male" | "female" | null;
+    /** Набор предметов кампании (правка 2026-08-15) — из него берутся добавки. */
+    propInventory?: string;
+  },
 ): string {
   const keepCenterClear = opts?.keepCenterClear ?? true;
+  // Лечение умеет ДОБАВЛЯТЬ пропсы (пустые бока по чеку `sides`). Без списка
+  // оно дорисовывало что придётся — ровно тот рандом, который убирает
+  // единый набор кампании. Пусто — прежнее «того же семейства».
+  const inventory = (opts?.propInventory ?? "").trim();
+  const addSource = inventory
+    ? `taken ONLY from the campaign prop set (${inventory}) — repeats of objects already in the frame are fine`
+    : "of the same family";
   // Пол героя повторяется и здесь: коррекция перерисовывает персонажа, и без
   // напоминания она способна «починить» замечание, заодно сменив пол.
   const genderRule = opts?.gender
@@ -79,8 +108,21 @@ export function buildHealingPrompt(
       "erase them and leave plain white background in their place, never replace them with other objects; " +
       // Обратный случай (правка 2026-08-13): чек `sides` бракует кадр с
       // пустыми краями, и починка здесь — ДОБАВИТЬ предметы, не тронув героя.
-      "conversely, if an issue says the sides or the frame are empty, ADD more floating props of the same " +
-      "family into the left and right thirds of the canvas — keep the hero exactly as it is; ";
+      "conversely, if an issue says the sides or the frame are empty, ADD more floating props " +
+      addSource +
+      " into the left and right thirds of the canvas — keep the hero exactly as it is; " +
+      // Правка 2026-08-15: лечение раньше досыпало предметы «в пустое место»,
+      // то есть само производило ту самую равномерную россыпь, из-за которой
+      // кадр и выглядит непродуманным.
+      "when you add props, attach them to the groups that already exist — overlapping the objects that are " +
+      "there, in varied sizes and tilt angles — never place them at equal distances or in a neat row; " +
+      "if an issue says the props look scattered, evenly spaced or all the same size, REARRANGE them into two " +
+      "or three overlapping groups with one clearly dominant prop near the hero and empty space between the " +
+      "groups, keeping the same objects; " +
+      (inventory
+        ? "if an issue says a prop does not belong to the campaign, REPLACE that object with one from the " +
+          "campaign prop set above, keeping its size and position; "
+        : "");
   return (
     "Retouch this existing casino promo hero composition. Apply ONLY the minimal " +
     "corrections needed to fix the QA issues listed below and change NOTHING else: " +
@@ -92,6 +134,12 @@ export function buildHealingPrompt(
     "the background stays pure solid white (#FFFFFF), " +
     "completely flat — remove any glow, gradients, bokeh, light rays or cast shadows on it; " +
     centerRule +
+    // Анатомия (правка 2026-08-15). Два повода держать пункт именно здесь:
+    // (1) замечание приёмщика про руку исполнимо только с явным разрешением
+    // перерисовать её — «не меняй ничего» выше по промпту это запрещает;
+    // (2) ретушь чужого дефекта сама ломает кисти, и без напоминания лечение
+    // одного замечания приносит другое.
+    ANATOMY_RULE +
     "all key elements stay fully inside the frame; do not add any text, logos or watermarks."
   );
 }
@@ -139,12 +187,16 @@ export async function healComposition(opts: {
   anchorUrl?: string | null;
   formatLabel?: string;
   maxAttempts?: number;
-  /** Лимит предметов зависимого формата (DI3-9) — тот же, что в генерации. */
+  /** Верх коридора предметов (DI3-9) — тот же, что в генерации. */
   maxProps?: number;
+  /** Низ коридора предметов — тот же, что в генерации. */
+  minProps?: number;
   /** Пол героя тон-варианта — тот же, что в генерации (правка 2026-08-13). */
   gender?: "male" | "female" | null;
   /** Сходство персонажа с референсами — то же, что в генерации. */
   fidelity?: "exact" | "variant";
+  /** Набор предметов кампании — тот же, что в генерации (правка 2026-08-15). */
+  propInventory?: string;
 }): Promise<HealOutcome> {
   const max = opts.maxAttempts ?? AI_HEAL_MAX_ATTEMPTS;
   const profile: QaProfile = opts.profile ?? "anchor";
@@ -163,7 +215,7 @@ export async function healComposition(opts: {
     const prompt = buildHealingPrompt(best.reasons.length ? best.reasons : opts.source.reasons, {
       keepCenterClear,
       ...(opts.gender ? { gender: opts.gender } : {}),
-      ...(opts.fidelity ? { fidelity: opts.fidelity } : {}),
+      ...(opts.propInventory ? { propInventory: opts.propInventory } : {}),
     });
     const gen = await runGptImage2Edit({
       prompt,
@@ -234,8 +286,10 @@ export async function healComposition(opts: {
       anchorUrl: opts.anchorUrl ?? null,
       ...(opts.formatLabel ? { formatLabel: opts.formatLabel } : {}),
       ...(opts.maxProps !== undefined ? { maxProps: opts.maxProps } : {}),
+      ...(opts.minProps !== undefined ? { minProps: opts.minProps } : {}),
       ...(opts.gender ? { gender: opts.gender } : {}),
       ...(opts.fidelity ? { fidelity: opts.fidelity } : {}),
+      ...(opts.propInventory ? { propInventory: opts.propInventory } : {}),
     });
     const row: AiRefAttempt = {
       imageUrl: fitted.url,

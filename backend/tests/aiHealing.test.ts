@@ -75,6 +75,45 @@ describe("buildHealingPrompt (B2)", () => {
     const p = buildHealingPrompt([]);
     expect(p).toContain("general quality cleanup");
   });
+
+  // Правка 2026-08-15: лечение умеет ДОБАВЛЯТЬ пропсы в пустые бока — без
+  // списка кампании оно дорисовывало что придётся, то есть возвращало рандом,
+  // который убирает единый набор.
+  it("добавляет предметы только из набора кампании, если он задан", () => {
+    const set = "golden coin with a ruby, red poker chip";
+    const p = buildHealingPrompt(["левая треть пустая"], {
+      keepCenterClear: false,
+      propInventory: set,
+    });
+    expect(p).toContain(`campaign prop set (${set})`);
+    expect(p).toContain("REPLACE that object with one from the campaign prop set");
+    // Без набора — прежняя формулировка «того же семейства».
+    const noSet = buildHealingPrompt(["левая треть пустая"], { keepCenterClear: false });
+    expect(noSet).toContain("ADD more floating props of the same family");
+    expect(noSet).not.toContain("campaign prop set");
+  });
+
+  // Правка 2026-08-15: лечение досыпало предметы «в пустое место» и само
+  // производило равномерную россыпь, из-за которой кадр и выглядит непродуманным.
+  it("добавляет предметы в существующие группы и умеет пересобрать россыпь", () => {
+    const p = buildHealingPrompt(["предметы расставлены равномерно"], { keepCenterClear: false });
+    expect(p).toContain("attach them to the groups that already exist");
+    expect(p).toContain("never place them at equal distances or in a neat row");
+    expect(p).toContain("REARRANGE them into two or three overlapping groups");
+    expect(p).toContain("keeping the same objects");
+  });
+
+  // Правка 2026-08-15: замечание про руку исполнимо только с явным
+  // разрешением перерисовать кисть — «change NOTHING else» его запрещает.
+  it("анатомия рук: разрешена перерисовка кисти в обоих профилях", () => {
+    for (const opts of [{ keepCenterClear: true }, { keepCenterClear: false }]) {
+      const p = buildHealingPrompt(["у героя четыре пальца на правой руке"], opts);
+      expect(p).toContain("exactly five (four fingers and a thumb)");
+      expect(p).toContain("redraw that hand completely");
+      expect(p).toContain("hide it behind a prop");
+      expect(p).toContain("never break a hand that was already correct");
+    }
+  });
 });
 
 describe("healComposition", () => {

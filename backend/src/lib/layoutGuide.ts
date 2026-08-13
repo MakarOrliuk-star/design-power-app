@@ -77,12 +77,18 @@ export function resetLayoutGuideCache(): void {
 // панели = зоны предметов, обе обязаны быть заполнены; белая середина — герой.
 // ---------------------------------------------------------------------------
 
+// Правка 2026-08-15 (заказчик: «предметы будто просто проставлены, не похоже
+// на единую композицию»). Прежняя редакция требовала «spread the props across
+// the full height of both panels» — то есть буквально просила равномерную
+// россыпь, и модель её исполняла. Схема должна отвечать только на вопрос ГДЕ
+// (обе стороны заняты), а КАК внутри зоны — дело блока PROP COMPOSITION.
 export const PROPS_GUIDE_INSTRUCTION =
   "The LAST image is a PROP MAP, not a style reference: the two gray side panels mark where the floating " +
-  "props belong, and the white middle is where the hero stands. BOTH gray panels must end up filled with " +
-  "props — a frame with props on one side only, or with empty gray areas, is wrong. Spread the props across " +
-  "the full height of both panels and let some of them reach the corners. Do NOT draw the gray panels " +
-  "themselves and do NOT let them tint the artwork — they only mark the areas.";
+  "props belong, and the white middle is where the hero stands. BOTH gray panels must end up occupied — a " +
+  "frame with props on one side only is wrong. The map says WHERE the props may go, not how to arrange them: " +
+  "inside each panel build proper designed groups of overlapping props of different sizes, leaving deliberate " +
+  "empty space around them. Do NOT spread the props evenly to fill the gray areas like a pattern. Do NOT draw " +
+  "the gray panels themselves and do NOT let them tint the artwork — they only mark the areas.";
 
 /** Доля ширины под боковую зону предметов — треть, как меряет чек `sides`. */
 const PROPS_SECTION_FRACTION = 1 / 3;

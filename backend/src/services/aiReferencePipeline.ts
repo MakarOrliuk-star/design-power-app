@@ -25,6 +25,7 @@ import { MAX_EDIT_REFS } from "./variationRefs.js";
 import { reviewComposition, QA_REFS_SHOWN, qaThreshold } from "../lib/vlmReviewer.js";
 import type { QaProfile } from "../lib/vlmReviewer.js";
 import { describeCampaignStyle } from "../lib/styleAnchor.js";
+import { planCampaignProps } from "../lib/propPlan.js";
 import { healComposition } from "./aiHealing.js";
 import type { AiRefAttempt } from "./aiHealing.js";
 import { pickGenerationRefs } from "./variationRefs.js";
@@ -230,6 +231,36 @@ export function derivedAssetLabel(parentLabel: string, assetKey: string): string
 }
 
 /**
+ * Анатомия персонажа (правка 2026-08-15, запрос заказчика: «чтобы на руке не
+ * было 4 пальца, хотя должно быть 5»). Блок ОБЩИЙ для якоря и зависимых
+ * форматов: герой во всех трёх один и тот же и ломается одинаково, а прежний
+ * контракт про руки не говорил ничего — единственным упоминанием был пункт
+ * артефактов у приёмщика («no deformed hands»), то есть брак ловился уже
+ * постфактум и без счёта пальцев.
+ *
+ * Две части намеренно разделены:
+ *  - СТРУКТУРА берётся с референсов бренда — у маскота может быть лапа, копыто
+ *    или мультяшная перчатка с четырьмя пальцами, и это норма, а не брак;
+ *  - КОЛИЧЕСТВО задаётся числом для человекоподобных героев: «нарисуй руки
+ *    правильно» модель трактует как угодно, «ровно пять» — однозначно.
+ *
+ * Разрешение спрятать кисть — не поблажка, а рабочий приём: скрытая рука
+ * всегда лучше сломанной. «За кадр» намеренно не предлагается — это
+ * противоречило бы блоку EDGES обоих контрактов.
+ */
+export const AI_REF_ANATOMY_CONTRACT =
+  "CHARACTER ANATOMY (critical): draw the hero's hands and limbs correctly and completely. " +
+  "First look at the reference banners to see WHAT this character's hands are — human hands, gloved cartoon " +
+  "hands, animal paws with claws, hooves or fins — and reproduce that same structure with the SAME number of " +
+  "digits the references show for this character. If the hero is human or humanoid, or the references do not " +
+  "show the hands clearly, then every hand has exactly FIVE digits — four fingers plus one thumb — and every " +
+  "foot five toes. Both hands must carry the same count. Never draw four fingers where five belong, never add " +
+  "a sixth finger, never fuse, duplicate, stump or bend digits backwards, and never give the hero extra or " +
+  "missing arms, legs, ears or tails. A hand that holds a prop must wrap around it with every finger in a " +
+  "plausible place. If a pose makes a hand hard to draw, change the pose or let the hand be naturally hidden " +
+  "behind a prop or behind the body — a hidden hand is fine, a malformed one ruins the whole creative.";
+
+/**
  * Композиционный контракт (аналог PERSON_LAYER_CONTRACT): зашит в код, чтобы
  * админский текст вариации отвечал за СМЫСЛ, а форма кадра была стабильной.
  * Правило текста — A-1: только короткие казино-слова на пропсах.
@@ -331,6 +362,11 @@ export function heroGenderInstruction(gender: HeroGender | null): string {
   );
 }
 
+/**
+ * Промпт якорного формата (email). Заказчик 2026-08-15: «email сам всё ок по
+ * генерации» — поэтому набор предметов и правила композиции пропсов сюда НЕ
+ * добавляются, они существуют только у зависимых форматов.
+ */
 export function buildAiReferencePrompt(
   variationText: string,
   gender: HeroGender | null = null,
@@ -341,6 +377,7 @@ export function buildAiReferencePrompt(
     brief ? `Campaign brief: ${brief}.` : "",
     AI_REF_COMPOSITION_CONTRACT,
     characterFidelityInstruction(fidelity),
+    AI_REF_ANATOMY_CONTRACT,
     heroGenderInstruction(gender),
   ]
     .filter(Boolean)
@@ -363,9 +400,29 @@ export const DEFAULT_MAX_PROPS = 14;
  */
 export const MIN_PROPS = 8;
 
+/** Потолок коридора: выше кадр физически не читается (проверено на not-ok2). */
+export const PROPS_HARD_CAP = 24;
+
 export function clampMaxProps(value?: number | null): number {
   if (typeof value !== "number" || !Number.isFinite(value)) return DEFAULT_MAX_PROPS;
-  return Math.max(MIN_PROPS, Math.min(24, Math.round(value)));
+  return Math.max(MIN_PROPS, Math.min(PROPS_HARD_CAP, Math.round(value)));
+}
+
+/**
+ * Нижняя граница коридора из админки (правка 2026-08-15, заказчик: «предметы
+ * должны быть настроены с админки, то есть минимум 8»). Раньше низ был
+ * константой в коде, а в /admin выводился только потолок.
+ *
+ * `MIN_PROPS` остаётся жёстким полом: ниже восьми кадр выходил пустым — это
+ * уже проверено живым прогоном 2026-08-13, и повторять эту ошибку через
+ * настройку незачем. Перевёрнутый коридор (низ выше верха) чиним молча в
+ * пользу низа: настройку правит человек, и ронять из-за опечатки генерацию,
+ * которая уже прошла половину пайплайна, неправильно.
+ */
+export function clampMinProps(value?: number | null, cap = DEFAULT_MAX_PROPS): number {
+  const upper = clampMaxProps(cap);
+  if (typeof value !== "number" || !Number.isFinite(value)) return Math.min(MIN_PROPS, upper);
+  return Math.max(MIN_PROPS, Math.min(upper, Math.round(value)));
 }
 
 /**
@@ -386,8 +443,11 @@ export function clampMaxProps(value?: number | null): number {
  * по-прежнему берётся с референсов формата — меняем количество и калибр,
  * а не стилистику предметов (DI3-11).
  */
-export function buildSecondaryContract(
-  maxProps: number = DEFAULT_MAX_PROPS,
+export function buildSecondaryContract(opts?: {
+  /** Верх коридора предметов из админки. */
+  maxProps?: number;
+  /** Низ коридора предметов из админки (не ниже MIN_PROPS). */
+  minProps?: number;
   /**
    * Широкий формат (push, ~2:1). Логика ПРЕДМЕТОВ у него другая, чем у
    * почти квадратного pop-up: по эталонам `push1/push2 ok` дизайнер ставит
@@ -396,9 +456,18 @@ export function buildSecondaryContract(
    * персонажа. Сборку кадра заказчик оставил как есть — различается только
    * калибр и глубина предметов.
    */
-  wide = false,
-): string {
-  const cap = clampMaxProps(maxProps);
+  wide?: boolean;
+  /**
+   * Набор предметов кампании (правка 2026-08-15): спланированный по
+   * референсам бренда и брифу либо снятый с утверждённого email. Пусто —
+   * старое поведение «подбери свои»: legacy-бандлы и fail-open.
+   */
+  propInventory?: string;
+}): string {
+  const cap = clampMaxProps(opts?.maxProps);
+  const min = clampMinProps(opts?.minProps, cap);
+  const wide = opts?.wide ?? false;
+  const propInventory = opts?.propInventory ?? "";
   const scale = wide
     ? "SCALE (wide format): the props are BIG — the largest ones stand as tall as a third of the canvas " +
       "height, and oversized volumetric casino lettering (FS, BONUS, VIP, 777) works as a full-blown prop, " +
@@ -411,6 +480,35 @@ export function buildSecondaryContract(
       "the hero and run off the canvas edges, framing the character and giving the shot depth. Keep them " +
       "softer and lower in contrast than the hero so they stay background. "
     : "";
+  // Набор предметов кампании (правка 2026-08-15, заказчик: «предметы не должны
+  // быть рандомными — общая композиция промо по референсам и промпту»).
+  //
+  // Прежняя редакция («подбери свои объекты, как дизайнер») была ответом на
+  // другую жалобу — «push выглядит как переставленный email». Она эту задачу
+  // решила, но ценой разброса: набор предметов каждый раз сочинялся заново, и
+  // три формата переставали читаться как одна акция. Здесь разделены ЧТО и
+  // КАК: инвентарь кампании фиксирован (он снят с утверждённого email, то есть
+  // выведен из референсов бренда и брифа вариации), а компоновка по-прежнему
+  // своя — «та же кампания, другой кадр», а не копия якоря.
+  //
+  // Повтор объектов разрешён намеренно: в списке 6–10 позиций, а в кадре нужно
+  // 8–14 предметов, и без разрешения повторять модель начнёт добирать разницу
+  // выдуманными объектами — ровно тем, что мы убираем.
+  const propChoice = propInventory.trim()
+    ? "PROP CHOICE: this placement belongs to a campaign whose prop set is already approved, so the objects are " +
+      `NOT yours to invent. The campaign prop set is: ${propInventory.trim()}. Build the scene from THESE objects: ` +
+      "pick the ones that suit this canvas and its aspect ratio, and repeat some of them at different sizes, angles " +
+      "and distances to reach the required count. You may add AT MOST TWO extra objects, and only if they belong to " +
+      "the same visual family and the campaign brief calls for them. Objects unrelated to the prop set or to the " +
+      "brief are wrong. What must differ from the anchor creative is the ARRANGEMENT, not the inventory: same " +
+      "campaign objects, new shot composed for this format. "
+    : // Fail-open: описание якоря не снялось (или бандл сделан до этой правки) —
+      // остаётся прежнее поведение, иначе зависимый формат встал бы вовсе.
+      "PROP CHOICE: do NOT reproduce the anchor creative's set of objects. Pick your OWN props for this format, " +
+      "the way a designer would when drawing the next piece of the same campaign: they must belong to the same visual " +
+      "family as the brand's reference banners (same materials, finish and level of detail) and suit the campaign theme, " +
+      "but the specific objects and their arrangement are yours to choose. The result should look like the same campaign " +
+      "drawn by the same hand for a different placement — not like the anchor rearranged. ";
   return (
     "Create ONE new cohesive casino promo composition for this format, belonging to an EXISTING campaign. " +
     "STYLE SOURCE: the FIRST image is the APPROVED anchor creative of that same campaign — reproduce its palette, " +
@@ -425,10 +523,24 @@ export function buildSecondaryContract(
     // Логика ПРЕДМЕТОВ снята с эталонов дизайнера `pop-up ok1/ok2` (правка
     // 2026-08-13). Сборку кадра заказчик оставил как есть — трогаем только
     // то, как подбираются и раскладываются сами items.
-    `(2) FLOATING PROPS: between ${MIN_PROPS} and ${cap} props float in the air around the hero, arranged around ` +
-    "the head and shoulders, spread roughly evenly between the left and the right side and reaching into all four corners. " +
-    "Vary them deliberately: different sizes, different tilt angles, different distances — " +
-    "never a uniform ring of identical objects, never a symmetric mirror. " +
+    `(2) FLOATING PROPS: between ${min} and ${cap} props float in the air around the hero. ` +
+    // Правка 2026-08-15 (заказчик: «предметы будто просто поставлены и без
+    // смысла»). Прежняя редакция буквально просила равномерность («spread
+    // roughly evenly», «into all four corners»), и модель её исполняла: ровный
+    // ковёр одинаково важных объектов. Дизайнер так не делает — он строит
+    // группы, иерархию и направление. Логика берётся с референсов ФОРМАТА,
+    // а принципы ниже — словарь на случай, если модель их не прочитает.
+    "PROP COMPOSITION: look at how the props are ARRANGED in the reference banners of this format — how they " +
+    "group, how they overlap each other and the hero, which one dominates, where the designer left empty space — " +
+    "and compose this frame by the same logic, with the campaign's own objects. Concretely: " +
+    "(a) HIERARCHY — one or two KEY props are clearly the largest and sharpest and sit next to the hero's hands " +
+    "or face, a few medium props support them, the rest are small accents; never make all props the same size; " +
+    "(b) GROUPS — the props form two or three tight clusters of overlapping objects rather than an even sprinkle; " +
+    "inside a cluster objects touch and overlap each other, between clusters there is clean empty space; " +
+    "(c) FLOW — the clusters follow a diagonal or an arc that leads the eye toward the hero's face and the key " +
+    "prop, as if the objects were caught mid-flight around them; a symmetric ring or a mirrored left-right layout is wrong; " +
+    "(d) RHYTHM — uneven spacing and varied tilt angles: some props nearly touching, some alone; nothing lined up " +
+    "on a grid, in a row or at equal distances. " +
     // Правка 2026-08-13 (заказчик: «то блюрены то обычные, как будто дизайнер
     // делает»): по эталонам push1/push2 часть пропсов идёт в расфокусе или
     // смазе, и именно это отличает кадр дизайнера от плоской раскладки
@@ -440,18 +552,15 @@ export function buildSecondaryContract(
     "like a designed composition. " +
     scale +
     depth +
-    `The frame must feel abundant, not empty: fewer than ${MIN_PROPS} floating props is wrong, more than ${cap} is wrong too. ` +
-    // Просьба заказчика 2026-08-13: «items по своему вкусу, будто дизайнер
-    // рисовал вручную, но композиция единая». Стиль наследуется от якоря
-    // жёстко, набор предметов — нет: копия набора email выдаёт машину.
-    "PROP CHOICE: do NOT reproduce the anchor creative's set of objects. Pick your OWN props for this format, " +
-    "the way a designer would when drawing the next piece of the same campaign: they must belong to the same visual " +
-    "family as the brand's reference banners (same materials, finish and level of detail) and suit the campaign theme, " +
-    "but the specific objects and their arrangement are yours to choose. The result should look like the same campaign " +
-    "drawn by the same hand for a different placement — not like the anchor rearranged. " +
+    `The frame must feel abundant, not empty: fewer than ${min} floating props is wrong, more than ${cap} is wrong too. ` +
+    propChoice +
     "FORBIDDEN: no slot machines, no fortune wheels, no roulette wheels, no treasure chests, no open suitcases or crates, " +
     "no stacks of banknotes, no piles or heaps of coins or chips, no props standing on the ground or piled up around the " +
-    "hero's feet, no second character. The props FLOAT and stay separated — never let them merge into a solid mass. " +
+    // Правка 2026-08-15: прежнее «stay separated» противоречило требованию
+    // групп — оно и давало ровно расставленные одиночные объекты. Запрещаем
+    // не перекрытие, а неразличимую массу.
+    "hero's feet, no second character. Props may overlap each other inside a group, but each object must stay " +
+    "readable as a separate thing — never let them melt into one solid unreadable mass. " +
     "There is NO reserved copy space in this format, the center may be occupied by the character. " +
     "EDGES: the character and the prop in their hands stay fully inside the frame. Small floating props, on the contrary, may " +
     "run past the canvas edges and be partly cropped — that is how the reference layouts breathe; just never crop them so " +
@@ -498,20 +607,26 @@ export function buildSecondaryPrompt(opts: {
   formatLabel: string;
   targetW: number;
   targetH: number;
-  /** Лимит мелких предметов (DI3-9); не задан — дефолт. */
+  /** Верх коридора предметов (DI3-9); не задан — дефолт. */
   maxProps?: number;
+  /** Низ коридора предметов из админки; не задан — MIN_PROPS. */
+  minProps?: number;
   /** Пол героя из тон-варианта бренда; null — бренд без вариантов. */
   gender?: HeroGender | null;
   /** Сходство персонажа с референсами бренда (Brand.characterFidelity). */
   fidelity?: CharacterFidelity;
+  /** Набор предметов кампании с якоря; пусто — модель подбирает сама. */
+  propInventory?: string;
 }): string {
   const brief = opts.variationText.trim();
   // Широкий формат определяем по геометрии, а не по ключу ассета: ключи
   // задаются в админке и у каждого клиента свои.
-  const base = buildSecondaryContract(
-    clampMaxProps(opts.maxProps),
-    opts.targetW / opts.targetH >= 1.6,
-  );
+  const base = buildSecondaryContract({
+    maxProps: clampMaxProps(opts.maxProps),
+    ...(opts.minProps !== undefined ? { minProps: opts.minProps } : {}),
+    wide: opts.targetW / opts.targetH >= 1.6,
+    propInventory: opts.propInventory ?? "",
+  });
   const contract = opts.hasAnchor
     ? base
     : // Без якоря первая картинка — обычный референс формата: убираем блок
@@ -526,6 +641,9 @@ export function buildSecondaryPrompt(opts: {
     opts.styleText,
     contract,
     characterFidelityInstruction(opts.fidelity ?? DEFAULT_CHARACTER_FIDELITY),
+    // Тот же блок анатомии, что у якоря (правка 2026-08-15): герой кампании
+    // один, и число пальцев обязано совпадать во всех трёх форматах.
+    AI_REF_ANATOMY_CONTRACT,
     heroGenderInstruction(opts.gender ?? null),
   ]
     .filter(Boolean)
@@ -558,6 +676,12 @@ export interface AiRefAnchorContext {
    * тогда зависимый формат посчитает цвет сам.
    */
   glowHex?: string;
+  /**
+   * Набор предметов кампании (правка 2026-08-15). Наследуется тем же путём,
+   * что и цвет свечения: снимается один раз на якоре и переживает одиночную
+   * регенерацию push спустя недели. Пусто — legacy-бандл или fail-open.
+   */
+  propInventory?: string;
 }
 
 /** Результат прогона: процессор ставит зависимые форматы только после ok. */
@@ -567,6 +691,8 @@ export interface AiRefResult {
   baseUrl?: string;
   /** Описание стиля, снятое с якоря (только для якорного ассета). */
   styleText?: string;
+  /** Набор предметов кампании, снятый с якоря (только для якорного ассета). */
+  propInventory?: string;
   /** Цвет свечения кампании, выбранный на якоре (DI3-4). */
   glowHex?: string;
 }
@@ -588,18 +714,25 @@ export async function loadAnchorContext(
   if (!anchor || anchor.status !== "DONE") return null;
   const meta = anchor.metadata as {
     styleAnchor?: unknown;
+    styleAnchorProps?: unknown;
     qa?: { baseUrl?: unknown };
     effects?: { glowHex?: unknown };
   } | null;
   const styleText = typeof meta?.styleAnchor === "string" ? meta.styleAnchor : "";
+  // Набор предметов кампании (правка 2026-08-15): у бандлов, сделанных до неё,
+  // поля нет — зависимый формат откатывается на «подбери свои» (fail-open).
+  const propInventory =
+    typeof meta?.styleAnchorProps === "string" ? meta.styleAnchorProps : "";
+  const withProps = propInventory ? { propInventory } : {};
   const baseUrl = typeof meta?.qa?.baseUrl === "string" ? meta.qa.baseUrl : "";
   // Цвет свечения кампании (DI3-4): зависимые форматы обязаны взять ТОТ ЖЕ
   // цвет, что уже утверждён на якоре, — в том числе при одиночной
   // регенерации push спустя недели после email.
   const glowHex = typeof meta?.effects?.glowHex === "string" ? meta.effects.glowHex : "";
   const withGlow = glowHex ? { glowHex } : {};
-  if (baseUrl) return { imageUrl: baseUrl, styleText, ...withGlow };
-  if (anchor.imageUrl) return { imageUrl: anchor.imageUrl, styleText, fallback: true, ...withGlow };
+  if (baseUrl) return { imageUrl: baseUrl, styleText, ...withProps, ...withGlow };
+  if (anchor.imageUrl)
+    return { imageUrl: anchor.imageUrl, styleText, fallback: true, ...withProps, ...withGlow };
   return null;
 }
 
@@ -640,10 +773,12 @@ export async function processAiReferenceAsset(opts: {
   /** Контекст якоря — обязателен по смыслу для зависимых форматов. */
   anchor?: AiRefAnchorContext | null;
   /**
-   * Лимит мелких предметов зависимого формата (DI3-9/DI3-14, задание 3).
+   * Верх коридора предметов зависимого формата (DI3-9/DI3-14, задание 3).
    * У якоря игнорируется: плотность email не трогаем (DI3-10).
    */
   maxProps?: number;
+  /** Низ коридора предметов из админки (правка 2026-08-15); не ниже MIN_PROPS. */
+  minProps?: number;
   /** Галки эффектов формата из админки (DI3-15); не заданы — включены. */
   effects?: EffectsToggle | null;
 }): Promise<AiRefResult> {
@@ -655,7 +790,11 @@ export async function processAiReferenceAsset(opts: {
   // Лимит предметов существует только у зависимых форматов и обязан быть
   // одинаковым в промпте генерации, чек-листе приёмки и промпте лечения.
   const maxProps = isAnchor ? undefined : clampMaxProps(opts.maxProps);
+  const minProps = isAnchor ? undefined : clampMinProps(opts.minProps, maxProps);
   const effectsConfig = resolveEffectsConfig(opts.effects);
+  // Набор предметов кампании (правка 2026-08-15). У якоря его нет по смыслу:
+  // он этот набор и задаёт, снимая его со своей утверждённой композиции.
+  const propInventory = isAnchor ? "" : (opts.anchor?.propInventory ?? "");
   // Пол героя из имени тон-варианта (правка 2026-08-13): раньше его задавали
   // только референсы, и модель их «переигрывала» — у (Men) выходила женщина.
   const heroGender = heroGenderFromBrand(opts.brandName);
@@ -785,8 +924,10 @@ export async function processAiReferenceAsset(opts: {
       targetW,
       targetH,
       ...(maxProps !== undefined ? { maxProps } : {}),
+      ...(minProps !== undefined ? { minProps } : {}),
       gender: heroGender,
       fidelity,
+      propInventory,
     }) + propsGuideInstruction;
   }
   const aspect = nearestFalAspect(targetW, targetH);
@@ -892,8 +1033,10 @@ export async function processAiReferenceAsset(opts: {
       anchorUrl,
       formatLabel,
       ...(maxProps !== undefined ? { maxProps } : {}),
+      ...(minProps !== undefined ? { minProps } : {}),
       gender: heroGender,
       fidelity,
+      ...(propInventory ? { propInventory } : {}),
     });
     const attemptRow: AiRefAttempt = {
       imageUrl: fitted.url,
@@ -983,8 +1126,10 @@ export async function processAiReferenceAsset(opts: {
       anchorUrl,
       formatLabel,
       ...(maxProps !== undefined ? { maxProps } : {}),
+      ...(minProps !== undefined ? { minProps } : {}),
       gender: heroGender,
       fidelity,
+      ...(propInventory ? { propInventory } : {}),
     });
     finalUrl = heal.winner.imageUrl;
     qaPassed = heal.winner.pass;
@@ -999,9 +1144,25 @@ export async function processAiReferenceAsset(opts: {
   // финальная база уже выбрана — описывать промежуточную попытку смысла нет.
   // Fail-open: без описания зависимые форматы поедут на одной картинке.
   let styleText = "";
+  let anchorPropInventory = "";
   if (isAnchor) {
-    const style = await describeCampaignStyle(finalUrl);
+    // Бриф уходит в тот же запрос (правка 2026-08-15): набор предметов
+    // называется в терминах кампании, а не «металлическая деталь».
+    const style = await describeCampaignStyle(finalUrl, variationText);
     styleText = style.text;
+    anchorPropInventory = style.propInventory;
+    // Планировщик набора (правка 2026-08-15, заказчик: «предметы сами
+    // сгенерировать на основании рефов которые есть и подстроить под промпт»).
+    // Он смотрит на референсы БРЕНДА и на бриф, поэтому его список надёжнее
+    // снятого с картинки: в кадр могло попасть выдуманное мимо референсов, а
+    // главные объекты акции он ещё и помечает — на них строится иерархия
+    // композиции у зависимых форматов. Список с картинки остаётся фолбэком.
+    const plan = await planCampaignProps({ refUrls, variationText, brandName: baseBrand });
+    if (plan.text) {
+      anchorPropInventory = plan.text;
+    } else if (plan.error) {
+      console.warn(`⚠ ai-ref prop-plan#${assetId}: ${plan.error}`);
+    }
     if (style.error) {
       console.warn(`⚠ ai-ref style-anchor#${assetId}: ${style.error}`);
     }
@@ -1031,7 +1192,14 @@ export async function processAiReferenceAsset(opts: {
     presetTitle: bundle.preset.title,
     qa: qaMeta,
     ...(isAnchor
-      ? { styleAnchor: styleText, isStyleAnchor: true }
+      ? {
+          styleAnchor: styleText,
+          isStyleAnchor: true,
+          // Набор предметов кампании — отдельным полем рядом с описанием
+          // стиля: его читает loadAnchorContext при генерации push/pop-up и
+          // при их одиночной регенерации (DI2-9).
+          styleAnchorProps: anchorPropInventory,
+        }
       : {
           // Чем именно наследовался стиль — видно в метаданных ассета.
           campaignAnchorUrl: anchorUrl,
@@ -1159,6 +1327,9 @@ export async function processAiReferenceAsset(opts: {
       `attempts=${attempts.length}` +
       (healingMeta ? ` heal=${healingMeta.attempts.length} healed=${healingMeta.used}` : "") +
       (maxProps !== undefined ? ` maxProps=${maxProps}` : "") +
+      // Видно, поехал ли формат по набору кампании или по старому «свои
+      // предметы» — первый вопрос при разборе «предметы не те».
+      (isAnchor ? "" : ` propSet=${propInventory ? "campaign" : "free"}`) +
       ` qaPassed=${qaPassed} fidelity=${fidelity}` +
       ` cutout=${cutoutSource}` +
       (effects.meta.applied
@@ -1170,6 +1341,7 @@ export async function processAiReferenceAsset(opts: {
     ok: true,
     baseUrl: finalUrl,
     styleText,
+    ...(anchorPropInventory ? { propInventory: anchorPropInventory } : {}),
     ...(effects.meta.glowHex ? { glowHex: effects.meta.glowHex } : {}),
   };
 }
