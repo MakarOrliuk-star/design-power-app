@@ -119,6 +119,25 @@ export function stripGenderName(name: string): string {
   return name.replace(GENDER_SUFFIX, "").trim();
 }
 
+/** Пол героя тон-варианта: "Fridayroll(Men)" → "male", "Fridayroll" → null. */
+export type HeroGender = "male" | "female";
+
+/**
+ * Пол из суффикса имени варианта (TASK glow-fade-density, правка 2026-08-13).
+ *
+ * До этого пол героя в режиме ai_reference задавали ТОЛЬКО референсы (DI2-10),
+ * и модель, сочиняя НОВУЮ сцену, регулярно меняла его: у "Fridayroll(Men)"
+ * выходила женщина. Имя варианта — надёжный сигнал, который у нас уже есть,
+ * поэтому он идёт и в промпт генерации, и в чек-лист приёмки, и в лечение.
+ * Бренд без суффикса пола (обычный, без тон-вариантов) даёт null — там
+ * персонажа по-прежнему определяют одни референсы.
+ */
+export function heroGenderFromBrand(name: string): HeroGender | null {
+  const match = name.match(GENDER_SUFFIX);
+  if (!match) return null;
+  return /\((?:men|man)\)/i.test(match[0]) ? "male" : "female";
+}
+
 /** "Betnella(Men)" → "Betnella (Men)" — space + normalized tone suffix for UI. */
 export function variantDisplayName(name: string): string {
   return name

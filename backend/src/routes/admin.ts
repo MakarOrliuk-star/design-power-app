@@ -478,9 +478,9 @@ const bundleTypeAssetSchema = z.object({
   effects: z
     .object({ glow: z.boolean().optional(), fade: z.boolean().optional() })
     .optional(),
-  // Лимит мелких предметов зависимого формата (DI3-9/DI3-14). Нижняя граница
-  // — норма композиции из интервью, верхняя — здравый смысл против опечатки.
-  maxProps: z.number().int().min(4).max(20).optional(),
+  // Лимит предметов зависимого формата (DI3-9/DI3-14). Границы подняты
+  // 2026-08-13 после живого прогона: коридор 4–8 давал пустые кадры.
+  maxProps: z.number().int().min(8).max(24).optional(),
 });
 
 const bundleTypeSchema = z.object({

@@ -40,7 +40,7 @@ describe("PATCH /api/admin/bundle-types/:id — эффекты и плотнос
         ...ASSET,
         composeMode: "ai_reference",
         effects: { glow: true, fade: false },
-        maxProps: 6,
+        maxProps: 12,
       },
     ];
     const res = await request(makeApp()).patch("/api/admin/bundle-types/bt1").send({ assets });
@@ -57,8 +57,8 @@ describe("PATCH /api/admin/bundle-types/:id — эффекты и плотнос
     expect(res.status).toBe(200);
   });
 
-  it("лимит предметов вне коридора 4–20 отклоняется", async () => {
-    for (const maxProps of [0, 3, 21, 8.5]) {
+  it("лимит предметов вне коридора 8–24 отклоняется", async () => {
+    for (const maxProps of [0, 7, 25, 10.5]) {
       const res = await request(makeApp())
         .patch("/api/admin/bundle-types/bt1")
         .send({ assets: [{ ...ASSET, maxProps }] });

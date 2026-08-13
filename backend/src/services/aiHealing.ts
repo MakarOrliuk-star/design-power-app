@@ -53,9 +53,14 @@ export interface AiRefAttempt {
  */
 export function buildHealingPrompt(
   reasons: string[],
-  opts?: { keepCenterClear?: boolean },
+  opts?: { keepCenterClear?: boolean; gender?: "male" | "female" | null },
 ): string {
   const keepCenterClear = opts?.keepCenterClear ?? true;
+  // Пол героя повторяется и здесь: коррекция перерисовывает персонажа, и без
+  // напоминания она способна «починить» замечание, заодно сменив пол.
+  const genderRule = opts?.gender
+    ? `the main character must remain ${opts.gender === "male" ? "a MAN" : "a WOMAN"}; `
+    : "";
   const issues = reasons
     .map((r) => r.trim())
     .filter(Boolean)
@@ -78,7 +83,9 @@ export function buildHealingPrompt(
     "keep the same characters, props, palette, lighting, rendering style, proportions " +
     "and placement, identical outside the corrected spots.\n" +
     `QA issues to fix:\n${issues || "- general quality cleanup"}\n` +
-    "MANDATORY constraints while fixing: the background stays pure solid white (#FFFFFF), " +
+    "MANDATORY constraints while fixing: " +
+    genderRule +
+    "the background stays pure solid white (#FFFFFF), " +
     "completely flat — remove any glow, gradients, bokeh, light rays or cast shadows on it; " +
     centerRule +
     "all key elements stay fully inside the frame; do not add any text, logos or watermarks."
@@ -128,6 +135,8 @@ export async function healComposition(opts: {
   maxAttempts?: number;
   /** Лимит предметов зависимого формата (DI3-9) — тот же, что в генерации. */
   maxProps?: number;
+  /** Пол героя тон-варианта — тот же, что в генерации (правка 2026-08-13). */
+  gender?: "male" | "female" | null;
 }): Promise<HealOutcome> {
   const max = opts.maxAttempts ?? AI_HEAL_MAX_ATTEMPTS;
   const profile: QaProfile = opts.profile ?? "anchor";
@@ -145,6 +154,7 @@ export async function healComposition(opts: {
   for (let attempt = 1; attempt <= max; attempt++) {
     const prompt = buildHealingPrompt(best.reasons.length ? best.reasons : opts.source.reasons, {
       keepCenterClear,
+      ...(opts.gender ? { gender: opts.gender } : {}),
     });
     const gen = await runGptImage2Edit({
       prompt,
@@ -214,6 +224,7 @@ export async function healComposition(opts: {
       anchorUrl: opts.anchorUrl ?? null,
       ...(opts.formatLabel ? { formatLabel: opts.formatLabel } : {}),
       ...(opts.maxProps !== undefined ? { maxProps: opts.maxProps } : {}),
+      ...(opts.gender ? { gender: opts.gender } : {}),
     });
     const row: AiRefAttempt = {
       imageUrl: fitted.url,
