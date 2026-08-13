@@ -172,8 +172,17 @@ beforeEach(() => {
   reviewer.reviewComposition.mockResolvedValue({ pass: true, score: 90, reasons: [] });
   fal.runBriaRemoveBg.mockResolvedValue({ success: true, imageUrl: "https://fal/nobg.png" });
   cloud.uploadFromUrl.mockResolvedValue({ success: true, secure_url: "https://cdn/stored.png" });
-  // uploadBuffer заливает картинку С ЭФФЕКТАМИ — она и попадает в imageUrl.
-  cloud.uploadBuffer.mockResolvedValue({ success: true, secure_url: "https://cdn/final.png" });
+  // Через uploadBuffer идут ОБА артефакта (правка 2026-08-14: чистый вырез
+  // тоже собирается у нас, а не забирается по URL у Bria): `_transparent` —
+  // источник, `_final` — он же с эффектами и он попадает в imageUrl.
+  cloud.uploadBuffer.mockImplementation((_buf: unknown, publicId: string) =>
+    Promise.resolve({
+      success: true,
+      secure_url: publicId.endsWith("_transparent")
+        ? "https://cdn/stored.png"
+        : "https://cdn/final.png",
+    }),
+  );
   fal.runVisionQa.mockResolvedValue({
     success: true,
     output: '{"hex": "#7FD4E0", "reason": "бирюза зонтика"}',
@@ -231,8 +240,8 @@ describe("processAiReferenceAsset — один ассет (TASK safe-zone/auto-h
 
     // Финал: removeBg от базы, аплоад с детерминированным public id.
     expect(fal.runBriaRemoveBg).toHaveBeenCalledWith("https://cdn/fit.png");
-    expect(cloud.uploadFromUrl).toHaveBeenCalledWith(
-      "https://fal/nobg.png",
+    expect(cloud.uploadBuffer).toHaveBeenCalledWith(
+      expect.any(Buffer),
       "v1_email_transparent",
       "bundles/bun1",
     );
@@ -373,25 +382,50 @@ describe("processAiReferenceAsset — один ассет (TASK safe-zone/auto-h
     expect(failCall.data.errorMessage).toContain("не выбрана вариация");
   });
 
-  it("сбой removeBg валит ассет: прозрачная версия — единственный результат", async () => {
+  // Правка 2026-08-14: фон композиции белый по контракту, поэтому кей по
+  // связному белому — полноценная замена Bria, а не деградация.
+  it("сбой removeBg НЕ валит ассет — вырезает кей по белому фону", async () => {
     fal.runBriaRemoveBg.mockResolvedValue({ success: false, error: "HTTP 500" });
-    await processAiReferenceAsset(OPTS);
-    expect(parentDoneCall()).toBeUndefined();
-    const failCall = db.bundleAsset.update.mock.calls[0]![0] as {
-      data: { status: string; errorMessage: string };
-    };
-    expect(failCall.data.status).toBe("FAILED");
+    const result = await processAiReferenceAsset(OPTS);
+    expect(result.ok).toBe(true);
+    const parent = parentDoneCall()!;
+    expect(parent.data.status).toBe("DONE");
+    expect(parent.data.metadata.transparent).toBe(true);
+  });
+
+  it("ассет падает, только если и кадр не скачался, и Bria недоступна", async () => {
+    fal.runBriaRemoveBg.mockResolvedValue({ success: false, error: "HTTP 500" });
+    // Кадр отдаётся техвалидации, но перед вырезанием скачать его не удаётся.
+    cache.fetchBuffer.mockResolvedValueOnce(pngBuffer).mockResolvedValue(null);
+    const result = await processAiReferenceAsset(OPTS);
+    expect(result.ok).toBe(false);
+    const failCall = db.bundleAsset.update.mock.calls.find(
+      (c) => (c[0] as { data: { status?: string } }).data.status === "FAILED",
+    )![0] as { data: { errorMessage: string } };
     expect(failCall.data.errorMessage).toContain("removeBg");
   });
 
-  it("сбой аплоада прозрачной версии → FAILED", async () => {
-    cloud.uploadFromUrl.mockResolvedValue({ success: false, error: "cloudinary down" });
-    await processAiReferenceAsset(OPTS);
-    expect(parentDoneCall()).toBeUndefined();
-    const failCall = db.bundleAsset.update.mock.calls[0]![0] as {
-      data: { status: string; errorMessage: string };
-    };
-    expect(failCall.data.status).toBe("FAILED");
+  it("режим bria (env-откат) не зовёт кей и работает как раньше", async () => {
+    vi.stubEnv("AI_REF_CUTOUT", "bria");
+    const result = await processAiReferenceAsset(OPTS);
+    expect(result.ok).toBe(true);
+    expect(fal.runBriaRemoveBg).toHaveBeenCalledTimes(1);
+    vi.unstubAllEnvs();
+  });
+
+  it("сбой заливки прозрачной версии → FAILED", async () => {
+    cloud.uploadBuffer.mockImplementation((_b: unknown, publicId: string) =>
+      Promise.resolve(
+        publicId.endsWith("_transparent")
+          ? { success: false, error: "HTTP 500" }
+          : { success: true, secure_url: "https://cdn/final.png" },
+      ),
+    );
+    const result = await processAiReferenceAsset(OPTS);
+    expect(result.ok).toBe(false);
+    const failCall = db.bundleAsset.update.mock.calls.find(
+      (c) => (c[0] as { data: { status?: string } }).data.status === "FAILED",
+    )![0] as { data: { errorMessage: string } };
     expect(failCall.data.errorMessage).toContain("transparent upload");
   });
 });
@@ -756,7 +790,9 @@ describe("эффекты в пайплайне: рубильники и fail-ope
     };
     expect(parent.data.imageUrl).toBe("https://cdn/stored.png");
     expect(parent.data.metadata.effects).toMatchObject({ applied: false, glowHex: null });
-    expect(cloud.uploadBuffer).not.toHaveBeenCalled();
+    // Чистый вырез заливается всегда; версия с эффектами — нет.
+    const ids = cloud.uploadBuffer.mock.calls.map((c) => c[1] as string);
+    expect(ids).toEqual(["v1_email_transparent"]);
     expect(fal.runVisionQa).not.toHaveBeenCalled();
   });
 
@@ -771,7 +807,13 @@ describe("эффекты в пайплайне: рубильники и fail-ope
   });
 
   it("сбой заливки эффектов не валит ассет — остаётся чистый вырез с причиной", async () => {
-    cloud.uploadBuffer.mockResolvedValue({ success: false, error: "HTTP 500" });
+    cloud.uploadBuffer.mockImplementation((_b: unknown, publicId: string) =>
+      Promise.resolve(
+        publicId.endsWith("_final")
+          ? { success: false, error: "HTTP 500" }
+          : { success: true, secure_url: "https://cdn/stored.png" },
+      ),
+    );
     const result = await processAiReferenceAsset(OPTS);
     expect(result.ok).toBe(true);
     const parent = parentDoneCall()! as unknown as {
@@ -826,7 +868,9 @@ describe("processAiReferenceAsset — якорь отдаёт стиль дал�
   });
 
   it("провал ассета возвращает ok:false — зависимые форматы не поедут", async () => {
-    fal.runBriaRemoveBg.mockResolvedValue({ success: false, error: "HTTP 500" });
+    // Bria сама по себе ассет больше не валит (её заменяет кей), поэтому
+    // берём причину, после которой результата нет вовсе.
+    fit.fitAndStoreAsset.mockResolvedValue({ ok: false, reason: "fit: канвас не сошёлся" });
     expect(await processAiReferenceAsset(OPTS)).toEqual({ ok: false });
   });
 });

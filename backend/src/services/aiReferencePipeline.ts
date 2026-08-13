@@ -3,7 +3,7 @@ import type { Prisma } from "../../generated/prisma/client.js";
 import { runPersonFal, runGptImage2Edit, runBriaRemoveBg } from "../lib/fal.js";
 import { fitAndStoreAsset } from "../lib/assetFit.js";
 import { nearestFalAspect } from "../lib/imageSize.js";
-import { uploadFromUrl, uploadBuffer, withRetry } from "../lib/cloudinary.js";
+import { uploadBuffer, withRetry } from "../lib/cloudinary.js";
 import {
   applyPromoEffects,
   recommendedTextColorFor,
@@ -12,6 +12,7 @@ import {
 } from "../lib/promoEffects.js";
 import type { EffectsToggle, PromoEffectsConfig } from "../lib/promoEffects.js";
 import { pickGlowColor } from "../lib/glowColor.js";
+import { keyWhiteBackground, mergeCutoutAlpha, cutoutMode } from "../lib/whiteKey.js";
 import { fetchBuffer } from "./layerCache.js";
 import { validateAiAsset, SIDE_FILL_MIN_RATIO } from "../lib/aiAssetValidator.js";
 import {
@@ -1043,21 +1044,69 @@ export async function processAiReferenceAsset(opts: {
   // модель) → единственная картинка ассета. Прозрачная версия — единственный
   // результат, поэтому её провал валит ассет (раньше — только производную
   // строку). Детерминированный public id: повторный запуск перезаписывает.
-  const removed = await runBriaRemoveBg(finalUrl);
-  if (!removed.success || !removed.imageUrl) {
-    await fail(
-      `removeBg: ${removed.error ?? "unknown"}`,
-      baseMeta as unknown as Prisma.InputJsonValue,
-    );
+  // Вырезание фона (правка 2026-08-14). Bria — ML-сегментация «главного
+  // объекта»: она стирала парящие пропсы, которые в кадре ЕСТЬ (заказчик
+  // сравнил `_push_try1` и `_transparent`), и требование FOCUS усугубляло это —
+  // расфокусный предмет она тем более считает фоном. Фон же по контракту
+  // чисто белый, поэтому кей по СВЯЗНОМУ с краями белому решает задачу без
+  // всякой сегментации и по построению не может потерять предмет.
+  // Гибрид: альфа = max(Bria, кей) — у Bria лучше сложная кромка (шерсть,
+  // листва), кей возвращает стёртые ею объекты. Откат — env AI_REF_CUTOUT.
+  const mode = cutoutMode();
+  let keyed: Buffer | null = null;
+  if (mode !== "bria") {
+    const srcBuffer = await fetchBuffer(finalUrl);
+    if (srcBuffer) {
+      try {
+        keyed = await keyWhiteBackground(srcBuffer);
+      } catch (err) {
+        console.warn(`⚠ ai-ref white-key#${assetId}: ${err instanceof Error ? err.message : err}`);
+      }
+    }
+  }
+
+  let cutout: Buffer | null = mode === "white" ? keyed : null;
+  let cutoutSource: string = mode === "white" ? "white-key" : "bria";
+  if (mode !== "white") {
+    const removed = await runBriaRemoveBg(finalUrl);
+    if (removed.success && removed.imageUrl) {
+      const briaBuffer = await fetchBuffer(removed.imageUrl);
+      if (briaBuffer) {
+        if (keyed) {
+          try {
+            cutout = await mergeCutoutAlpha(briaBuffer, keyed);
+            cutoutSource = "hybrid";
+          } catch (err) {
+            console.warn(`⚠ ai-ref merge#${assetId}: ${err instanceof Error ? err.message : err}`);
+            cutout = briaBuffer;
+          }
+        } else {
+          cutout = briaBuffer;
+        }
+      }
+    }
+    // Bria недоступна или её результат не скачался: кей — полноценная замена,
+    // а не деградация, поэтому ассет из-за этого больше не падает.
+    if (!cutout && keyed) {
+      cutout = keyed;
+      cutoutSource = "white-key (bria failed)";
+      console.warn(`⚠ ai-ref cutout#${assetId}: Bria недоступна — вырезано кеем по белому`);
+    }
+    if (!cutout) {
+      await fail(
+        `removeBg: ${removed.error ?? "результат не скачался"}`,
+        baseMeta as unknown as Prisma.InputJsonValue,
+      );
+      return { ok: false };
+    }
+  }
+  if (!cutout) {
+    await fail("cutout: не удалось вырезать фон", baseMeta as unknown as Prisma.InputJsonValue);
     return { ok: false };
   }
+
   const trUp = await withRetry(
-    () =>
-      uploadFromUrl(
-        removed.imageUrl!,
-        `${variantId}_${assetKey}${AI_REF_SUFFIX_TRANSPARENT}`,
-        folder,
-      ),
+    () => uploadBuffer(cutout!, `${variantId}_${assetKey}${AI_REF_SUFFIX_TRANSPARENT}`, folder),
     `ai-ref-transparent#${assetId}`,
   );
   if (!trUp.success || !trUp.secure_url) {
@@ -1111,6 +1160,7 @@ export async function processAiReferenceAsset(opts: {
       (healingMeta ? ` heal=${healingMeta.attempts.length} healed=${healingMeta.used}` : "") +
       (maxProps !== undefined ? ` maxProps=${maxProps}` : "") +
       ` qaPassed=${qaPassed} fidelity=${fidelity}` +
+      ` cutout=${cutoutSource}` +
       (effects.meta.applied
         ? ` glow=${effects.meta.glowHex}(${effects.meta.glowSource})`
         : ` effects=off${effects.meta.error ? `(${effects.meta.error})` : ""}`),
