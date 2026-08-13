@@ -175,6 +175,23 @@ describe("профили чек-листа (DI2-4)", () => {
     expect(buildQaSystemPrompt("anchor")).not.toContain("HERO GENDER");
   });
 
+  // Правка 2026-08-13: приёмщик судит персонажа по режиму бренда — иначе
+  // вариативный герой браковался, а точная копия проходила там, где нужна
+  // вариативность.
+  it("режим сходства персонажа меняет пункт STYLE в обоих профилях", () => {
+    const exact = buildQaSystemPrompt("anchor", undefined, null, "exact");
+    expect(exact).toContain("mascot is fixed");
+    expect(exact).toContain("A redesigned or restyled character is a FAIL");
+
+    const variant = buildQaSystemPrompt("anchor", undefined, null, "variant");
+    expect(variant).toContain("allows a variation of its character");
+    expect(variant).toContain("must never be reported as a defect");
+
+    // Дефолт — вариативный (решение заказчика 2026-08-13).
+    expect(buildQaSystemPrompt("anchor")).toContain("allows a variation");
+    expect(buildQaSystemPrompt("secondary", 10, null, "exact")).toContain("mascot is fixed");
+  });
+
   it("якорный профиль требует богатых боковых групп, не трогая центр", () => {
     const anchor = buildQaSystemPrompt("anchor");
     expect(anchor).toContain("RICHNESS");

@@ -73,11 +73,11 @@ const WHITE_BG_NOTE =
   "IMPORTANT: the composition is INTENTIONALLY rendered on a plain solid white background for later cut-out, even if the reference banners have scenic backgrounds. A white background is correct and must NEVER be reported as a style mismatch.";
 
 /** Чек-лист якорного формата (email 1200×600), A-2/A-3 + правки 2026-08-13. */
-const anchorChecklist = (gender?: QaHeroGender | null): string[] => [
+const anchorChecklist = (gender?: QaHeroGender | null, fidelity: QaFidelity = "variant"): string[] => [
   "The remaining images are reference banners of the same brand — the ground truth for style.",
   WHITE_BG_NOTE,
   "Evaluate the generated composition against this checklist:",
-  "1. STYLE: palette, prop family, character style, lighting and rendering quality must match the reference banners. Ignore background differences (see above).",
+  `1. STYLE: palette, prop family, lighting and rendering quality must match the reference banners. Ignore background differences (see above). ${fidelityRule(fidelity)}`,
   "2. BRIEF: the composition must express the campaign brief provided in the user prompt.",
   "3. BACKGROUND & CENTER: the background must be plain solid white with no scenery, gradients, glow or bokeh. The central band (the middle ~46% of the width, top to bottom) must be COMPLETELY EMPTY: any plate, oval, panel, frame, character part — and even a single small floating coin, gem, sparkle or particle — inside that band is a FAIL. The only exception is one or two tiny decorative props near the very bottom edge of the band. A headline and CTA will be overlaid there later.",
   `4. ${TEXT_RULE}`,
@@ -100,6 +100,21 @@ export const DEFAULT_QA_MAX_PROPS = 14;
 
 /** Пол героя тон-варианта — дублирует тип из bundle.service (цикл импорта). */
 export type QaHeroGender = "male" | "female";
+
+/** Сходство персонажа с референсами — дублирует тип пайплайна (цикл импорта). */
+export type QaFidelity = "exact" | "variant";
+
+/**
+ * Пункт про сходство персонажа (правка 2026-08-13). Без него приёмщик судил
+ * всех одинаково — по формулировке «character style must match», из-за чего
+ * вариативный персонаж мог быть забракован, а точная копия принята у бренда,
+ * которому нужна вариативность.
+ */
+function fidelityRule(fidelity: QaFidelity): string {
+  return fidelity === "exact"
+    ? "CHARACTER LIKENESS: this brand's mascot is fixed. The hero must be the SAME character as in the reference banners — same species or person, same facial features, same proportions, same outfit and accessories. A redesigned or restyled character is a FAIL; a new pose or camera angle is fine."
+    : "CHARACTER LIKENESS: this brand allows a variation of its character. The hero must stay clearly recognisable as the same brand character (same species or type, same art style and rendering, same wardrobe style and palette), but a different pose, expression and slightly different facial or outfit details are INTENDED and must never be reported as a defect. Only a character that reads as a DIFFERENT character, or one drawn in a different art style, is a FAIL.";
+}
 
 /**
  * Пункт про пол героя (правка 2026-08-13). Пол задаётся именем тон-варианта
@@ -128,15 +143,19 @@ function genderRule(gender: QaHeroGender | null | undefined): string | null {
  * (R-P2) — иначе два требования конфликтуют: «повтори стиль якоря» против
  * «будь проще якоря».
  */
-function buildSecondaryChecklist(maxProps: number, gender?: QaHeroGender | null): string[] {
+function buildSecondaryChecklist(
+  maxProps: number,
+  gender?: QaHeroGender | null,
+  fidelity: QaFidelity = "variant",
+): string[] {
   const gr = genderRule(gender);
   return [
     "The SECOND image is the approved anchor creative of the SAME promo campaign (another format). The remaining images are reference banners of the same brand for this format.",
     WHITE_BG_NOTE,
     "Evaluate the generated composition against this checklist:",
-    "1. STYLE: palette, prop family, character style, lighting and rendering quality must match the reference banners. Ignore background differences (see above).",
+    `1. STYLE: palette, prop family, lighting and rendering quality must match the reference banners. Ignore background differences (see above). ${fidelityRule(fidelity)}`,
     "2. BRIEF: the composition must express the campaign brief provided in the user prompt.",
-    "3. CAMPAIGN STYLE MATCH: it must read as the SAME campaign as the anchor creative — same palette, same character design and outfit, same prop family, same lighting and rendering. A different character, a different color scheme or a different rendering technique is a FAIL. Note: a different layout, crop or aspect ratio is CORRECT and must never be reported — only the style has to match.",
+    "3. CAMPAIGN STYLE MATCH: it must read as the SAME campaign as the anchor creative — same palette, same character design and outfit, same prop family and material language, same lighting and rendering. A different character, a different color scheme or a different rendering technique is a FAIL. Note: a different layout, crop or aspect ratio is CORRECT and must never be reported. DIFFERENT OBJECTS are also CORRECT and intended: this placement is drawn with its own props chosen for the format, and reusing the anchor's exact set is NOT required — judge the family and the craftsmanship, not the inventory.",
     "4. BACKGROUND: the background must be plain solid white with no scenery, gradients, glow, bokeh or cast shadows. There is NO required empty copy space in this format — props and the character may occupy the center freely.",
     // Правка 2026-08-13: пункт стал двусторонним — заказчик сообщил, что
     // прежний односторонний лимит увёл кадры в пустоту. Перегруз по-прежнему
@@ -144,7 +163,7 @@ function buildSecondaryChecklist(maxProps: number, gender?: QaHeroGender | null)
     `5. PROP DENSITY: count the props around the character. The composition should contain the hero, at most ONE larger prop held in their hands, and between 8 and ${maxProps} props floating in the air. It is a FAIL if: there are fewer than 8 floating props and the frame looks empty; or there are more than ${maxProps}; or any large object rests on the ground or is stacked behind the character (slot machine, fortune or roulette wheel, treasure chest, open suitcase or crate, stacks of banknotes, piles or heaps of coins or chips); or the props merge into one solid cluttered pile instead of floating separately. Report the counted number in the reasons when you fail this item.`,
     `6. ${TEXT_RULE}`,
     `7. ${ARTIFACTS_RULE}`,
-    "8. FORMAT FITNESS: the composition must read well in its own aspect ratio — a clear focal hierarchy, the character and key props fully inside the frame with a margin from the edges, nothing important cut off.",
+    "8. FORMAT FITNESS: the composition must read well in its own aspect ratio — a clear focal hierarchy, the character and the prop in their hands fully inside the frame, nothing important cut off. The floating props should be distributed across both sides and into the corners rather than clustered on one side. Small floating props partly cropped by the canvas edges are CORRECT and must never be reported; only a cropped character, a cropped hand-held prop, or a prop cropped so heavily it is unrecognisable is a FAIL.",
     ...(gr ? [`9. ${gr}`] : []),
   ];
 }
@@ -153,11 +172,12 @@ export function buildQaSystemPrompt(
   profile: QaProfile = "anchor",
   maxProps?: number,
   gender?: QaHeroGender | null,
+  fidelity: QaFidelity = "variant",
 ): string {
   const checklist =
     profile === "secondary"
-      ? buildSecondaryChecklist(maxProps ?? DEFAULT_QA_MAX_PROPS, gender)
-      : anchorChecklist(gender);
+      ? buildSecondaryChecklist(maxProps ?? DEFAULT_QA_MAX_PROPS, gender, fidelity)
+      : anchorChecklist(gender, fidelity);
   return [...COMMON_HEAD, ...checklist, ...COMMON_TAIL].join("\n");
 }
 
@@ -235,9 +255,11 @@ export async function reviewComposition(opts: {
   maxProps?: number;
   /** Пол героя тон-варианта — тот же, что ушёл в генерацию. */
   gender?: QaHeroGender | null;
+  /** Сходство персонажа с референсами — то же, что ушло в генерацию. */
+  fidelity?: QaFidelity;
 }): Promise<QaVerdict> {
   const profile: QaProfile = opts.profile ?? "anchor";
-  const systemPrompt = buildQaSystemPrompt(profile, opts.maxProps, opts.gender);
+  const systemPrompt = buildQaSystemPrompt(profile, opts.maxProps, opts.gender, opts.fidelity);
   const anchorPart = profile === "secondary" && opts.anchorUrl ? [opts.anchorUrl] : [];
   const imageUrls = [opts.imageUrl, ...anchorPart, ...opts.refUrls.slice(0, QA_REFS_SHOWN)];
   const prompt = buildQaPrompt(opts.variationText, opts.brandName, opts.formatLabel);

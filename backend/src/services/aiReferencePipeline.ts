@@ -255,15 +255,59 @@ export const AI_REF_COMPOSITION_CONTRACT =
   // чек `AI_REF_CENTER_CLEAR_ZONE`, поэтому «богато» не расползётся в copy space.
   "RICHNESS: both side sections must look abundant and expensive, never sparse — the left anchor " +
   "group is a generous pile of 5 to 8 overlapping props of different sizes, the right section adds " +
-  "3 to 5 supporting props around the character, and 4 to 6 smaller props float above the two side " +
+  "3 to 5 supporting props around the character, and 4 to 6 smaller props sit above the two side " +
   "groups. Fill the side quarters densely from top to bottom; empty space belongs ONLY in the middle " +
   "copy space, never in the side sections. " +
+  // Правка 2026-08-13: без этого ограничения «богато» растёт В СТОРОНУ ЦЕНТРА
+  // и валит детерминированный чек чистой зоны (90 % белого против порога 95 %).
+  // Направление роста задаётся явно: наружу и вверх, не к середине.
+  "GROWTH DIRECTION: make the side sections denser by growing them OUTWARD toward the left and right " +
+  "edges and UPWARD toward the top, never inward toward the middle. Everything on the left must stay " +
+  "within the leftmost quarter of the width, everything on the right within the rightmost quarter. " +
+  "The middle half of the canvas stays untouched white — adding props there instead of stacking them " +
+  "on the sides is the single worst mistake you can make in this layout. " +
   "EDGES: the character and all key props stay fully inside the frame with a clear margin from the " +
   "canvas edges; only minor decorative props may approach the edges. " +
   "STRICTLY NO text, captions, headlines, CTA buttons, logos or watermarks anywhere; the only lettering " +
   "allowed is short casino words that naturally belong to props (slot reels, chips, medallions), such as " +
   "FS, SCATTER, BONUS, VIP, WILD or 777. Professional advertising quality, coherent lighting across " +
   "all elements.";
+
+/**
+ * Сходство персонажа с референсами (правка 2026-08-13, запрос заказчика:
+ * «у части брендов он должен быть один в один, а у части немного вариативный»).
+ * Настраивается на бренде (`Brand.characterFidelity`), значение по умолчанию —
+ * `variant`.
+ *
+ * Требование адресовано именно РЕФЕРЕНСАМ бренда. Единство персонажа ВНУТРИ
+ * кампании (email → push → pop-up) им не затрагивается: там герой обязан
+ * оставаться тем же во всех форматах, за это отвечает блок STYLE SOURCE.
+ */
+export type CharacterFidelity = "exact" | "variant";
+
+export const DEFAULT_CHARACTER_FIDELITY: CharacterFidelity = "variant";
+
+export function characterFidelityOf(raw?: string | null): CharacterFidelity {
+  return raw === "exact" ? "exact" : DEFAULT_CHARACTER_FIDELITY;
+}
+
+export function characterFidelityInstruction(fidelity: CharacterFidelity): string {
+  if (fidelity === "exact") {
+    return (
+      "CHARACTER LIKENESS: the hero is this brand's established mascot — reproduce the character from " +
+      "the reference banners EXACTLY: the same species or person, the same face and facial features, " +
+      "the same body proportions, the same outfit, colors and accessories. Treat the character as a " +
+      "fixed asset that may only be re-posed and re-lit, never redesigned or restyled."
+    );
+  }
+  return (
+    "CHARACTER LIKENESS: keep the hero clearly recognisable as the same brand character from the " +
+    "reference banners — the same species or type, the same art style, rendering and overall design " +
+    "language, the same wardrobe style and palette — but give this particular creative its own take: " +
+    "vary the pose, the expression and the small details of the face and outfit. It must read as the " +
+    "same character in a new shot, not as a copy of a reference and not as a different character."
+  );
+}
 
 /**
  * Требование пола героя (правка 2026-08-13). Формулировка намеренно
@@ -284,11 +328,13 @@ export function heroGenderInstruction(gender: HeroGender | null): string {
 export function buildAiReferencePrompt(
   variationText: string,
   gender: HeroGender | null = null,
+  fidelity: CharacterFidelity = DEFAULT_CHARACTER_FIDELITY,
 ): string {
   const brief = variationText.trim();
   return [
     brief ? `Campaign brief: ${brief}.` : "",
     AI_REF_COMPOSITION_CONTRACT,
+    characterFidelityInstruction(fidelity),
     heroGenderInstruction(gender),
   ]
     .filter(Boolean)
@@ -347,16 +393,29 @@ export function buildSecondaryContract(maxProps: number = DEFAULT_MAX_PROPS): st
     "and no cast shadows on the background; the artwork will be cut out later, so every element needs clean crisp edges. " +
     "COMPOSITION: a rich but well-organised scene made of exactly two things. " +
     "(1) THE HERO: the character large and close-up, filling most of the canvas height, holding AT MOST ONE larger prop in their hands. " +
-    `(2) FLOATING PROPS: between ${MIN_PROPS} and ${cap} props floating freely in the air around the character, ` +
-    "in a mix of sizes — a few medium ones near the hero and the rest smaller, spread across the whole canvas including " +
-    "the corners, each still clearly smaller than the character. Nothing else belongs in the frame. " +
-    "The floating props must come from the same prop family as the reference banners — the same objects, materials and finish. " +
+    // Логика ПРЕДМЕТОВ снята с эталонов дизайнера `pop-up ok1/ok2` (правка
+    // 2026-08-13). Сборку кадра заказчик оставил как есть — трогаем только
+    // то, как подбираются и раскладываются сами items.
+    `(2) FLOATING PROPS: between ${MIN_PROPS} and ${cap} props float in the air around the hero, arranged around ` +
+    "the head and shoulders, spread roughly evenly between the left and the right side and reaching into all four corners. " +
+    "Vary them deliberately: different sizes, different tilt angles, some close and crisp, some further and softer — " +
+    "never a uniform ring of identical objects, never a symmetric mirror. " +
     `The frame must feel abundant, not empty: fewer than ${MIN_PROPS} floating props is wrong, more than ${cap} is wrong too. ` +
+    // Просьба заказчика 2026-08-13: «items по своему вкусу, будто дизайнер
+    // рисовал вручную, но композиция единая». Стиль наследуется от якоря
+    // жёстко, набор предметов — нет: копия набора email выдаёт машину.
+    "PROP CHOICE: do NOT reproduce the anchor creative's set of objects. Pick your OWN props for this format, " +
+    "the way a designer would when drawing the next piece of the same campaign: they must belong to the same visual " +
+    "family as the brand's reference banners (same materials, finish and level of detail) and suit the campaign theme, " +
+    "but the specific objects and their arrangement are yours to choose. The result should look like the same campaign " +
+    "drawn by the same hand for a different placement — not like the anchor rearranged. " +
     "FORBIDDEN: no slot machines, no fortune wheels, no roulette wheels, no treasure chests, no open suitcases or crates, " +
     "no stacks of banknotes, no piles or heaps of coins or chips, no large objects resting on the ground or stacked behind " +
     "the character, no second character. The props FLOAT and stay separated — never let them merge into a solid pile. " +
     "There is NO reserved copy space in this format, the center may be occupied by the character. " +
-    "EDGES: the character and all key props stay fully inside the frame with a clear margin from the canvas edges. " +
+    "EDGES: the character and the prop in their hands stay fully inside the frame. Small floating props, on the contrary, may " +
+    "run past the canvas edges and be partly cropped — that is how the reference layouts breathe; just never crop them so " +
+    "much that they become unreadable. " +
     "STRICTLY NO text, captions, headlines, CTA buttons, logos or watermarks anywhere; the only lettering allowed is short " +
     "casino words that naturally belong to props (slot reels, chips, medallions), such as FS, SCATTER, BONUS, VIP, WILD or 777. " +
     "Professional advertising quality, coherent lighting across all elements."
@@ -403,6 +462,8 @@ export function buildSecondaryPrompt(opts: {
   maxProps?: number;
   /** Пол героя из тон-варианта бренда; null — бренд без вариантов. */
   gender?: HeroGender | null;
+  /** Сходство персонажа с референсами бренда (Brand.characterFidelity). */
+  fidelity?: CharacterFidelity;
 }): string {
   const brief = opts.variationText.trim();
   const base = buildSecondaryContract(clampMaxProps(opts.maxProps));
@@ -419,6 +480,7 @@ export function buildSecondaryPrompt(opts: {
     formatGeometryHint(opts.formatLabel, opts.targetW, opts.targetH),
     opts.styleText,
     contract,
+    characterFidelityInstruction(opts.fidelity ?? DEFAULT_CHARACTER_FIDELITY),
     heroGenderInstruction(opts.gender ?? null),
   ]
     .filter(Boolean)
@@ -552,6 +614,14 @@ export async function processAiReferenceAsset(opts: {
   // Пол героя из имени тон-варианта (правка 2026-08-13): раньше его задавали
   // только референсы, и модель их «переигрывала» — у (Men) выходила женщина.
   const heroGender = heroGenderFromBrand(opts.brandName);
+  // Сходство персонажа — настройка БРЕНДА (правка 2026-08-13). Читаем по
+  // точному имени тон-варианта: у "Betnella(Men)" и "Betnella(Women)" это
+  // разные строки Brand, и настройка у них может отличаться.
+  const brandRow = await prisma.brand.findUnique({
+    where: { name: opts.brandName },
+    select: { characterFidelity: true },
+  });
+  const fidelity = characterFidelityOf(brandRow?.characterFidelity);
   // Чистый центр — требование ТОЛЬКО якорного формата (DI2-4): на push/pop-up
   // текста не будет, и пустая середина там читается как дыра в композиции.
   const centerZone = isAnchor ? AI_REF_CENTER_CLEAR_ZONE : undefined;
@@ -636,7 +706,7 @@ export async function processAiReferenceAsset(opts: {
     } catch (err) {
       console.warn(`⚠ ai-ref layout-guide#${assetId}: ${err instanceof Error ? err.message : err}`);
     }
-    prompt = buildAiReferencePrompt(variationText, heroGender) + guideInstruction;
+    prompt = buildAiReferencePrompt(variationText, heroGender, fidelity) + guideInstruction;
   } else {
     // DI2-3: первым слотом идёт якорная композиция кампании, дальше —
     // референсы своего формата. Схема-раскладки у зависимых нет (DI2-4),
@@ -656,6 +726,7 @@ export async function processAiReferenceAsset(opts: {
       targetH,
       ...(maxProps !== undefined ? { maxProps } : {}),
       gender: heroGender,
+      fidelity,
     });
   }
   const aspect = nearestFalAspect(targetW, targetH);
@@ -665,6 +736,13 @@ export async function processAiReferenceAsset(opts: {
   let chosen: ChosenAttempt | null = null;
   let bestCandidate: ChosenAttempt | null = null;
   let bestScore = -1;
+  /** Лучший кадр среди проваливших ТЕХВАЛИДАЦИЮ — сырьё для лечения. */
+  let techFallback: {
+    index: number;
+    imageUrl: string;
+    ratio: number;
+    reasons: string[];
+  } | null = null;
 
   for (let attempt = 1; attempt <= AI_REF_MAX_ATTEMPTS && !chosen; attempt++) {
     // Модель — GPT Image 2 (A-7, ей не нужен aspect: канвас точный);
@@ -728,13 +806,17 @@ export async function processAiReferenceAsset(opts: {
       ...(centerZone ? { centerClearZone: centerZone } : {}),
     });
     if (!tech.passed) {
-      attempts.push({
-        imageUrl: fitted.url,
-        score: 0,
-        pass: false,
-        reasons: tech.checks.filter((c) => !c.passed).map((c) => `${c.key}: ${c.detail}`),
-        tech,
-      });
+      const reasons = tech.checks.filter((c) => !c.passed).map((c) => `${c.key}: ${c.detail}`);
+      attempts.push({ imageUrl: fitted.url, score: 0, pass: false, reasons, tech });
+      // Лучший среди ЗАБРАКОВАННЫХ техникой (правка 2026-08-13): раньше такие
+      // кадры никуда не записывались, и провал всех трёх попыток по центру
+      // ронял ассет, хотя лечение «убери объекты из центра» — ровно тот
+      // случай, для которого auto-healing и делался. Ранжируем по чистоте
+      // центра: 90 % белого лечится, 40 % — почти наверняка нет.
+      const ratio = tech.centerRatio ?? 0;
+      if (!techFallback || ratio > techFallback.ratio) {
+        techFallback = { index: attempts.length - 1, imageUrl: fitted.url, ratio, reasons };
+      }
       continue;
     }
 
@@ -750,6 +832,7 @@ export async function processAiReferenceAsset(opts: {
       formatLabel,
       ...(maxProps !== undefined ? { maxProps } : {}),
       gender: heroGender,
+      fidelity,
     });
     const attemptRow: AiRefAttempt = {
       imageUrl: fitted.url,
@@ -774,8 +857,8 @@ export async function processAiReferenceAsset(opts: {
     }
   }
 
-  // Ни одной пригодной попытки (все упали до приёмки) — лечить нечего.
-  if (!chosen && !bestCandidate) {
+  // Ни одной пригодной попытки И ни одного кадра вообще — лечить нечего.
+  if (!chosen && !bestCandidate && !techFallback) {
     const lastReason = attempts.at(-1)?.reasons[0] ?? "все попытки провалились";
     await fail(`ai_reference: ${lastReason} (${attempts.length} попыток)`, {
       qa: { attempts, qaPassed: false, threshold: qaThreshold() },
@@ -790,7 +873,15 @@ export async function processAiReferenceAsset(opts: {
   // DI-R10 → auto-healing (B1): все попытки провалили приёмку — лучший
   // кандидат уходит на re-edit по замечаниям приёмщика (aiHealing.ts).
   // Победитель лечения (или исходник, если лучше не стало) — финальная база.
-  const finalPick = (chosen ?? bestCandidate)!;
+  // Порядок предпочтения: принятая приёмкой → забракованная приёмкой →
+  // забракованная техникой (её лечим ниже, DI-R10 + правка 2026-08-13).
+  const finalPick: ChosenAttempt =
+    chosen ??
+    bestCandidate ?? {
+      index: techFallback!.index,
+      imageUrl: techFallback!.imageUrl,
+      pass: false,
+    };
   let finalUrl = finalPick.imageUrl;
   let qaPassed = finalPick.pass;
   let healingMeta: {
@@ -799,14 +890,22 @@ export async function processAiReferenceAsset(opts: {
     chosenAttempt: number | null;
   } | null = null;
 
-  if (!chosen && bestCandidate) {
-    const bestAttempt = attempts[bestCandidate.index]!;
+  if (!chosen) {
+    // Источник лечения: забракованный приёмкой кандидат либо — если приёмки
+    // не достиг никто — наименее испорченный кадр по техвалидации.
+    const source = bestCandidate
+      ? {
+          imageUrl: bestCandidate.imageUrl,
+          score: attempts[bestCandidate.index]!.score,
+          reasons: attempts[bestCandidate.index]!.reasons,
+        }
+      : {
+          imageUrl: techFallback!.imageUrl,
+          score: 0,
+          reasons: techFallback!.reasons,
+        };
     const heal = await healComposition({
-      source: {
-        imageUrl: bestCandidate.imageUrl,
-        score: bestAttempt.score,
-        reasons: bestAttempt.reasons,
-      },
+      source,
       targetW,
       targetH,
       publicIdBase: `${variantId}_${assetKey}`,
@@ -823,6 +922,7 @@ export async function processAiReferenceAsset(opts: {
       formatLabel,
       ...(maxProps !== undefined ? { maxProps } : {}),
       gender: heroGender,
+      fidelity,
     });
     finalUrl = heal.winner.imageUrl;
     qaPassed = heal.winner.pass;
@@ -949,7 +1049,7 @@ export async function processAiReferenceAsset(opts: {
       `attempts=${attempts.length}` +
       (healingMeta ? ` heal=${healingMeta.attempts.length} healed=${healingMeta.used}` : "") +
       (maxProps !== undefined ? ` maxProps=${maxProps}` : "") +
-      ` qaPassed=${qaPassed}` +
+      ` qaPassed=${qaPassed} fidelity=${fidelity}` +
       (effects.meta.applied
         ? ` glow=${effects.meta.glowHex}(${effects.meta.glowSource})`
         : ` effects=off${effects.meta.error ? `(${effects.meta.error})` : ""}`),

@@ -28,6 +28,12 @@ export interface FractionZone {
 export interface AiTechReport {
   passed: boolean;
   checks: AiTechCheck[];
+  /**
+   * Доля почти-белых пикселей в зоне чистого центра (0..1); отсутствует, если
+   * чек не выполнялся. Нужна пайплайну, чтобы при провале ВСЕХ попыток выбрать
+   * наименее испорченный кадр и отдать его на auto-healing, а не ронять ассет.
+   */
+  centerRatio?: number;
 }
 
 /**
@@ -128,6 +134,7 @@ export async function validateAiAsset(
   },
 ): Promise<AiTechReport> {
   const checks: AiTechCheck[] = [];
+  let centerRatio: number | undefined;
 
   let meta: Awaited<ReturnType<ReturnType<typeof sharp>["metadata"]>>;
   try {
@@ -205,7 +212,12 @@ export async function validateAiAsset(
       passed: centerOk,
       detail: `чистая зона: ${Math.round(ratio * 100)}% белого (порог ${Math.round(CENTER_CLEAR_MIN_RATIO * 100)}%)`,
     });
+    centerRatio = ratio;
   }
 
-  return { passed: checks.every((c) => c.passed), checks };
+  return {
+    passed: checks.every((c) => c.passed),
+    checks,
+    ...(centerRatio !== undefined ? { centerRatio } : {}),
+  };
 }

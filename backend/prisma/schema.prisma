@@ -90,6 +90,11 @@ model Brand {
   // Непустая перекрывает общую библиотеку слота; пустая/null — бренд берёт
   // общую (фолбэк). Перекраска под палитру кадра (П8) работает в обоих случаях.
   decorUrls         Json?
+  // Сходство персонажа с референсами в режиме ai_reference (TASK
+  // glow-fade-density, правка 2026-08-13 по просьбе заказчика): "exact" —
+  // маскот копируется один в один, "variant" — узнаваем по стилю и дизайну,
+  // но черты слегка другие. null = "variant" (дефолт, решение заказчика).
+  characterFidelity String?
   // Ownership (TASK super-designer): the user who created the brand. Legacy
   // brands are null ("nobody's") — editable only via the admin panel. A
   // super-designer may edit/delete/test ONLY brands where createdById = self.
