@@ -119,7 +119,7 @@ async function main(): Promise<void> {
           asset.assetKey,
           stripGenderName(asset.variant.brandName),
         );
-        refUrls = refs.map((r) => r.imageUrl);
+        refUrls = refs.refs.map((r) => r.imageUrl);
       } catch {
         // Референсы пропали — арт-директор обойдётся одной композицией.
       }

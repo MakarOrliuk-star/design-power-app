@@ -440,18 +440,16 @@ describe("formatGeometryHint / buildSecondaryPrompt (DI2-3/DI2-4)", () => {
       formatLabel: "Pop-up",
       targetW: 800,
       targetH: 600,
-      maxProps: 6,
+      maxProps: 12,
     });
-    expect(p).toContain("between 4 and 6 SMALL props");
-    expect(p).toContain("more than 6 floating props is wrong");
+    expect(p).toContain("between 8 and 12 props");
+    expect(p).toContain("fewer than 8 floating props is wrong, more than 12 is wrong too");
     expect(p).toContain("AT MOST ONE larger prop");
     expect(p).toContain("no slot machines");
     expect(p).toContain("no treasure chests");
-    expect(p).toContain("Do NOT fill the canvas");
+    expect(p).toContain("must feel abundant, not empty");
     // Стилистику предметов не меняем — только количество и калибр (DI3-11).
     expect(p).toContain("same prop family as the reference banners");
-    // Плотность якоря копировать нельзя, стиль — нужно (R-P2).
-    expect(p).toContain("or its prop density");
     expect(p).toContain("APPROVED anchor creative");
     // Прежние формулировки, порождавшие перегруз, ушли.
     expect(p).not.toContain("anchor prop group");
@@ -469,16 +467,41 @@ describe("formatGeometryHint / buildSecondaryPrompt (DI2-3/DI2-4)", () => {
         targetH: 512,
         ...(maxProps !== undefined ? { maxProps } : {}),
       });
-    expect(build()).toContain("between 4 and 8 SMALL props"); // дефолт
-    expect(build(2)).toContain("between 4 and 4 SMALL props"); // ниже нормы
-    expect(build(999)).toContain("between 4 and 20 SMALL props"); // потолок
+    expect(build()).toContain("between 8 and 14 props"); // дефолт
+    expect(build(2)).toContain("between 8 and 8 props"); // ниже нормы
+    expect(build(999)).toContain("between 8 and 24 props"); // потолок
   });
 
-  it("якорный контракт заданием 3 не затронут (DI3-10)", () => {
+  // Правка 2026-08-13: DI3-10 («email не трогаем») отменено заказчиком —
+  // композиция email тоже выходила пустой. Раскладка при этом прежняя.
+  it("якорный контракт требует богатых боковых групп, сохраняя пустой центр", () => {
     const anchor = buildAiReferencePrompt("VIP weekend");
-    expect(anchor).not.toContain("SMALL props");
-    expect(anchor).not.toContain("no slot machines");
+    expect(anchor).toContain("RICHNESS");
+    expect(anchor).toContain("5 to 8 overlapping props");
+    expect(anchor).toContain("empty space belongs ONLY in the middle");
+    // Инварианты якоря на месте: copy space и три секции.
+    expect(anchor).toContain("COPY SPACE");
     expect(anchor).toContain("THREE sections");
+    // Правила зависимых форматов в якорь не протекли.
+    expect(anchor).not.toContain("no slot machines");
+  });
+
+  it("пол героя из тон-варианта попадает в промпт обоих форматов", () => {
+    expect(buildAiReferencePrompt("VIP", "male")).toContain("the main character is a MAN");
+    expect(buildAiReferencePrompt("VIP", "female")).toContain("the main character is a WOMAN");
+    // Бренд без суффикса пола пункт не получает — персонажа задают референсы.
+    expect(buildAiReferencePrompt("VIP")).not.toContain("HERO GENDER");
+    const push = buildSecondaryPrompt({
+      variationText: "VIP",
+      styleText: "",
+      hasAnchor: true,
+      formatLabel: "Push",
+      targetW: 1024,
+      targetH: 512,
+      gender: "male",
+    });
+    expect(push).toContain("the main character is a MAN");
+    expect(push).toContain("never a woman");
   });
 
   it("без якоря (старый бандл) блок STYLE SOURCE снимается", () => {
@@ -582,11 +605,11 @@ describe("processAiReferenceAsset — зависимый формат (DI2-3)", 
   });
 
   it("лимит предметов уходит и в промпт, и в приёмку одним числом (DI3-9)", async () => {
-    await processAiReferenceAsset({ ...PUSH_OPTS, maxProps: 5 });
+    await processAiReferenceAsset({ ...PUSH_OPTS, maxProps: 10 });
     const [genArgs] = fal.runGptImage2Edit.mock.calls[0]!;
-    expect(genArgs.prompt).toContain("between 4 and 5 SMALL props");
+    expect(genArgs.prompt).toContain("between 8 and 10 props");
     const [qaArgs] = reviewer.reviewComposition.mock.calls[0]!;
-    expect(qaArgs.maxProps).toBe(5);
+    expect(qaArgs.maxProps).toBe(10);
   });
 });
 

@@ -29,6 +29,7 @@ import {
   resolveStyleAnchorKey,
   dependentAiReferenceAssets,
   stripGenderName,
+  heroGenderFromBrand,
   variantDisplayName,
 } from "../src/services/bundle.service.js";
 
@@ -54,6 +55,20 @@ describe("stripGenderName / variantDisplayName", () => {
     expect(stripGenderName("Corgi")).toBe("Corgi");
     expect(stripGenderName("Booongo(Monkey)")).toBe("Booongo(Monkey)");
     expect(stripGenderName("Frogyspin_women_black")).toBe("Frogyspin_women_black");
+  });
+
+  // Правка 2026-08-13: пол ушёл в промпт генерации и в чек-лист приёмки —
+  // до этого «Fridayroll(Men)» мог сгенерировать женщину.
+  it("heroGenderFromBrand: пол берётся из суффикса, форма записи любая", () => {
+    expect(heroGenderFromBrand("Fridayroll(Men)")).toBe("male");
+    expect(heroGenderFromBrand("Fridayroll (Men)")).toBe("male");
+    expect(heroGenderFromBrand("Oscar(man)")).toBe("male");
+    expect(heroGenderFromBrand("Betnella(Women)")).toBe("female");
+    expect(heroGenderFromBrand("Betnella (woman)")).toBe("female");
+    // Бренд без тон-варианта: пол не навязываем, его задают референсы.
+    expect(heroGenderFromBrand("Corgi")).toBeNull();
+    expect(heroGenderFromBrand("Booongo(Monkey)")).toBeNull();
+    expect(heroGenderFromBrand("Frogyspin_women_black")).toBeNull();
   });
 
   it("formats the UI label with a space + normalized suffix", () => {

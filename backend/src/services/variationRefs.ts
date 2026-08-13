@@ -105,17 +105,32 @@ export function resolveRefPoolName(
  * Бросает, если меньше MIN_REFS_FOR_GENERATION — процессор переводит ассет в
  * FAILED с этой причиной (гейт в роуте generate должен был отсечь раньше).
  */
+export interface GenerationRefs {
+  refs: VariationRefDto[];
+  /** Имя пула, из которого реально взяты референсы. */
+  poolName: string;
+  /**
+   * true — пул тон-варианта пуст и сработал фолбэк на общий пул бренда.
+   * Для варианта с полом в имени это значимо: общий пул смешанный, и пол
+   * героя тогда определяется не данными, а везением (правка 2026-08-13 —
+   * «(Men) сгенерировал женщину»). Вызывающий это логирует.
+   */
+  fellBackToBase: boolean;
+}
+
 export async function pickGenerationRefs(
   presetId: string,
   brandName: string,
   assetKey: string,
   /** Базовое имя бренда: пул тон-варианта пуст → берём общий (DI2-10). */
   baseBrandName?: string,
-): Promise<VariationRefDto[]> {
+): Promise<GenerationRefs> {
   let poolName = brandName;
+  let fellBackToBase = false;
   let refs = await listRefs(presetId, brandName, assetKey);
   if (refs.length === 0 && baseBrandName && baseBrandName !== brandName) {
     poolName = baseBrandName;
+    fellBackToBase = true;
     refs = await listRefs(presetId, baseBrandName, assetKey);
   }
   if (refs.length < MIN_REFS_FOR_GENERATION) {
@@ -123,7 +138,7 @@ export async function pickGenerationRefs(
       `ai_reference: у бренда "${poolName}" (формат ${assetKey}) ${refs.length} референсов, нужно >= ${MIN_REFS_FOR_GENERATION}`,
     );
   }
-  return refs.slice(0, MAX_EDIT_REFS);
+  return { refs: refs.slice(0, MAX_EDIT_REFS), poolName, fellBackToBase };
 }
 
 /** Слаг бренда для папки Cloudinary (кириллица/скобки → безопасные дефисы). */

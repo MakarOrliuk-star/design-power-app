@@ -72,8 +72,8 @@ const ARTIFACTS_RULE =
 const WHITE_BG_NOTE =
   "IMPORTANT: the composition is INTENTIONALLY rendered on a plain solid white background for later cut-out, even if the reference banners have scenic backgrounds. A white background is correct and must NEVER be reported as a style mismatch.";
 
-/** Чек-лист якорного формата (email 1200×600) — прежний, A-2/A-3. */
-const ANCHOR_CHECKLIST = [
+/** Чек-лист якорного формата (email 1200×600), A-2/A-3 + правки 2026-08-13. */
+const anchorChecklist = (gender?: QaHeroGender | null): string[] => [
   "The remaining images are reference banners of the same brand — the ground truth for style.",
   WHITE_BG_NOTE,
   "Evaluate the generated composition against this checklist:",
@@ -83,6 +83,11 @@ const ANCHOR_CHECKLIST = [
   `4. ${TEXT_RULE}`,
   `5. ${ARTIFACTS_RULE}`,
   "6. EMAIL HERO FITNESS: a clear designer-grade focal hierarchy (a large anchor group of props in a lower corner, the main character on the opposite side, smaller props around); the character and key props fully inside the frame, not cut by the canvas edges.",
+  // Правка 2026-08-13 (заказчик: «композиция пустая»): раньше проверялся
+  // только перебор в центре, из-за чего разреженный кадр с одиноким пропсом
+  // на сторону проходил приёмку.
+  "7. RICHNESS: the two side sections must look abundant — the anchor side holds a generous group of overlapping props, the character side has supporting props around the hero, and smaller props float above them. A sparse composition with only one or two props per side, or large empty white areas inside the SIDE sections, is a FAIL. This does NOT apply to the central band, which must stay empty (see item 3).",
+  ...(genderRule(gender) ? [`8. ${genderRule(gender)}`] : []),
 ];
 
 /**
@@ -91,7 +96,25 @@ const ANCHOR_CHECKLIST = [
  * импортирует приёмщика), а число обязано совпадать с тем, что ушло в промпт
  * генерации, и приходит сюда параметром.
  */
-export const DEFAULT_QA_MAX_PROPS = 8;
+export const DEFAULT_QA_MAX_PROPS = 14;
+
+/** Пол героя тон-варианта — дублирует тип из bundle.service (цикл импорта). */
+export type QaHeroGender = "male" | "female";
+
+/**
+ * Пункт про пол героя (правка 2026-08-13). Пол задаётся именем тон-варианта
+ * («Fridayroll(Men)»), но до этой правки нигде не проверялся: модель меняла
+ * пол героя, и брак уходил человеку. Теперь несовпадение = FAIL, то есть
+ * авто-ретрай. Бренд без суффикса пола пункт не получает.
+ */
+function genderRule(gender: QaHeroGender | null | undefined): string | null {
+  if (!gender) return null;
+  const [must, wrong] = gender === "male" ? ["a MAN", "a woman"] : ["a WOMAN", "a man"];
+  return (
+    `HERO GENDER: the main character must be ${must}. If the hero is ${wrong}, this is an ` +
+    "immediate FAIL regardless of how good the rest of the composition is — say so explicitly in the reasons."
+  );
+}
 
 /**
  * Чек-лист зависимого формата (push / pop-up, DI2-4): текста на нём не будет,
@@ -105,28 +128,36 @@ export const DEFAULT_QA_MAX_PROPS = 8;
  * (R-P2) — иначе два требования конфликтуют: «повтори стиль якоря» против
  * «будь проще якоря».
  */
-function buildSecondaryChecklist(maxProps: number): string[] {
+function buildSecondaryChecklist(maxProps: number, gender?: QaHeroGender | null): string[] {
+  const gr = genderRule(gender);
   return [
     "The SECOND image is the approved anchor creative of the SAME promo campaign (another format). The remaining images are reference banners of the same brand for this format.",
     WHITE_BG_NOTE,
     "Evaluate the generated composition against this checklist:",
     "1. STYLE: palette, prop family, character style, lighting and rendering quality must match the reference banners. Ignore background differences (see above).",
     "2. BRIEF: the composition must express the campaign brief provided in the user prompt.",
-    "3. CAMPAIGN STYLE MATCH: it must read as the SAME campaign as the anchor creative — same palette, same character design and outfit, same prop family, same lighting and rendering. A different character, a different color scheme or a different rendering technique is a FAIL. Note: a different layout, crop or aspect ratio is CORRECT and must never be reported — only the style has to match. A LOWER prop density than the anchor is also CORRECT and intended: this format must be simpler and airier than the anchor, never busier.",
+    "3. CAMPAIGN STYLE MATCH: it must read as the SAME campaign as the anchor creative — same palette, same character design and outfit, same prop family, same lighting and rendering. A different character, a different color scheme or a different rendering technique is a FAIL. Note: a different layout, crop or aspect ratio is CORRECT and must never be reported — only the style has to match.",
     "4. BACKGROUND: the background must be plain solid white with no scenery, gradients, glow, bokeh or cast shadows. There is NO required empty copy space in this format — props and the character may occupy the center freely.",
-    `5. PROP DENSITY: count the props around the character. The composition may contain the hero character, at most ONE larger prop held in their hands, and at most ${maxProps} small props floating in the air. It is a FAIL if: there are more than ${maxProps} floating props; or any large object rests on the ground or is stacked behind the character (slot machine, fortune or roulette wheel, treasure chest, open suitcase or crate, stacks of banknotes, piles or heaps of coins or chips); or the props crowd together into a cluttered pile with no empty background between them. Report the counted number in the reasons when you fail this item.`,
+    // Правка 2026-08-13: пункт стал двусторонним — заказчик сообщил, что
+    // прежний односторонний лимит увёл кадры в пустоту. Перегруз по-прежнему
+    // определяется КРУПНЫМИ объектами на земле, а не числом мелких.
+    `5. PROP DENSITY: count the props around the character. The composition should contain the hero, at most ONE larger prop held in their hands, and between 8 and ${maxProps} props floating in the air. It is a FAIL if: there are fewer than 8 floating props and the frame looks empty; or there are more than ${maxProps}; or any large object rests on the ground or is stacked behind the character (slot machine, fortune or roulette wheel, treasure chest, open suitcase or crate, stacks of banknotes, piles or heaps of coins or chips); or the props merge into one solid cluttered pile instead of floating separately. Report the counted number in the reasons when you fail this item.`,
     `6. ${TEXT_RULE}`,
     `7. ${ARTIFACTS_RULE}`,
     "8. FORMAT FITNESS: the composition must read well in its own aspect ratio — a clear focal hierarchy, the character and key props fully inside the frame with a margin from the edges, nothing important cut off.",
+    ...(gr ? [`9. ${gr}`] : []),
   ];
 }
 
-export function buildQaSystemPrompt(profile: QaProfile = "anchor", maxProps?: number): string {
+export function buildQaSystemPrompt(
+  profile: QaProfile = "anchor",
+  maxProps?: number,
+  gender?: QaHeroGender | null,
+): string {
   const checklist =
     profile === "secondary"
-      ? buildSecondaryChecklist(maxProps ?? DEFAULT_QA_MAX_PROPS)
-      : // Якорный формат (email) заданием 3 не затронут (DI3-10).
-        ANCHOR_CHECKLIST;
+      ? buildSecondaryChecklist(maxProps ?? DEFAULT_QA_MAX_PROPS, gender)
+      : anchorChecklist(gender);
   return [...COMMON_HEAD, ...checklist, ...COMMON_TAIL].join("\n");
 }
 
@@ -202,9 +233,11 @@ export async function reviewComposition(opts: {
   formatLabel?: string;
   /** Лимит предметов зависимого формата — ровно тот, что ушёл в генерацию. */
   maxProps?: number;
+  /** Пол героя тон-варианта — тот же, что ушёл в генерацию. */
+  gender?: QaHeroGender | null;
 }): Promise<QaVerdict> {
   const profile: QaProfile = opts.profile ?? "anchor";
-  const systemPrompt = buildQaSystemPrompt(profile, opts.maxProps);
+  const systemPrompt = buildQaSystemPrompt(profile, opts.maxProps, opts.gender);
   const anchorPart = profile === "secondary" && opts.anchorUrl ? [opts.anchorUrl] : [];
   const imageUrls = [opts.imageUrl, ...anchorPart, ...opts.refUrls.slice(0, QA_REFS_SHOWN)];
   const prompt = buildQaPrompt(opts.variationText, opts.brandName, opts.formatLabel);

@@ -146,22 +146,40 @@ describe("профили чек-листа (DI2-4)", () => {
   // TASK glow-fade-density, задание 3 (DI3-12): перегруз ловит приёмщик и
   // отправляет попытку в авто-ретрай, а не показывает её человеку.
   it("зависимый профиль считает предметы по числу из конфига", () => {
-    const secondary = buildQaSystemPrompt("secondary", 5);
+    const secondary = buildQaSystemPrompt("secondary", 10);
     expect(secondary).toContain("PROP DENSITY");
-    expect(secondary).toContain("at most 5 small props");
-    expect(secondary).toContain("more than 5 floating props");
+    expect(secondary).toContain("between 8 and 10 props");
+    expect(secondary).toContain("more than 10");
     expect(secondary).toContain("slot machine");
+    // Правка 2026-08-13: пункт двусторонний — пустой кадр тоже брак.
+    expect(secondary).toContain("fewer than 8 floating props and the frame looks empty");
     // Число подставляется, а не зашито: дефолт остаётся дефолтом.
-    expect(buildQaSystemPrompt("secondary")).toContain("at most 8 small props");
+    expect(buildQaSystemPrompt("secondary")).toContain("between 8 and 14 props");
   });
 
   it("пункт про плотность отсутствует в якорном профиле (DI3-10)", () => {
     expect(buildQaSystemPrompt("anchor", 5)).not.toContain("PROP DENSITY");
   });
 
-  it("более простая композиция, чем у якоря, браком не считается (R-P2)", () => {
+  // Правка 2026-08-13: пункт про «проще якоря» снят — заказчик просил больше
+  // предметов на всех форматах, и требование «будь проще» тянуло в пустоту.
+  it("другая раскладка по-прежнему не брак, но про «проще якоря» речи нет", () => {
     const secondary = buildQaSystemPrompt("secondary");
-    expect(secondary).toContain("A LOWER prop density than the anchor is also CORRECT");
+    expect(secondary).toContain("a different layout, crop or aspect ratio is CORRECT");
+    expect(secondary).not.toContain("simpler and airier");
+  });
+
+  it("пол героя проверяется в обоих профилях и только при тон-варианте", () => {
+    expect(buildQaSystemPrompt("anchor", undefined, "male")).toContain("must be a MAN");
+    expect(buildQaSystemPrompt("secondary", 10, "female")).toContain("must be a WOMAN");
+    expect(buildQaSystemPrompt("anchor")).not.toContain("HERO GENDER");
+  });
+
+  it("якорный профиль требует богатых боковых групп, не трогая центр", () => {
+    const anchor = buildQaSystemPrompt("anchor");
+    expect(anchor).toContain("RICHNESS");
+    expect(anchor).toContain("sparse composition");
+    expect(anchor).toContain("does NOT apply to the central band");
   });
 
   it("зависимый профиль сверяет стиль с якорем и не считает другую раскладку браком", () => {

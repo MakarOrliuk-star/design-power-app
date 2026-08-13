@@ -46,15 +46,15 @@ describe("pickGenerationRefs (DI-R3/R5)", () => {
 
   it("отдаёт все при 5..14", async () => {
     db.variationReference.findMany.mockResolvedValue(refRows(7));
-    expect(await pickGenerationRefs("p1", "Betnella", "email")).toHaveLength(7);
+    expect((await pickGenerationRefs("p1", "Betnella", "email")).refs).toHaveLength(7);
   });
 
   it(`режет до ${MAX_EDIT_REFS} по порядку админа при 15 (лимит nano-banana-2 /edit)`, async () => {
     db.variationReference.findMany.mockResolvedValue(refRows(15));
-    const picked = await pickGenerationRefs("p1", "Betnella", "email");
-    expect(picked).toHaveLength(MAX_EDIT_REFS);
-    expect(picked[0]!.id).toBe("r0");
-    expect(picked.at(-1)!.id).toBe(`r${MAX_EDIT_REFS - 1}`);
+    const { refs } = await pickGenerationRefs("p1", "Betnella", "email");
+    expect(refs).toHaveLength(MAX_EDIT_REFS);
+    expect(refs[0]!.id).toBe("r0");
+    expect(refs.at(-1)!.id).toBe(`r${MAX_EDIT_REFS - 1}`);
   });
 });
 
@@ -122,7 +122,11 @@ describe("pickGenerationRefs — фолбэк на общий пул (DI2-10)", 
       .mockResolvedValueOnce([]) // Betnella(Men)
       .mockResolvedValueOnce(refRows(6)); // Betnella
     const picked = await pickGenerationRefs("p1", "Betnella(Men)", "email", "Betnella");
-    expect(picked).toHaveLength(6);
+    expect(picked.refs).toHaveLength(6);
+    // Правка 2026-08-13: вызывающий должен УЗНАТЬ о фолбэке — общий пул
+    // смешан по полу, и для варианта «(Men)» это повод предупредить админа.
+    expect(picked.poolName).toBe("Betnella");
+    expect(picked.fellBackToBase).toBe(true);
     expect(db.variationReference.findMany).toHaveBeenNthCalledWith(
       2,
       expect.objectContaining({
@@ -133,8 +137,10 @@ describe("pickGenerationRefs — фолбэк на общий пул (DI2-10)", 
 
   it("у варианта свои референсы → общий пул не читается вовсе", async () => {
     db.variationReference.findMany.mockResolvedValue(refRows(7));
-    await pickGenerationRefs("p1", "Betnella(Men)", "email", "Betnella");
+    const picked = await pickGenerationRefs("p1", "Betnella(Men)", "email", "Betnella");
     expect(db.variationReference.findMany).toHaveBeenCalledTimes(1);
+    expect(picked.fellBackToBase).toBe(false);
+    expect(picked.poolName).toBe("Betnella(Men)");
   });
 
   it("в ошибке назван пул, который реально проверяли", async () => {

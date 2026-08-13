@@ -22,7 +22,8 @@ import { describeCampaignStyle } from "../lib/styleAnchor.js";
 import { healComposition } from "./aiHealing.js";
 import type { AiRefAttempt } from "./aiHealing.js";
 import { pickGenerationRefs } from "./variationRefs.js";
-import { recomputeBundleStatus, stripGenderName } from "./bundle.service.js";
+import { recomputeBundleStatus, stripGenderName, heroGenderFromBrand } from "./bundle.service.js";
+import type { HeroGender } from "./bundle.service.js";
 
 /**
  * Пайплайн ai_reference (TASK ai-reference, R-PLAN §1.1/§3): «одна вариация →
@@ -247,6 +248,16 @@ export const AI_REF_COMPOSITION_CONTRACT =
   "and the wide copy space sits between them; small props stay tightly above their side groups, " +
   "never drifting toward the middle; foreground elements tack sharp, small distant props slightly " +
   "blurred for depth of field. " +
+  // Правка 2026-08-13 (заказчик: «композиция стала пустой»): без явного
+  // требования обилия модель ставит один пропс на сторону и кадр читается
+  // как незаконченный. Числа держат обе стороны насыщенными, при этом центр
+  // по-прежнему обязан остаться пустым — за этим следит детерминированный
+  // чек `AI_REF_CENTER_CLEAR_ZONE`, поэтому «богато» не расползётся в copy space.
+  "RICHNESS: both side sections must look abundant and expensive, never sparse — the left anchor " +
+  "group is a generous pile of 5 to 8 overlapping props of different sizes, the right section adds " +
+  "3 to 5 supporting props around the character, and 4 to 6 smaller props float above the two side " +
+  "groups. Fill the side quarters densely from top to bottom; empty space belongs ONLY in the middle " +
+  "copy space, never in the side sections. " +
   "EDGES: the character and all key props stay fully inside the frame with a clear margin from the " +
   "canvas edges; only minor decorative props may approach the edges. " +
   "STRICTLY NO text, captions, headlines, CTA buttons, logos or watermarks anywhere; the only lettering " +
@@ -254,9 +265,32 @@ export const AI_REF_COMPOSITION_CONTRACT =
   "FS, SCATTER, BONUS, VIP, WILD or 777. Professional advertising quality, coherent lighting across " +
   "all elements.";
 
-export function buildAiReferencePrompt(variationText: string): string {
+/**
+ * Требование пола героя (правка 2026-08-13). Формулировка намеренно
+ * повторяет пол трижды и запрещает противоположный: короткое «male character»
+ * модель теряет, когда сочиняет сцену по женским по большей части референсам.
+ */
+export function heroGenderInstruction(gender: HeroGender | null): string {
+  if (!gender) return "";
+  const [noun, opposite] =
+    gender === "male" ? ["a MAN", "a woman"] : ["a WOMAN", "a man"];
+  return (
+    `HERO GENDER (mandatory): the main character is ${noun}. ` +
+    `Render ${noun} — never ${opposite}, and never replace the hero with a character of the ` +
+    `opposite gender even if some reference banners show one.`
+  );
+}
+
+export function buildAiReferencePrompt(
+  variationText: string,
+  gender: HeroGender | null = null,
+): string {
   const brief = variationText.trim();
-  return [brief ? `Campaign brief: ${brief}.` : "", AI_REF_COMPOSITION_CONTRACT]
+  return [
+    brief ? `Campaign brief: ${brief}.` : "",
+    AI_REF_COMPOSITION_CONTRACT,
+    heroGenderInstruction(gender),
+  ]
     .filter(Boolean)
     .join(" ");
 }
@@ -267,13 +301,19 @@ export function buildAiReferencePrompt(variationText: string): string {
  * Настраивается в админке на формат (`BundleTypeAsset.maxProps`, DI3-14) —
  * калибруется по логам без деплоя.
  */
-export const DEFAULT_MAX_PROPS = 8;
-/** Нижняя граница нормы: кадр из одного героя читается как обрезанный портрет. */
-export const MIN_PROPS = 4;
+export const DEFAULT_MAX_PROPS = 14;
+/**
+ * Нижняя граница нормы. Была 4 — по живому прогону 2026-08-13 заказчик
+ * сообщил, что кадр вышел пустым: коридор 4–8 боролся с перегрузом
+ * `pop-up not ok2`, но перелетел в другую крайность. Перегруз там создавали
+ * не мелкие предметы, а КРУПНЫЕ объекты на земле (слот-машина, сундуки,
+ * стопки денег) — их запрет остаётся, а мелких парящих можно вдвое больше.
+ */
+export const MIN_PROPS = 8;
 
 export function clampMaxProps(value?: number | null): number {
   if (typeof value !== "number" || !Number.isFinite(value)) return DEFAULT_MAX_PROPS;
-  return Math.max(MIN_PROPS, Math.min(20, Math.round(value)));
+  return Math.max(MIN_PROPS, Math.min(24, Math.round(value)));
 }
 
 /**
@@ -300,22 +340,22 @@ export function buildSecondaryContract(maxProps: number = DEFAULT_MAX_PROPS): st
     "Create ONE new cohesive casino promo composition for this format, belonging to an EXISTING campaign. " +
     "STYLE SOURCE: the FIRST image is the APPROVED anchor creative of that same campaign — reproduce its palette, " +
     "character design and outfit, prop family, material quality, lighting and rendering EXACTLY; it is the same " +
-    "campaign and the same hero. Do NOT copy its layout, crop, arrangement or its prop density — compose a NEW, " +
-    "much simpler scene that fits this canvas. " +
+    "campaign and the same hero. Do NOT copy its layout, crop or arrangement — compose a NEW scene that fits " +
+    "this canvas and its aspect ratio. " +
     "The remaining images are reference banners of this brand for THIS format — follow them for framing, prop choice and scale. " +
     "BACKGROUND: pure solid white (#FFFFFF), completely flat — no scenery, no gradients, no glow, no bokeh, no light rays " +
     "and no cast shadows on the background; the artwork will be cut out later, so every element needs clean crisp edges. " +
-    "COMPOSITION: a clean, uncluttered scene made of exactly two things. " +
+    "COMPOSITION: a rich but well-organised scene made of exactly two things. " +
     "(1) THE HERO: the character large and close-up, filling most of the canvas height, holding AT MOST ONE larger prop in their hands. " +
-    `(2) FLOATING PROPS: between ${MIN_PROPS} and ${cap} SMALL props floating freely in the air around the character, ` +
-    "well separated from each other, each small relative to the character. Nothing else belongs in the frame. " +
+    `(2) FLOATING PROPS: between ${MIN_PROPS} and ${cap} props floating freely in the air around the character, ` +
+    "in a mix of sizes — a few medium ones near the hero and the rest smaller, spread across the whole canvas including " +
+    "the corners, each still clearly smaller than the character. Nothing else belongs in the frame. " +
     "The floating props must come from the same prop family as the reference banners — the same objects, materials and finish. " +
-    `Count them before you finish: more than ${cap} floating props is wrong. ` +
+    `The frame must feel abundant, not empty: fewer than ${MIN_PROPS} floating props is wrong, more than ${cap} is wrong too. ` +
     "FORBIDDEN: no slot machines, no fortune wheels, no roulette wheels, no treasure chests, no open suitcases or crates, " +
     "no stacks of banknotes, no piles or heaps of coins or chips, no large objects resting on the ground or stacked behind " +
-    "the character, no second character. Never build a crowded pile of casino objects around the hero. " +
-    "Do NOT fill the canvas — generous empty background between the props is part of the design; " +
-    "there is NO reserved copy space in this format, the center may be occupied by the character. " +
+    "the character, no second character. The props FLOAT and stay separated — never let them merge into a solid pile. " +
+    "There is NO reserved copy space in this format, the center may be occupied by the character. " +
     "EDGES: the character and all key props stay fully inside the frame with a clear margin from the canvas edges. " +
     "STRICTLY NO text, captions, headlines, CTA buttons, logos or watermarks anywhere; the only lettering allowed is short " +
     "casino words that naturally belong to props (slot reels, chips, medallions), such as FS, SCATTER, BONUS, VIP, WILD or 777. " +
@@ -361,6 +401,8 @@ export function buildSecondaryPrompt(opts: {
   targetH: number;
   /** Лимит мелких предметов (DI3-9); не задан — дефолт. */
   maxProps?: number;
+  /** Пол героя из тон-варианта бренда; null — бренд без вариантов. */
+  gender?: HeroGender | null;
 }): string {
   const brief = opts.variationText.trim();
   const base = buildSecondaryContract(clampMaxProps(opts.maxProps));
@@ -377,6 +419,7 @@ export function buildSecondaryPrompt(opts: {
     formatGeometryHint(opts.formatLabel, opts.targetW, opts.targetH),
     opts.styleText,
     contract,
+    heroGenderInstruction(opts.gender ?? null),
   ]
     .filter(Boolean)
     .join(" ");
@@ -506,6 +549,9 @@ export async function processAiReferenceAsset(opts: {
   // одинаковым в промпте генерации, чек-листе приёмки и промпте лечения.
   const maxProps = isAnchor ? undefined : clampMaxProps(opts.maxProps);
   const effectsConfig = resolveEffectsConfig(opts.effects);
+  // Пол героя из имени тон-варианта (правка 2026-08-13): раньше его задавали
+  // только референсы, и модель их «переигрывала» — у (Men) выходила женщина.
+  const heroGender = heroGenderFromBrand(opts.brandName);
   // Чистый центр — требование ТОЛЬКО якорного формата (DI2-4): на push/pop-up
   // текста не будет, и пустая середина там читается как дыра в композиции.
   const centerZone = isAnchor ? AI_REF_CENTER_CLEAR_ZONE : undefined;
@@ -547,18 +593,29 @@ export async function processAiReferenceAsset(opts: {
   }
 
   const baseBrand = stripGenderName(opts.brandName);
-  let refs;
+  let picked;
   try {
     // Референсы — строго своего формата (DI2-2): у email, push и pop-up
     // разная стилистика, фолбэка на чужой ФОРМАТ нет. По тону наоборот:
     // сначала пул конкретного варианта ("Betnella(Men)"), и только если он
     // пуст — общий пул бренда (DI2-10).
-    refs = await pickGenerationRefs(bundle.presetId, opts.brandName, assetKey, baseBrand);
+    picked = await pickGenerationRefs(bundle.presetId, opts.brandName, assetKey, baseBrand);
   } catch (err) {
     await fail(err instanceof Error ? err.message : String(err));
     return { ok: false };
   }
+  const refs = picked.refs;
   const refUrls = refs.map((r) => r.imageUrl);
+  // Второй канал утечки пола (правка 2026-08-13): у варианта с полом в имени
+  // пул может быть пуст ДЛЯ ЭТОГО ФОРМАТА, и тогда фолбэк берёт общий —
+  // смешанный по полу. Промпт теперь пол удержит, но админ должен видеть,
+  // что рефы формата не залиты.
+  if (picked.fellBackToBase && heroGender) {
+    console.warn(
+      `⚠ ai-ref#${assetId} (${assetKey}): у "${opts.brandName}" нет своих референсов ` +
+        `формата — взят общий пул "${picked.poolName}" (смешанный по полу)`,
+    );
+  }
 
   // Бриф: текст бандла (мастер заполняет его из вариации, но может уточнить);
   // пустой — сам текст вариации.
@@ -579,7 +636,7 @@ export async function processAiReferenceAsset(opts: {
     } catch (err) {
       console.warn(`⚠ ai-ref layout-guide#${assetId}: ${err instanceof Error ? err.message : err}`);
     }
-    prompt = buildAiReferencePrompt(variationText) + guideInstruction;
+    prompt = buildAiReferencePrompt(variationText, heroGender) + guideInstruction;
   } else {
     // DI2-3: первым слотом идёт якорная композиция кампании, дальше —
     // референсы своего формата. Схема-раскладки у зависимых нет (DI2-4),
@@ -598,6 +655,7 @@ export async function processAiReferenceAsset(opts: {
       targetW,
       targetH,
       ...(maxProps !== undefined ? { maxProps } : {}),
+      gender: heroGender,
     });
   }
   const aspect = nearestFalAspect(targetW, targetH);
@@ -691,6 +749,7 @@ export async function processAiReferenceAsset(opts: {
       anchorUrl,
       formatLabel,
       ...(maxProps !== undefined ? { maxProps } : {}),
+      gender: heroGender,
     });
     const attemptRow: AiRefAttempt = {
       imageUrl: fitted.url,
@@ -763,6 +822,7 @@ export async function processAiReferenceAsset(opts: {
       anchorUrl,
       formatLabel,
       ...(maxProps !== undefined ? { maxProps } : {}),
+      gender: heroGender,
     });
     finalUrl = heal.winner.imageUrl;
     qaPassed = heal.winner.pass;

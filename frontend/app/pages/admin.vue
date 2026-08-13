@@ -825,8 +825,8 @@ async function setEffect(
 
 async function setMaxProps(t: AdminBundleType, a: AdminBundleTypeAsset, e: Event) {
   const raw = Number.parseInt((e.target as HTMLInputElement).value, 10);
-  if (!Number.isFinite(raw) || raw < 4 || raw > 20) {
-    btMsg.value[t.id] = "Предметов: допустимо от 4 до 20";
+  if (!Number.isFinite(raw) || raw < 8 || raw > 24) {
+    btMsg.value[t.id] = "Предметов: допустимо от 8 до 24";
     return;
   }
   a.maxProps = raw;
@@ -2004,14 +2004,14 @@ onMounted(() => {
                 />
                 Фейд снизу
               </label>
-              <label v-if="showsMaxProps(t, a)" class="bt__fxItem" title="Сколько мелких предметов допустимо вокруг персонажа. Число уходит и в промпт генерации, и в чек-лист приёмщика: перегруз отправляется на авто-ретрай.">
+              <label v-if="showsMaxProps(t, a)" class="bt__fxItem" title="Верхняя граница числа предметов вокруг персонажа (нижняя — 8). Число уходит и в промпт генерации, и в чек-лист приёмщика: и перегруз, и пустой кадр отправляются на авто-ретрай.">
                 Предметов ≤
                 <input
                   class="bt__num"
                   type="number"
-                  min="4"
-                  max="20"
-                  :value="a.maxProps ?? 8"
+                  min="8"
+                  max="24"
+                  :value="a.maxProps ?? 14"
                   @change="(e) => setMaxProps(t, a, e)"
                 />
               </label>
