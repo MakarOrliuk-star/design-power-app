@@ -76,7 +76,11 @@ export function buildHealingPrompt(
       "keep the existing composition and framing — this format has no reserved copy space, " +
       "do not clear or empty the middle of the canvas; if an issue above asks to reduce the number " +
       "of props or to declutter the scene, DELETING the extra props is exactly what is required — " +
-      "erase them and leave plain white background in their place, never replace them with other objects; ";
+      "erase them and leave plain white background in their place, never replace them with other objects; " +
+      // Обратный случай (правка 2026-08-13): чек `sides` бракует кадр с
+      // пустыми краями, и починка здесь — ДОБАВИТЬ предметы, не тронув героя.
+      "conversely, if an issue says the sides or the frame are empty, ADD more floating props of the same " +
+      "family into the left and right thirds of the canvas — keep the hero exactly as it is; ";
   return (
     "Retouch this existing casino promo hero composition. Apply ONLY the minimal " +
     "corrections needed to fix the QA issues listed below and change NOTHING else: " +
@@ -127,6 +131,8 @@ export async function healComposition(opts: {
   brandName: string;
   /** Только у якорного формата (DI2-4); без неё чек центра не выполняется. */
   centerClearZone?: { x: number; y: number; w: number; h: number };
+  /** Только у зависимых форматов: минимальная заполненность боковых третей. */
+  minSideFill?: number;
   /** Профиль чек-листа приёмки: тот же, что в генерации этого ассета. */
   profile?: QaProfile;
   /** Якорная композиция кампании — показывается приёмщику зависимых форматов. */
@@ -206,6 +212,7 @@ export async function healComposition(opts: {
     // попытка не участвует в выборе лучшего.
     const tech = await validateAiAsset(buffer, opts.targetW, opts.targetH, {
       ...(opts.centerClearZone ? { centerClearZone: opts.centerClearZone } : {}),
+      ...(opts.minSideFill !== undefined ? { minSideFill: opts.minSideFill } : {}),
     });
     if (!tech.passed) {
       attempts.push({

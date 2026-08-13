@@ -94,6 +94,21 @@ describe("listBundleBrands", () => {
     ]);
     expect(groups[2]!.variants).toHaveLength(1);
   });
+
+  // Правка 2026-08-13: сходство персонажа — настройка бренда целиком, галка
+  // живёт в «Вариациях и референсах» рядом с загрузкой референсов.
+  it("exactCharacter: дефолт false, «exact» хотя бы у одного варианта поднимает флаг группы", async () => {
+    db.brand.findMany.mockResolvedValue([
+      { name: "Betnella(Men)", characterFidelity: "exact" },
+      { name: "Betnella(Women)", characterFidelity: "exact" },
+      { name: "Corgi", characterFidelity: null },
+      { name: "Oscar", characterFidelity: "variant" },
+    ]);
+    const groups = await listBundleBrands();
+    expect(groups.find((g) => g.key === "Betnella")!.exactCharacter).toBe(true);
+    expect(groups.find((g) => g.key === "Corgi")!.exactCharacter).toBe(false);
+    expect(groups.find((g) => g.key === "Oscar")!.exactCharacter).toBe(false);
+  });
 });
 
 describe("expandBrandVariants", () => {

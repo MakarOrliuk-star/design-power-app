@@ -4,6 +4,7 @@ import {
   validateAiAsset,
   laplacianVariance,
   SHARPNESS_MIN_VARIANCE,
+  SIDE_FILL_MIN_RATIO,
 } from "../src/lib/aiAssetValidator.js";
 
 // Стадия C (TASK ai-reference): детерминированные проверки цельного AI-кадра.
@@ -152,5 +153,65 @@ describe("validateAiAsset", () => {
     const report = await validateAiAsset(Buffer.from("not an image"), W, H);
     expect(report.passed).toBe(false);
     expect(report.checks[0]!.key).toBe("size");
+  });
+});
+
+// Правка 2026-08-13 (заказчик: «иногда не генерирует предметы», «в одном
+// бренде в push есть предметы, во втором нет»). Порог откалиброван по
+// эталонам дизайнера: худший бок push1 24.6 %, pop-up ok1 21.8 %.
+describe("чек заполненности боков (sides)", () => {
+  /** Холст с прямоугольником заданной ширины в каждой боковой трети. */
+  async function frame(sideW: number): Promise<Buffer> {
+    const parts =
+      sideW > 0
+        ? [
+            { left: 0, top: 0 },
+            { left: W - sideW, top: 0 },
+          ].map((pos) => ({
+            input: {
+              create: { width: sideW, height: H, channels: 3 as const, background: { r: 20, g: 20, b: 20 } },
+            },
+            ...pos,
+          }))
+        : [];
+    return sharp({ create: { width: W, height: H, channels: 3, background: "#fff" } })
+      .composite(parts as never)
+      .png()
+      .toBuffer();
+  }
+
+  it("без опции чек не выполняется вовсе", async () => {
+    const r = await validateAiAsset(await frame(0), W, H);
+    expect(r.checks.find((c) => c.key === "sides")).toBeUndefined();
+  });
+
+  it("пустые бока = провал, заполненные = проход", async () => {
+    const empty = await validateAiAsset(await frame(0), W, H, { minSideFill: SIDE_FILL_MIN_RATIO });
+    const sides = empty.checks.find((c) => c.key === "sides")!;
+    expect(sides.passed).toBe(false);
+    expect(sides.detail).toContain("слева 0%");
+
+    // Треть = 100 px; 30 px тёмного в ней это 30 % — больше порога 12 %.
+    const filled = await validateAiAsset(await frame(30), W, H, { minSideFill: SIDE_FILL_MIN_RATIO });
+    expect(filled.checks.find((c) => c.key === "sides")!.passed).toBe(true);
+  });
+
+  it("судит по ХУДШЕЙ стороне — предметы только слева не спасают", async () => {
+    const oneSide = await sharp({ create: { width: W, height: H, channels: 3, background: "#fff" } })
+      .composite([
+        {
+          input: await sharp({
+            create: { width: 60, height: H, channels: 3, background: { r: 20, g: 20, b: 20 } },
+          })
+            .png()
+            .toBuffer(),
+          left: 0,
+          top: 0,
+        },
+      ])
+      .png()
+      .toBuffer();
+    const r = await validateAiAsset(oneSide, W, H, { minSideFill: SIDE_FILL_MIN_RATIO });
+    expect(r.checks.find((c) => c.key === "sides")!.passed).toBe(false);
   });
 });

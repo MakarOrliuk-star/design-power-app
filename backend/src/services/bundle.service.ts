@@ -151,6 +151,13 @@ export interface BundleBrandGroup {
   key: string; // base name, e.g. "Betnella"
   displayName: string;
   variants: Array<{ name: string; displayName: string }>;
+  /**
+   * Сходство персонажа с референсами (правка 2026-08-13) — настройка ГРУППЫ:
+   * галка в «Вариациях и референсах» ставится на бренд целиком и пишется во
+   * все его тон-варианты, поэтому здесь достаточно одного значения. true =
+   * "exact" (маскот один в один), false = "variant" (дефолт).
+   */
+  exactCharacter: boolean;
 }
 
 /** Active brands grouped by base name for the wizard picker (one toggle each). */
@@ -158,17 +165,21 @@ export async function listBundleBrands(): Promise<BundleBrandGroup[]> {
   const brands = await prisma.brand.findMany({
     where: { isActive: true },
     orderBy: { name: "asc" },
-    select: { name: true },
+    select: { name: true, characterFidelity: true },
   });
   const groups = new Map<string, BundleBrandGroup>();
-  for (const { name } of brands) {
+  for (const { name, characterFidelity } of brands) {
     const base = stripGenderName(name);
     let group = groups.get(base);
     if (!group) {
-      group = { key: base, displayName: base, variants: [] };
+      group = { key: base, displayName: base, variants: [], exactCharacter: false };
       groups.set(base, group);
     }
     group.variants.push({ name, displayName: variantDisplayName(name) });
+    // Группа считается «один в один», если так помечен хотя бы один вариант:
+    // запись идёт по всей группе, и рассинхрон возможен только у данных,
+    // проставленных мимо UI.
+    if (characterFidelity === "exact") group.exactCharacter = true;
   }
   return [...groups.values()];
 }

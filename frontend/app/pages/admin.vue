@@ -82,9 +82,6 @@ interface AdminBrand {
   id: string;
   name: string;
   forcedAspectRatio: string | null; // "9:16" = форс формата (TASK §7), null = по выбору юзера
-  // Сходство персонажа с референсами в ai_reference (правка 2026-08-13):
-  // "exact" — маскот один в один; null/"variant" — узнаваем, но с вариациями.
-  characterFidelity: string | null;
   imageModel: string | null; // ключ модели fal (Task 1); null = nano-banana-2 по умолчанию
   referenceImages: string[];
   personPrompt: string;
@@ -269,11 +266,7 @@ async function saveBrand(b: AdminBrand) {
     });
     await api(`/api/admin/brands/${b.id}`, {
       method: "PATCH",
-      body: {
-        forcedAspectRatio: b.forcedAspectRatio,
-        imageModel: b.imageModel,
-        characterFidelity: b.characterFidelity ?? "variant",
-      },
+      body: { forcedAspectRatio: b.forcedAspectRatio, imageModel: b.imageModel },
     });
     rowMsg.value[b.id] = "Сохранено ✓";
   } catch {
@@ -1464,7 +1457,6 @@ onMounted(() => {
                 {{ b.personPrompt.trim() ? "промпт ✓" : "промпт —" }}
               </span>
               <span v-if="b.forcedAspectRatio === '9:16'" class="badge badge--warn">всегда 9:16</span>
-              <span v-if="b.characterFidelity === 'exact'" class="badge">персонаж 1:1</span>
               <span v-if="b.imageModel" class="badge badge--warn">{{ modelLabelFor(b.imageModel) }}</span>
             </span>
             <span v-if="rowMsg[b.id]" class="brand-card__msg">{{ rowMsg[b.id] }}</span>
@@ -1505,19 +1497,6 @@ onMounted(() => {
               <select v-model="b.imageModel">
                 <option :value="null">Nano Banana 2 (по умолчанию)</option>
                 <option v-for="m in models" :key="m.key" :value="m.key">{{ m.label }}</option>
-              </select>
-            </label>
-            <!-- Сходство персонажа с референсами (правка 2026-08-13). Влияет
-                 только на режим ai_reference: CRM-бандлы email/push/pop-up. -->
-            <label
-              class="model-select"
-              title="Насколько точно персонаж копируется с референсов бренда в CRM-бандлах (ai_reference). «Один в один» — для брендов с фиксированным маскотом; «вариативный» — персонаж узнаваем, но черты и поза свои."
-            >
-              Персонаж:
-              <select v-model="b.characterFidelity">
-                <option :value="null">Вариативный (по умолчанию)</option>
-                <option value="variant">Вариативный</option>
-                <option value="exact">Один в один</option>
               </select>
             </label>
             <button class="btn-primary" :disabled="savingId === b.id" @click="saveBrand(b)">
