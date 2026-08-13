@@ -1005,6 +1005,7 @@ export async function processRenderAssetJob(
       // TASK glow-fade-density: плотность предметов и галки эффектов —
       // данные типа бандла, правятся в /admin без деплоя (DI3-14/DI3-15).
       ...(config.maxProps !== undefined ? { maxProps: config.maxProps } : {}),
+      ...(config.minProps !== undefined ? { minProps: config.minProps } : {}),
       ...(config.effects ? { effects: config.effects } : {}),
     });
 
@@ -1063,6 +1064,7 @@ export async function processRenderAssetJob(
       formatLabel: parentConfig.label,
       anchor: parentAnchor,
       ...(parentConfig.maxProps !== undefined ? { maxProps: parentConfig.maxProps } : {}),
+      ...(parentConfig.minProps !== undefined ? { minProps: parentConfig.minProps } : {}),
       ...(parentConfig.effects ? { effects: parentConfig.effects } : {}),
     });
     if (parentIsAnchor) {

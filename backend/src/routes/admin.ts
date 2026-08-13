@@ -478,9 +478,12 @@ const bundleTypeAssetSchema = z.object({
   effects: z
     .object({ glow: z.boolean().optional(), fade: z.boolean().optional() })
     .optional(),
-  // Лимит предметов зависимого формата (DI3-9/DI3-14). Границы подняты
+  // Коридор предметов зависимого формата (DI3-9/DI3-14). Границы подняты
   // 2026-08-13 после живого прогона: коридор 4–8 давал пустые кадры.
+  // Низ настраивается с 2026-08-15 (заказчик: «предметы должны быть настроены
+  // с админки, то есть минимум 8»); 8 — жёсткий пол, ниже кадр пустеет.
   maxProps: z.number().int().min(8).max(24).optional(),
+  minProps: z.number().int().min(8).max(24).optional(),
 });
 
 const bundleTypeSchema = z.object({

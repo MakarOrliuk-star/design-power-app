@@ -723,8 +723,9 @@ interface AdminBundleTypeAsset {
   // TASK glow-fade-density (DI3-15): пост-обработка ai_reference-ассета.
   // Поле отсутствует = оба эффекта включены (так же читает бэкенд).
   effects?: { glow?: boolean; fade?: boolean };
-  // Лимит мелких предметов зависимого формата (DI3-9/DI3-14). Не задано → 8.
+  // Коридор предметов зависимого формата (DI3-9/DI3-14). Не задано → 8…14.
   maxProps?: number;
+  minProps?: number;
 }
 interface AdminBundleType {
   id: string;
@@ -823,16 +824,29 @@ async function setEffect(
   }
 }
 
-async function setMaxProps(t: AdminBundleType, a: AdminBundleTypeAsset, e: Event) {
+/**
+ * Коридор предметов формата (правка 2026-08-15: низ тоже настраивается).
+ * Перевёрнутый ввод не отвергаем, а подтягиваем вторую границу: 8 — жёсткий
+ * пол на бэкенде, и человеку понятнее, когда поле принимает его число.
+ */
+async function setPropsBound(
+  t: AdminBundleType,
+  a: AdminBundleTypeAsset,
+  bound: "min" | "max",
+  e: Event,
+) {
   const raw = Number.parseInt((e.target as HTMLInputElement).value, 10);
   if (!Number.isFinite(raw) || raw < 8 || raw > 24) {
     btMsg.value[t.id] = "Предметов: допустимо от 8 до 24";
     return;
   }
-  a.maxProps = raw;
+  const min = bound === "min" ? raw : (a.minProps ?? 8);
+  const max = bound === "max" ? raw : (a.maxProps ?? 14);
+  a.minProps = Math.min(min, max);
+  a.maxProps = Math.max(min, max);
   try {
     await saveBundleTypeAssets(t);
-    btMsg.value[t.id] = `Макс. предметов ${a.label}: ${raw} ✓`;
+    btMsg.value[t.id] = `Предметов ${a.label}: ${a.minProps}–${a.maxProps} ✓`;
   } catch {
     btMsg.value[t.id] = "Ошибка сохранения";
   }
@@ -2004,15 +2018,24 @@ onMounted(() => {
                 />
                 Фейд снизу
               </label>
-              <label v-if="showsMaxProps(t, a)" class="bt__fxItem" title="Верхняя граница числа предметов вокруг персонажа (нижняя — 8). Число уходит и в промпт генерации, и в чек-лист приёмщика: и перегруз, и пустой кадр отправляются на авто-ретрай.">
-                Предметов ≤
+              <label v-if="showsMaxProps(t, a)" class="bt__fxItem" title="Коридор числа предметов вокруг персонажа. Обе границы уходят и в промпт генерации, и в чек-лист приёмщика: и перегруз, и пустой кадр отправляются на авто-ретрай. Ниже 8 нельзя — на живом прогоне кадр выходил пустым.">
+                Предметов от
+                <input
+                  class="bt__num"
+                  type="number"
+                  min="8"
+                  max="24"
+                  :value="a.minProps ?? 8"
+                  @change="(e) => setPropsBound(t, a, 'min', e)"
+                />
+                до
                 <input
                   class="bt__num"
                   type="number"
                   min="8"
                   max="24"
                   :value="a.maxProps ?? 14"
-                  @change="(e) => setMaxProps(t, a, e)"
+                  @change="(e) => setPropsBound(t, a, 'max', e)"
                 />
               </label>
             </div>

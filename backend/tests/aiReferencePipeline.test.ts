@@ -39,6 +39,10 @@ const reviewer = vi.hoisted(() => ({
   qaThreshold: vi.fn(() => 80),
 }));
 const style = vi.hoisted(() => ({ describeCampaignStyle: vi.fn() }));
+// Планировщик набора предметов кампании (правка 2026-08-15) — как и стиль-
+// якорь, мокается целиком: он живёт на своих тестах, здесь важен только факт
+// вызова и то, что его список уходит зависимым форматам.
+const propPlan = vi.hoisted(() => ({ planCampaignProps: vi.fn() }));
 const healing = vi.hoisted(() => ({ healComposition: vi.fn() }));
 
 vi.mock("../src/lib/prisma.js", () => ({ prisma: db }));
@@ -49,6 +53,7 @@ vi.mock("../src/services/layerCache.js", () => cache);
 vi.mock("../src/lib/aiAssetValidator.js", () => validator);
 vi.mock("../src/lib/vlmReviewer.js", () => reviewer);
 vi.mock("../src/lib/styleAnchor.js", () => style);
+vi.mock("../src/lib/propPlan.js", () => propPlan);
 vi.mock("../src/services/aiHealing.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../src/services/aiHealing.js")>();
   return { ...actual, healComposition: healing.healComposition };
@@ -144,10 +149,24 @@ beforeEach(() => {
   validator.validateAiAsset.mockReset();
   reviewer.reviewComposition.mockReset();
   style.describeCampaignStyle.mockReset();
+  propPlan.planCampaignProps.mockReset();
+  propPlan.planCampaignProps.mockResolvedValue({
+    text: "golden coin with a ruby, red poker chip. KEY objects of the campaign: golden coin with a ruby.",
+    plan: { props: ["golden coin with a ruby", "red poker chip"], keyProps: ["golden coin with a ruby"] },
+  });
   healing.healComposition.mockReset();
   style.describeCampaignStyle.mockResolvedValue({
     text: "Campaign style to reproduce — Palette: neon purple.",
-    anchor: { palette: "neon purple", character: "", props: "", lighting: "", rendering: "" },
+    propInventory: "golden coin with a ruby, red poker chip",
+    anchor: {
+      palette: "neon purple",
+      character: "",
+      hands: "",
+      props: "",
+      propInventory: "golden coin with a ruby, red poker chip",
+      lighting: "",
+      rendering: "",
+    },
   });
 
   db.bundle.findUnique.mockResolvedValue({
@@ -491,8 +510,11 @@ describe("formatGeometryHint / buildSecondaryPrompt (DI2-3/DI2-4)", () => {
     expect(p).toContain("do NOT reproduce the anchor creative's set of objects");
     expect(p).toContain("the way a designer would");
     expect(p).toContain("may run past the canvas edges and be partly cropped");
-    expect(p).toContain("reaching into all four corners");
     expect(p).toContain("APPROVED anchor creative");
+    // Правка 2026-08-15: требование равномерности («spread roughly evenly»,
+    // «into all four corners») и порождало «просто расставленные» предметы.
+    expect(p).not.toContain("reaching into all four corners");
+    expect(p).not.toContain("spread roughly evenly");
     // Прежние формулировки, порождавшие перегруз, ушли.
     expect(p).not.toContain("anchor prop group");
     expect(p).not.toContain("fill the canvas with a clear focal hierarchy");
@@ -569,6 +591,111 @@ describe("formatGeometryHint / buildSecondaryPrompt (DI2-3/DI2-4)", () => {
     expect(anchor).not.toContain("no slot machines");
   });
 
+  // Правка 2026-08-15 (заказчик: «предметы будто просто проставлены, не похоже
+  // на единую композицию»): прежний контракт буквально просил равномерность,
+  // теперь требует иерархию, группы, направление и рваный ритм.
+  it("предметы требуют композиции дизайнера, а не равномерной россыпи", () => {
+    const p = buildSecondaryPrompt({
+      variationText: "VIP",
+      styleText: "",
+      hasAnchor: true,
+      formatLabel: "Push",
+      targetW: 1024,
+      targetH: 512,
+    });
+    expect(p).toContain("PROP COMPOSITION");
+    // Логика раскладки берётся с референсов формата — не выдумывается нами.
+    expect(p).toContain("look at how the props are ARRANGED in the reference banners");
+    expect(p).toContain("HIERARCHY");
+    expect(p).toContain("GROUPS");
+    expect(p).toContain("FLOW");
+    expect(p).toContain("RHYTHM");
+    expect(p).toContain("never make all props the same size");
+    expect(p).toContain("rather than an even sprinkle");
+    // Перекрытие внутри группы теперь разрешено: прежнее «stay separated»
+    // прямо запрещало то, из чего состоит группа.
+    expect(p).toContain("Props may overlap each other inside a group");
+    expect(p).not.toContain("The props FLOAT and stay separated");
+  });
+
+  // Правка 2026-08-15: низ коридора настраивается в админке, пол — 8.
+  it("коридор предметов берётся из админки и не опускается ниже восьми", () => {
+    const build = (minProps?: number, maxProps?: number) =>
+      buildSecondaryPrompt({
+        variationText: "",
+        styleText: "",
+        hasAnchor: true,
+        formatLabel: "Push",
+        targetW: 1024,
+        targetH: 512,
+        ...(minProps !== undefined ? { minProps } : {}),
+        ...(maxProps !== undefined ? { maxProps } : {}),
+      });
+    expect(build(10, 16)).toContain("between 10 and 16 props");
+    expect(build(10, 16)).toContain("fewer than 10 floating props is wrong, more than 16 is wrong too");
+    // Пол: ниже восьми кадр пустеет — это уже проверено живым прогоном.
+    expect(build(3)).toContain("between 8 and 14 props");
+    // Перевёрнутый коридор чиним в пользу низа, а не роняем генерацию.
+    expect(build(20, 12)).toContain("between 12 and 12 props");
+    expect(build()).toContain("between 8 and 14 props");
+  });
+
+  // Правка 2026-08-15 (заказчик: «предметы не должны быть рандомными — должна
+  // быть общая композиция промо по референсам и промпту»): набор предметов
+  // фиксируется утверждённым email, зависимые форматы собирают кадр из него.
+  it("набор предметов кампании заменяет свободный выбор объектов", () => {
+    const set = "golden coin with a ruby, red poker chip, purple gift box";
+    const build = (propInventory?: string) =>
+      buildSecondaryPrompt({
+        variationText: "Lucky Friday",
+        styleText: "",
+        hasAnchor: true,
+        formatLabel: "Push",
+        targetW: 1024,
+        targetH: 512,
+        ...(propInventory !== undefined ? { propInventory } : {}),
+      });
+
+    const withSet = build(set);
+    expect(withSet).toContain(`The campaign prop set is: ${set}`);
+    expect(withSet).toContain("NOT yours to invent");
+    // 6–10 объектов в списке против 8–14 в кадре — повтор обязан быть разрешён,
+    // иначе модель доберёт разницу выдуманными предметами.
+    expect(withSet).toContain("repeat some of them at different sizes");
+    expect(withSet).toContain("AT MOST TWO extra objects");
+    // Сборку кадра не трогаем (решение 2026-08-13): меняется инвентарь, не раскладка.
+    expect(withSet).toContain("the ARRANGEMENT, not the inventory");
+    expect(withSet).not.toContain("yours to choose");
+
+    // Fail-open: описание якоря не снялось или бандл старый — прежнее поведение.
+    const noSet = build();
+    expect(noSet).toContain("the specific objects and their arrangement are yours to choose");
+    expect(noSet).not.toContain("campaign prop set");
+  });
+
+  // Правка 2026-08-15 (заказчик: «чтобы на руке не было 4 пальца, хотя должно
+  // быть 5»): блок анатомии общий для якоря и зависимых форматов — герой
+  // кампании один, и число пальцев обязано совпадать во всех трёх.
+  it("анатомия рук требуется во всех форматах: счёт пальцев + структура с референсов", () => {
+    const push = buildSecondaryPrompt({
+      variationText: "VIP",
+      styleText: "",
+      hasAnchor: true,
+      formatLabel: "Push",
+      targetW: 1024,
+      targetH: 512,
+    });
+    for (const p of [buildAiReferencePrompt("VIP weekend"), push]) {
+      expect(p).toContain("CHARACTER ANATOMY");
+      expect(p).toContain("exactly FIVE digits");
+      // Лапы и копыта — норма бренда: структура берётся с референсов.
+      expect(p).toContain("animal paws with claws, hooves or fins");
+      expect(p).toContain("SAME number of digits the references show");
+      // Спрятать кисть можно, увести за кадр — нет (это ломало бы EDGES).
+      expect(p).toContain("hidden behind a prop or behind the body");
+    }
+  });
+
   it("пол героя из тон-варианта попадает в промпт обоих форматов", () => {
     expect(buildAiReferencePrompt("VIP", "male")).toContain("the main character is a MAN");
     expect(buildAiReferencePrompt("VIP", "female")).toContain("the main character is a WOMAN");
@@ -613,6 +740,7 @@ describe("processAiReferenceAsset — зависимый формат (DI2-3)", 
     anchor: {
       imageUrl: "https://cdn/email-base.png",
       styleText: "Campaign style to reproduce — Palette: neon purple.",
+      propInventory: "golden coin with a ruby, red poker chip",
     },
   };
 
@@ -632,7 +760,13 @@ describe("processAiReferenceAsset — зависимый формат (DI2-3)", 
     expect(args.imageUrls).toHaveLength(8);
     expect(args.prompt).toContain("APPROVED anchor creative");
     expect(args.prompt).toContain("PROP MAP");
-    expect(args.prompt).toContain("BOTH gray panels must end up filled");
+    // Набор предметов кампании из контекста якоря — в промпт и в приёмку
+    // (правка 2026-08-15): три формата собираются из одного инвентаря.
+    expect(args.prompt).toContain("The campaign prop set is: golden coin with a ruby");
+    expect(reviewer.reviewComposition).toHaveBeenCalledWith(
+      expect.objectContaining({ propInventory: "golden coin with a ruby, red poker chip" }),
+    );
+    expect(args.prompt).toContain("BOTH gray panels must end up occupied");
     // Схема ЯКОРЯ (пустой центр под текст) зависимым форматам не подаётся.
     expect(args.prompt).not.toContain("LAYOUT GUIDE");
     expect(args.width).toBe(1024);
@@ -842,13 +976,28 @@ describe("processAiReferenceAsset — якорь отдаёт стиль дал�
   it("сохраняет базу ДО removeBg и описание стиля, возвращает их процессору", async () => {
     const result = await processAiReferenceAsset(OPTS);
 
-    expect(style.describeCampaignStyle).toHaveBeenCalledWith("https://cdn/fit.png");
+    // Бриф уходит в тот же запрос (правка 2026-08-15) — набор предметов
+    // называется в терминах кампании.
+    expect(style.describeCampaignStyle).toHaveBeenCalledWith(
+      "https://cdn/fit.png",
+      "VIP Exclusive weekend BONUS",
+    );
     expect(result).toEqual({
       ok: true,
       baseUrl: "https://cdn/fit.png",
       styleText: "Campaign style to reproduce — Palette: neon purple.",
+      // Набор предметов кампании — на нём соберутся push и pop-up. Источник —
+      // планировщик по референсам бренда и брифу, а не то, что случайно
+      // попало в кадр email (правка 2026-08-15).
+      propInventory:
+        "golden coin with a ruby, red poker chip. KEY objects of the campaign: golden coin with a ruby.",
       // Цвет свечения кампании уходит процессору вместе со стилем (DI3-4).
       glowHex: "#63CBD9",
+    });
+    expect(propPlan.planCampaignProps).toHaveBeenCalledWith({
+      refUrls: expect.arrayContaining([expect.stringContaining("http")]),
+      variationText: "VIP Exclusive weekend BONUS",
+      brandName: "Betnella",
     });
     const parent = parentDoneCall()! as unknown as {
       data: { metadata: Record<string, unknown> & { qa: Record<string, unknown> } };
@@ -858,13 +1007,48 @@ describe("processAiReferenceAsset — якорь отдаёт стиль дал�
     expect(parent.data.metadata.qa.threshold).toBe(80);
     expect(parent.data.metadata.styleAnchor).toContain("neon purple");
     expect(parent.data.metadata.isStyleAnchor).toBe(true);
+    // Набор предметов кампании ложится в metadata якоря: оттуда его берут и
+    // каскадная генерация push/pop-up, и их одиночная регенерация (DI2-9).
+    expect(parent.data.metadata.styleAnchorProps).toContain("golden coin with a ruby");
   });
 
   it("сбой описания стиля не валит якорь (fail-open)", async () => {
-    style.describeCampaignStyle.mockResolvedValue({ text: "", anchor: null, error: "HTTP 500" });
+    style.describeCampaignStyle.mockResolvedValue({
+      text: "",
+      propInventory: "",
+      anchor: null,
+      error: "HTTP 500",
+    });
     const result = await processAiReferenceAsset(OPTS);
     expect(result.ok).toBe(true);
     expect(result.styleText).toBe("");
+    // Набор при этом уцелел: планировщик работает по референсам, а не по
+    // описанию якоря, — два независимых источника (правка 2026-08-15).
+    expect(result.propInventory).toContain("golden coin with a ruby");
+  });
+
+  it("сбой планировщика → набор берётся с готовой композиции email (фолбэк)", async () => {
+    propPlan.planCampaignProps.mockResolvedValue({
+      text: "",
+      plan: null,
+      error: "prop-plan-unparseable",
+    });
+    const result = await processAiReferenceAsset(OPTS);
+    expect(result.ok).toBe(true);
+    expect(result.propInventory).toBe("golden coin with a ruby, red poker chip");
+  });
+
+  it("оба источника набора отказали → зависимые форматы едут по старой логике", async () => {
+    propPlan.planCampaignProps.mockResolvedValue({ text: "", plan: null, error: "vision недоступен" });
+    style.describeCampaignStyle.mockResolvedValue({
+      text: "",
+      propInventory: "",
+      anchor: null,
+      error: "HTTP 500",
+    });
+    const result = await processAiReferenceAsset(OPTS);
+    expect(result.ok).toBe(true);
+    expect(result.propInventory).toBeUndefined();
   });
 
   it("провал ассета возвращает ok:false — зависимые форматы не поедут", async () => {
@@ -922,6 +1106,25 @@ describe("loadAnchorContext (DI2-9)", () => {
       imageUrl: "https://cdn/base.png",
       styleText: "Palette: neon purple.",
       glowHex: "#63CBD9",
+    });
+  });
+
+  // Правка 2026-08-15: набор предметов кампании наследуется тем же путём, что
+  // и цвет свечения, — переживает регенерацию push спустя недели.
+  it("подхватывает набор предметов кампании", async () => {
+    db.bundleAsset.findUnique.mockResolvedValue({
+      status: "DONE",
+      imageUrl: "https://cdn/email-transparent.png",
+      metadata: {
+        styleAnchor: "Palette: neon purple.",
+        styleAnchorProps: "golden coin with a ruby, red poker chip",
+        qa: { baseUrl: "https://cdn/base.png" },
+      },
+    });
+    expect(await loadAnchorContext("v1", "email")).toEqual({
+      imageUrl: "https://cdn/base.png",
+      styleText: "Palette: neon purple.",
+      propInventory: "golden coin with a ruby, red poker chip",
     });
   });
 
