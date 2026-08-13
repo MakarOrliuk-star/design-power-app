@@ -8,6 +8,7 @@ const cloud = vi.hoisted(() => ({
 vi.mock("../src/lib/cloudinary.js", () => cloud);
 
 import {
+  buildPropsGuidePng,
   buildLayoutGuidePng,
   getLayoutGuideUrl,
   resetLayoutGuideCache,
@@ -45,5 +46,28 @@ describe("getLayoutGuideUrl", () => {
   it("сбой заливки — исключение (пайплайн ловит и генерирует без схемы)", async () => {
     cloud.uploadBuffer.mockResolvedValue({ success: false, error: "boom" });
     await expect(getLayoutGuideUrl()).rejects.toThrow("layout guide upload");
+  });
+});
+
+// Схема ПРЕДМЕТОВ для push/pop-up (правка 2026-08-14): смысл обратный
+// email-схеме — заполнены должны быть бока, а не центр.
+describe("buildPropsGuidePng", () => {
+  it("боковые трети серые, центр белый, размер = канвасу формата", async () => {
+    const png = await buildPropsGuidePng(1024, 512);
+    const { data, info } = await sharp(png).greyscale().raw().toBuffer({ resolveWithObject: true });
+    expect(info.width).toBe(1024);
+    expect(info.height).toBe(512);
+    const at = (xp: number) =>
+      data[Math.floor(info.height / 2) * info.width + Math.floor(xp * info.width)]!;
+    expect(at(0.15)).toBeLessThan(230); // левая зона предметов
+    expect(at(0.85)).toBeLessThan(230); // правая зона предметов
+    expect(at(0.5)).toBe(255); // центр — герой
+  });
+
+  it("пропорции держатся на другом канвасе (pop-up 4:3)", async () => {
+    const { info } = await sharp(await buildPropsGuidePng(800, 600))
+      .raw()
+      .toBuffer({ resolveWithObject: true });
+    expect([info.width, info.height]).toEqual([800, 600]);
   });
 });

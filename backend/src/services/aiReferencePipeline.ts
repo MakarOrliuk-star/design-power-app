@@ -14,7 +14,12 @@ import type { EffectsToggle, PromoEffectsConfig } from "../lib/promoEffects.js";
 import { pickGlowColor } from "../lib/glowColor.js";
 import { fetchBuffer } from "./layerCache.js";
 import { validateAiAsset, SIDE_FILL_MIN_RATIO } from "../lib/aiAssetValidator.js";
-import { getLayoutGuideUrl, LAYOUT_GUIDE_INSTRUCTION } from "../lib/layoutGuide.js";
+import {
+  getLayoutGuideUrl,
+  LAYOUT_GUIDE_INSTRUCTION,
+  getPropsGuideUrl,
+  PROPS_GUIDE_INSTRUCTION,
+} from "../lib/layoutGuide.js";
 import { MAX_EDIT_REFS } from "./variationRefs.js";
 import { reviewComposition, QA_REFS_SHOWN, qaThreshold } from "../lib/vlmReviewer.js";
 import type { QaProfile } from "../lib/vlmReviewer.js";
@@ -759,6 +764,18 @@ export async function processAiReferenceAsset(opts: {
     if (!anchorUrl) {
       console.warn(`⚠ ai-ref#${assetId} (${assetKey}): нет якоря кампании — генерация без стиля email`);
     }
+    // Схема предметов последней картинкой (правка 2026-08-14). На якоре тот
+    // же приём (A-6) уже показал, что раскладку модель считывает с картинки
+    // надёжнее, чем с процентов в тексте. Best-effort: без схемы генерация
+    // не блокируется, один слот референсов отдаётся под неё.
+    let propsGuideInstruction = "";
+    try {
+      const guideUrl = await getPropsGuideUrl(targetW, targetH);
+      genUrls = [...genUrls.slice(0, MAX_EDIT_REFS - 1), guideUrl];
+      propsGuideInstruction = ` ${PROPS_GUIDE_INSTRUCTION}`;
+    } catch (err) {
+      console.warn(`⚠ ai-ref props-guide#${assetId}: ${err instanceof Error ? err.message : err}`);
+    }
     prompt = buildSecondaryPrompt({
       variationText,
       styleText: opts.anchor?.styleText ?? "",
@@ -769,7 +786,7 @@ export async function processAiReferenceAsset(opts: {
       ...(maxProps !== undefined ? { maxProps } : {}),
       gender: heroGender,
       fidelity,
-    });
+    }) + propsGuideInstruction;
   }
   const aspect = nearestFalAspect(targetW, targetH);
   const folder = `bundles/${bundleId}`;

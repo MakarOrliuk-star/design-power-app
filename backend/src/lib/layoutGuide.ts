@@ -64,3 +64,67 @@ export async function getLayoutGuideUrl(): Promise<string> {
 export function resetLayoutGuideCache(): void {
   cachedUrl = null;
 }
+
+// ---------------------------------------------------------------------------
+// Схема предметов для зависимых форматов (push / pop-up), правка 2026-08-14.
+//
+// Заказчик прислал два боевых результата: в push предметов не было вовсе, в
+// pop-up все четыре ушли в левую половину при пустой правой. Текстом это уже
+// сказано (числа, «spread evenly», FOCUS), и текст модель исполняет через раз.
+// На якоре ровно та же проблема решилась КАРТИНКОЙ (A-6) — тот же приём здесь.
+//
+// Смысл схемы обратный email: занят должен быть не центр, а бока. Серые
+// панели = зоны предметов, обе обязаны быть заполнены; белая середина — герой.
+// ---------------------------------------------------------------------------
+
+export const PROPS_GUIDE_INSTRUCTION =
+  "The LAST image is a PROP MAP, not a style reference: the two gray side panels mark where the floating " +
+  "props belong, and the white middle is where the hero stands. BOTH gray panels must end up filled with " +
+  "props — a frame with props on one side only, or with empty gray areas, is wrong. Spread the props across " +
+  "the full height of both panels and let some of them reach the corners. Do NOT draw the gray panels " +
+  "themselves and do NOT let them tint the artwork — they only mark the areas.";
+
+/** Доля ширины под боковую зону предметов — треть, как меряет чек `sides`. */
+const PROPS_SECTION_FRACTION = 1 / 3;
+
+const propsGuideCache = new Map<string, string>();
+
+export async function buildPropsGuidePng(width: number, height: number): Promise<Buffer> {
+  const sw = Math.max(1, Math.round(width * PROPS_SECTION_FRACTION));
+  const side = await sharp({
+    create: { width: sw, height, channels: 3, background: { r: 209, g: 209, b: 209 } },
+  })
+    .png()
+    .toBuffer();
+  return sharp({
+    create: { width, height, channels: 3, background: { r: 255, g: 255, b: 255 } },
+  })
+    .composite([
+      { input: side, left: 0, top: 0 },
+      { input: side, left: width - sw, top: 0 },
+    ])
+    .png()
+    .toBuffer();
+}
+
+/** URL схемы предметов под конкретный канвас (кэш на процесс, как у якоря). */
+export async function getPropsGuideUrl(width: number, height: number): Promise<string> {
+  const key = `${width}x${height}`;
+  const cached = propsGuideCache.get(key);
+  if (cached) return cached;
+  const png = await buildPropsGuidePng(width, height);
+  const up = await withRetry(
+    () => uploadBuffer(png, `layout_props_${key}_v1`, GUIDE_FOLDER),
+    "props-guide",
+  );
+  if (!up.success || !up.secure_url) {
+    throw new Error(`props guide upload: ${up.error ?? "unknown"}`);
+  }
+  propsGuideCache.set(key, up.secure_url);
+  return up.secure_url;
+}
+
+/** Сброс кэша схем предметов (для тестов). */
+export function resetPropsGuideCache(): void {
+  propsGuideCache.clear();
+}

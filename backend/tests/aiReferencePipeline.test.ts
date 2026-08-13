@@ -593,8 +593,13 @@ describe("processAiReferenceAsset — зависимый формат (DI2-3)", 
     );
     const [args] = fal.runGptImage2Edit.mock.calls[0]!;
     expect(args.imageUrls[0]).toBe("https://cdn/email-base.png");
-    expect(args.imageUrls).toHaveLength(7); // якорь + 6 референсов формата
+    // Якорь + 6 референсов формата + схема предметов последней (правка
+    // 2026-08-14): раскладку модель считывает с картинки надёжнее, чем с текста.
+    expect(args.imageUrls).toHaveLength(8);
     expect(args.prompt).toContain("APPROVED anchor creative");
+    expect(args.prompt).toContain("PROP MAP");
+    expect(args.prompt).toContain("BOTH gray panels must end up filled");
+    // Схема ЯКОРЯ (пустой центр под текст) зависимым форматам не подаётся.
     expect(args.prompt).not.toContain("LAYOUT GUIDE");
     expect(args.width).toBe(1024);
     expect(args.height).toBe(512);
