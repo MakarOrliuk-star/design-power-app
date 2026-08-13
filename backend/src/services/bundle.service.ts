@@ -34,6 +34,14 @@ export interface BundleTypeAsset {
   // Golden composite @1x for the validator's structural SSIM check (Phase 4;
   // the golden assets themselves are produced in Phase 6).
   goldenUrl?: string;
+  // TASK glow-fade-density (DI3-15): пост-обработка ai_reference-ассета —
+  // центральное свечение под объектами и фейд нижней кромки. Поле не задано =
+  // оба включены; глобальный откат без деплоя — env AI_REF_EFFECTS=off.
+  effects?: { glow?: boolean; fade?: boolean };
+  // Лимит мелких предметов зависимого формата (DI3-9/DI3-14, задание 3):
+  // уходит и в промпт генерации, и в чек-лист приёмщика. У якорного формата
+  // игнорируется — плотность email не трогаем (DI3-10). Не задано → 8.
+  maxProps?: number;
 }
 
 // ------------------------------------------------------------------

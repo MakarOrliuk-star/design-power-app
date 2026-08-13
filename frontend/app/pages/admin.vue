@@ -720,6 +720,11 @@ interface AdminBundleTypeAsset {
   // Якорь стиля кампании (TASK multiformat-promo, A2-1): по умолчанию email.
   // Поле сохраняется как есть — правится через API, отдельного UI пока нет.
   styleAnchor?: boolean;
+  // TASK glow-fade-density (DI3-15): пост-обработка ai_reference-ассета.
+  // Поле отсутствует = оба эффекта включены (так же читает бэкенд).
+  effects?: { glow?: boolean; fade?: boolean };
+  // Лимит мелких предметов зависимого формата (DI3-9/DI3-14). Не задано → 8.
+  maxProps?: number;
 }
 interface AdminBundleType {
   id: string;
@@ -778,6 +783,56 @@ async function setComposeMode(t: AdminBundleType, a: AdminBundleTypeAsset, e: Ev
   try {
     await saveBundleTypeAssets(t);
     btMsg.value[t.id] = `Режим сборки ${a.label}: ${a.composeMode} ✓`;
+  } catch {
+    btMsg.value[t.id] = "Ошибка сохранения";
+  }
+}
+
+// ---- TASK glow-fade-density: эффекты и плотность предметов ----
+// Настройки живут в BundleType.assets (Json), поэтому меняются данными и
+// действуют со следующей генерации — деплой и миграция не нужны.
+
+/** Ключ якорного формата — та же логика, что в resolveStyleAnchorKey на бэке. */
+function anchorKeyOf(t: AdminBundleType): string | null {
+  const refs = t.assets.filter((a) => a.composeMode === "ai_reference");
+  if (refs.length === 0) return null;
+  const explicit = refs.find((a) => a.styleAnchor === true);
+  if (explicit) return explicit.key;
+  return (refs.find((a) => a.key === "email") ?? refs[0]!).key;
+}
+
+/** Лимит предметов существует только у зависимых форматов (DI3-10). */
+function showsMaxProps(t: AdminBundleType, a: AdminBundleTypeAsset): boolean {
+  return a.composeMode === "ai_reference" && anchorKeyOf(t) !== a.key;
+}
+
+async function setEffect(
+  t: AdminBundleType,
+  a: AdminBundleTypeAsset,
+  key: "glow" | "fade",
+  e: Event,
+) {
+  const on = (e.target as HTMLInputElement).checked;
+  a.effects = { ...(a.effects ?? {}), [key]: on };
+  const name = key === "glow" ? "Свечение" : "Фейд снизу";
+  try {
+    await saveBundleTypeAssets(t);
+    btMsg.value[t.id] = `${name} ${a.label}: ${on ? "вкл" : "выкл"} ✓`;
+  } catch {
+    btMsg.value[t.id] = "Ошибка сохранения";
+  }
+}
+
+async function setMaxProps(t: AdminBundleType, a: AdminBundleTypeAsset, e: Event) {
+  const raw = Number.parseInt((e.target as HTMLInputElement).value, 10);
+  if (!Number.isFinite(raw) || raw < 4 || raw > 20) {
+    btMsg.value[t.id] = "Предметов: допустимо от 4 до 20";
+    return;
+  }
+  a.maxProps = raw;
+  try {
+    await saveBundleTypeAssets(t);
+    btMsg.value[t.id] = `Макс. предметов ${a.label}: ${raw} ✓`;
   } catch {
     btMsg.value[t.id] = "Ошибка сохранения";
   }
@@ -1929,6 +1984,38 @@ onMounted(() => {
                 <option value="ai_reference">AI по референсам (ai_reference)</option>
               </select>
             </div>
+            <!-- Эффекты и плотность (TASK glow-fade-density) — только для
+                 режима ai_reference: пост-обработка и лимит предметов есть
+                 только в нём. -->
+            <div v-if="a.composeMode === 'ai_reference'" class="bt__fx">
+              <label class="bt__fxItem" title="Радиальное свечение под всеми объектами. Цвет подбирается автоматически по композиции и референсам; на push и pop-up наследуется от email.">
+                <input
+                  type="checkbox"
+                  :checked="a.effects?.glow ?? true"
+                  @change="(e) => setEffect(t, a, 'glow', e)"
+                />
+                Свечение
+              </label>
+              <label class="bt__fxItem" title="Растворение нижней кромки: объекты плавно уходят в прозрачность, как в утверждённых эталонах.">
+                <input
+                  type="checkbox"
+                  :checked="a.effects?.fade ?? true"
+                  @change="(e) => setEffect(t, a, 'fade', e)"
+                />
+                Фейд снизу
+              </label>
+              <label v-if="showsMaxProps(t, a)" class="bt__fxItem" title="Сколько мелких предметов допустимо вокруг персонажа. Число уходит и в промпт генерации, и в чек-лист приёмщика: перегруз отправляется на авто-ретрай.">
+                Предметов ≤
+                <input
+                  class="bt__num"
+                  type="number"
+                  min="4"
+                  max="20"
+                  :value="a.maxProps ?? 8"
+                  @change="(e) => setMaxProps(t, a, e)"
+                />
+              </label>
+            </div>
           </div>
         </div>
         <p v-if="btMsg[t.id]" class="muted">{{ btMsg[t.id] }}</p>
@@ -2692,6 +2779,33 @@ select {
   margin-left: auto;
   font-size: 12px;
   padding: 4px 6px;
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-sm);
+  background: var(--color-white);
+  color: var(--color-text);
+}
+
+/* Эффекты и плотность предметов (TASK glow-fade-density) */
+.bt__fx {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  flex-wrap: wrap;
+  margin-top: 6px;
+  padding-top: 6px;
+  border-top: 1px solid var(--color-border);
+  font-size: 12px;
+  color: var(--color-text-muted, var(--color-text));
+}
+.bt__fxItem {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  cursor: pointer;
+}
+.bt__num {
+  width: 52px;
+  padding: 2px 4px;
   border: 1px solid var(--color-border);
   border-radius: var(--radius-sm);
   background: var(--color-white);

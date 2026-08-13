@@ -22,6 +22,8 @@ const fal = vi.hoisted(() => ({
   runPersonFal: vi.fn(),
   runGptImage2Edit: vi.fn(),
   runBriaRemoveBg: vi.fn(),
+  // TASK glow-fade-density: арт-директор выбирает цвет свечения (glowColor.ts).
+  runVisionQa: vi.fn(),
 }));
 const fit = vi.hoisted(() => ({ fitAndStoreAsset: vi.fn() }));
 const cloud = vi.hoisted(() => ({
@@ -134,6 +136,7 @@ beforeEach(() => {
   fal.runPersonFal.mockReset();
   fal.runGptImage2Edit.mockReset();
   fal.runBriaRemoveBg.mockReset();
+  fal.runVisionQa.mockReset();
   fit.fitAndStoreAsset.mockReset();
   cloud.uploadFromUrl.mockReset();
   cloud.uploadBuffer.mockReset();
@@ -167,7 +170,12 @@ beforeEach(() => {
   reviewer.reviewComposition.mockResolvedValue({ pass: true, score: 90, reasons: [] });
   fal.runBriaRemoveBg.mockResolvedValue({ success: true, imageUrl: "https://fal/nobg.png" });
   cloud.uploadFromUrl.mockResolvedValue({ success: true, secure_url: "https://cdn/stored.png" });
-  cloud.uploadBuffer.mockResolvedValue({ success: true, secure_url: "https://cdn/text.png" });
+  // uploadBuffer заливает картинку С ЭФФЕКТАМИ — она и попадает в imageUrl.
+  cloud.uploadBuffer.mockResolvedValue({ success: true, secure_url: "https://cdn/final.png" });
+  fal.runVisionQa.mockResolvedValue({
+    success: true,
+    output: '{"hex": "#7FD4E0", "reason": "бирюза зонтика"}',
+  });
 });
 
 describe("хелперы производных ключей (legacy, старые бандлы)", () => {
@@ -233,7 +241,20 @@ describe("processAiReferenceAsset — один ассет (TASK safe-zone/auto-h
     expect(healing.healComposition).not.toHaveBeenCalled();
 
     const parent = parentDoneCall()!;
-    expect(parent.data.imageUrl).toBe("https://cdn/stored.png");
+    // TASK glow-fade-density: в ассет идёт картинка С ЭФФЕКТАМИ (`_final`),
+    // а чистый вырез (`_transparent`) остаётся источником для пере-применения.
+    expect(parent.data.imageUrl).toBe("https://cdn/final.png");
+    expect(cloud.uploadBuffer).toHaveBeenCalledWith(
+      expect.any(Buffer),
+      "v1_email_final",
+      "bundles/bun1",
+    );
+    expect(parent.data.metadata.effects).toMatchObject({
+      applied: true,
+      glowHex: "#63CBD9", // #7FD4E0 после нормализации в коридор эталонов
+      glowSource: "vlm",
+      sourceUrl: "https://cdn/stored.png",
+    });
     expect(parent.data.metadata.transparent).toBe(true);
     expect(parent.data.metadata.qa.qaPassed).toBe(true);
     expect(parent.data.metadata.qa.healing).toBeUndefined();
@@ -409,6 +430,57 @@ describe("formatGeometryHint / buildSecondaryPrompt (DI2-3/DI2-4)", () => {
     expect(p).not.toContain("THREE sections");
   });
 
+  // TASK glow-fade-density, задание 3 (DI3-9/DI3-11): прежний контракт сам
+  // просил «anchor prop group» и «fill the canvas» — отсюда и брался перегруз.
+  it("контракт плотности: число предметов, запрет крупных объектов, стиль рефов", () => {
+    const p = buildSecondaryPrompt({
+      variationText: "VIP weekend",
+      styleText: "",
+      hasAnchor: true,
+      formatLabel: "Pop-up",
+      targetW: 800,
+      targetH: 600,
+      maxProps: 6,
+    });
+    expect(p).toContain("between 4 and 6 SMALL props");
+    expect(p).toContain("more than 6 floating props is wrong");
+    expect(p).toContain("AT MOST ONE larger prop");
+    expect(p).toContain("no slot machines");
+    expect(p).toContain("no treasure chests");
+    expect(p).toContain("Do NOT fill the canvas");
+    // Стилистику предметов не меняем — только количество и калибр (DI3-11).
+    expect(p).toContain("same prop family as the reference banners");
+    // Плотность якоря копировать нельзя, стиль — нужно (R-P2).
+    expect(p).toContain("or its prop density");
+    expect(p).toContain("APPROVED anchor creative");
+    // Прежние формулировки, порождавшие перегруз, ушли.
+    expect(p).not.toContain("anchor prop group");
+    expect(p).not.toContain("fill the canvas with a clear focal hierarchy");
+  });
+
+  it("лимит предметов нормализуется: мусор и выход за границы → безопасное число", () => {
+    const build = (maxProps?: number) =>
+      buildSecondaryPrompt({
+        variationText: "",
+        styleText: "",
+        hasAnchor: true,
+        formatLabel: "Push",
+        targetW: 1024,
+        targetH: 512,
+        ...(maxProps !== undefined ? { maxProps } : {}),
+      });
+    expect(build()).toContain("between 4 and 8 SMALL props"); // дефолт
+    expect(build(2)).toContain("between 4 and 4 SMALL props"); // ниже нормы
+    expect(build(999)).toContain("between 4 and 20 SMALL props"); // потолок
+  });
+
+  it("якорный контракт заданием 3 не затронут (DI3-10)", () => {
+    const anchor = buildAiReferencePrompt("VIP weekend");
+    expect(anchor).not.toContain("SMALL props");
+    expect(anchor).not.toContain("no slot machines");
+    expect(anchor).toContain("THREE sections");
+  });
+
   it("без якоря (старый бандл) блок STYLE SOURCE снимается", () => {
     const p = buildSecondaryPrompt({
       variationText: "VIP weekend",
@@ -474,6 +546,98 @@ describe("processAiReferenceAsset — зависимый формат (DI2-3)", 
     expect(parent.data.metadata.campaignAnchorUrl).toBe("https://cdn/email-base.png");
     expect(parent.data.metadata.styleAnchorUsed).toBe(true);
   });
+
+  // TASK glow-fade-density: у кампании ОДИН цвет свечения (DI3-4).
+  it("цвет свечения наследуется от якоря без отдельного запроса к модели", async () => {
+    await processAiReferenceAsset({
+      ...PUSH_OPTS,
+      anchor: { ...PUSH_OPTS.anchor, glowHex: "#63CBD9" },
+    });
+    expect(fal.runVisionQa).not.toHaveBeenCalled();
+    const parent = parentDoneCall()! as unknown as {
+      data: { metadata: { effects: Record<string, unknown> } };
+    };
+    expect(parent.data.metadata.effects).toMatchObject({
+      applied: true,
+      glowHex: "#63CBD9",
+      glowSource: "inherited",
+    });
+  });
+
+  it("якорь без цвета (старый бандл) → зависимый формат выбирает цвет сам", async () => {
+    await processAiReferenceAsset(PUSH_OPTS);
+    expect(fal.runVisionQa).toHaveBeenCalledTimes(1);
+    const parent = parentDoneCall()! as unknown as {
+      data: { metadata: { effects: Record<string, unknown> } };
+    };
+    expect(parent.data.metadata.effects).toMatchObject({ glowSource: "vlm" });
+  });
+
+  it("подсказка цвета текста ставится только у якоря — у зависимых safe-зоны нет", async () => {
+    await processAiReferenceAsset(PUSH_OPTS);
+    const parent = parentDoneCall()! as unknown as {
+      data: { metadata: Record<string, unknown> };
+    };
+    expect(parent.data.metadata.recommendedTextColor).toBeNull();
+  });
+
+  it("лимит предметов уходит и в промпт, и в приёмку одним числом (DI3-9)", async () => {
+    await processAiReferenceAsset({ ...PUSH_OPTS, maxProps: 5 });
+    const [genArgs] = fal.runGptImage2Edit.mock.calls[0]!;
+    expect(genArgs.prompt).toContain("between 4 and 5 SMALL props");
+    const [qaArgs] = reviewer.reviewComposition.mock.calls[0]!;
+    expect(qaArgs.maxProps).toBe(5);
+  });
+});
+
+// TASK glow-fade-density (DI3-15): эффекты — оформление поверх готового
+// ассета, поэтому их отключение и их сбой не должны менять судьбу ассета.
+describe("эффекты в пайплайне: рубильники и fail-open", () => {
+  it("галки выключены → в ассет идёт чистый вырез, uploadBuffer не зовётся", async () => {
+    await processAiReferenceAsset({ ...OPTS, effects: { glow: false, fade: false } });
+    const parent = parentDoneCall()! as unknown as {
+      data: { imageUrl: string; metadata: { effects: Record<string, unknown> } };
+    };
+    expect(parent.data.imageUrl).toBe("https://cdn/stored.png");
+    expect(parent.data.metadata.effects).toMatchObject({ applied: false, glowHex: null });
+    expect(cloud.uploadBuffer).not.toHaveBeenCalled();
+    expect(fal.runVisionQa).not.toHaveBeenCalled();
+  });
+
+  it("выключено только свечение → цвет не запрашивается, фейд применяется", async () => {
+    await processAiReferenceAsset({ ...OPTS, effects: { glow: false } });
+    expect(fal.runVisionQa).not.toHaveBeenCalled();
+    const parent = parentDoneCall()! as unknown as {
+      data: { imageUrl: string; metadata: { effects: Record<string, unknown> } };
+    };
+    expect(parent.data.imageUrl).toBe("https://cdn/final.png");
+    expect(parent.data.metadata.effects).toMatchObject({ applied: true, glowHex: null });
+  });
+
+  it("сбой заливки эффектов не валит ассет — остаётся чистый вырез с причиной", async () => {
+    cloud.uploadBuffer.mockResolvedValue({ success: false, error: "HTTP 500" });
+    const result = await processAiReferenceAsset(OPTS);
+    expect(result.ok).toBe(true);
+    const parent = parentDoneCall()! as unknown as {
+      data: { imageUrl: string; status: string; metadata: { effects: Record<string, unknown> } };
+    };
+    expect(parent.data.status).toBe("DONE");
+    expect(parent.data.imageUrl).toBe("https://cdn/stored.png");
+    expect(parent.data.metadata.effects).toMatchObject({
+      applied: false,
+      error: "upload: HTTP 500",
+    });
+  });
+
+  it("сбой vision при выборе цвета не валит ассет — цвет берётся фолбэком", async () => {
+    fal.runVisionQa.mockResolvedValue({ success: false, error: "HTTP 500" });
+    const result = await processAiReferenceAsset(OPTS);
+    expect(result.ok).toBe(true);
+    const parent = parentDoneCall()! as unknown as {
+      data: { metadata: { effects: Record<string, unknown> } };
+    };
+    expect(parent.data.metadata.effects).toMatchObject({ applied: true, glowSource: "fallback" });
+  });
 });
 
 describe("processAiReferenceAsset — якорь отдаёт стиль дальше (DI2-3)", () => {
@@ -485,6 +649,8 @@ describe("processAiReferenceAsset — якорь отдаёт стиль дал�
       ok: true,
       baseUrl: "https://cdn/fit.png",
       styleText: "Campaign style to reproduce — Palette: neon purple.",
+      // Цвет свечения кампании уходит процессору вместе со стилем (DI3-4).
+      glowHex: "#63CBD9",
     });
     const parent = parentDoneCall()! as unknown as {
       data: { metadata: Record<string, unknown> & { qa: Record<string, unknown> } };
@@ -537,6 +703,25 @@ describe("loadAnchorContext (DI2-9)", () => {
     expect(await loadAnchorContext("v1", "email")).toEqual({
       imageUrl: "https://cdn/base.png",
       styleText: "Palette: neon purple.",
+    });
+  });
+
+  // TASK glow-fade-density (DI3-4): цвет свечения кампании переживает
+  // одиночную регенерацию push — он читается из metadata якоря.
+  it("подхватывает цвет свечения якоря", async () => {
+    db.bundleAsset.findUnique.mockResolvedValue({
+      status: "DONE",
+      imageUrl: "https://cdn/email-transparent.png",
+      metadata: {
+        styleAnchor: "Palette: neon purple.",
+        qa: { baseUrl: "https://cdn/base.png" },
+        effects: { glowHex: "#63CBD9" },
+      },
+    });
+    expect(await loadAnchorContext("v1", "email")).toEqual({
+      imageUrl: "https://cdn/base.png",
+      styleText: "Palette: neon purple.",
+      glowHex: "#63CBD9",
     });
   });
 

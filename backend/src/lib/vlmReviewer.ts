@@ -86,24 +86,47 @@ const ANCHOR_CHECKLIST = [
 ];
 
 /**
+ * Дефолтный лимит мелких предметов зависимого формата (DI3-9). Дублировать
+ * константу из пайплайна нельзя — это дало бы цикл импорта (пайплайн уже
+ * импортирует приёмщика), а число обязано совпадать с тем, что ушло в промпт
+ * генерации, и приходит сюда параметром.
+ */
+export const DEFAULT_QA_MAX_PROPS = 8;
+
+/**
  * Чек-лист зависимого формата (push / pop-up, DI2-4): текста на нём не будет,
  * поэтому пустой центр не требуется; зато добавлена сверка с якорем кампании.
+ *
+ * TASK glow-fade-density (задание 3, DI3-12): добавлен числовой пункт про
+ * плотность — перегруженная композиция уходит в авто-ретрай, а не к человеку.
+ * Формулировка «not more than N» вместо «too many» намеренная: VLM надёжно
+ * считает предметы, когда у него есть точное число, и плавает на оценочных
+ * определениях. Пункт про раскладку якоря расширен упоминанием плотности
+ * (R-P2) — иначе два требования конфликтуют: «повтори стиль якоря» против
+ * «будь проще якоря».
  */
-const SECONDARY_CHECKLIST = [
-  "The SECOND image is the approved anchor creative of the SAME promo campaign (another format). The remaining images are reference banners of the same brand for this format.",
-  WHITE_BG_NOTE,
-  "Evaluate the generated composition against this checklist:",
-  "1. STYLE: palette, prop family, character style, lighting and rendering quality must match the reference banners. Ignore background differences (see above).",
-  "2. BRIEF: the composition must express the campaign brief provided in the user prompt.",
-  "3. CAMPAIGN STYLE MATCH: it must read as the SAME campaign as the anchor creative — same palette, same character design and outfit, same prop family, same lighting and rendering. A different character, a different color scheme or a different rendering technique is a FAIL. Note: a different layout, crop or aspect ratio is CORRECT and must never be reported — only the style has to match.",
-  "4. BACKGROUND: the background must be plain solid white with no scenery, gradients, glow, bokeh or cast shadows. There is NO required empty copy space in this format — props and the character may occupy the center freely.",
-  `5. ${TEXT_RULE}`,
-  `6. ${ARTIFACTS_RULE}`,
-  "7. FORMAT FITNESS: the composition must read well in its own aspect ratio — a clear focal hierarchy, the character and key props fully inside the frame with a margin from the edges, nothing important cut off.",
-];
+function buildSecondaryChecklist(maxProps: number): string[] {
+  return [
+    "The SECOND image is the approved anchor creative of the SAME promo campaign (another format). The remaining images are reference banners of the same brand for this format.",
+    WHITE_BG_NOTE,
+    "Evaluate the generated composition against this checklist:",
+    "1. STYLE: palette, prop family, character style, lighting and rendering quality must match the reference banners. Ignore background differences (see above).",
+    "2. BRIEF: the composition must express the campaign brief provided in the user prompt.",
+    "3. CAMPAIGN STYLE MATCH: it must read as the SAME campaign as the anchor creative — same palette, same character design and outfit, same prop family, same lighting and rendering. A different character, a different color scheme or a different rendering technique is a FAIL. Note: a different layout, crop or aspect ratio is CORRECT and must never be reported — only the style has to match. A LOWER prop density than the anchor is also CORRECT and intended: this format must be simpler and airier than the anchor, never busier.",
+    "4. BACKGROUND: the background must be plain solid white with no scenery, gradients, glow, bokeh or cast shadows. There is NO required empty copy space in this format — props and the character may occupy the center freely.",
+    `5. PROP DENSITY: count the props around the character. The composition may contain the hero character, at most ONE larger prop held in their hands, and at most ${maxProps} small props floating in the air. It is a FAIL if: there are more than ${maxProps} floating props; or any large object rests on the ground or is stacked behind the character (slot machine, fortune or roulette wheel, treasure chest, open suitcase or crate, stacks of banknotes, piles or heaps of coins or chips); or the props crowd together into a cluttered pile with no empty background between them. Report the counted number in the reasons when you fail this item.`,
+    `6. ${TEXT_RULE}`,
+    `7. ${ARTIFACTS_RULE}`,
+    "8. FORMAT FITNESS: the composition must read well in its own aspect ratio — a clear focal hierarchy, the character and key props fully inside the frame with a margin from the edges, nothing important cut off.",
+  ];
+}
 
-export function buildQaSystemPrompt(profile: QaProfile = "anchor"): string {
-  const checklist = profile === "secondary" ? SECONDARY_CHECKLIST : ANCHOR_CHECKLIST;
+export function buildQaSystemPrompt(profile: QaProfile = "anchor", maxProps?: number): string {
+  const checklist =
+    profile === "secondary"
+      ? buildSecondaryChecklist(maxProps ?? DEFAULT_QA_MAX_PROPS)
+      : // Якорный формат (email) заданием 3 не затронут (DI3-10).
+        ANCHOR_CHECKLIST;
   return [...COMMON_HEAD, ...checklist, ...COMMON_TAIL].join("\n");
 }
 
@@ -177,9 +200,11 @@ export async function reviewComposition(opts: {
   profile?: QaProfile;
   anchorUrl?: string | null;
   formatLabel?: string;
+  /** Лимит предметов зависимого формата — ровно тот, что ушёл в генерацию. */
+  maxProps?: number;
 }): Promise<QaVerdict> {
   const profile: QaProfile = opts.profile ?? "anchor";
-  const systemPrompt = buildQaSystemPrompt(profile);
+  const systemPrompt = buildQaSystemPrompt(profile, opts.maxProps);
   const anchorPart = profile === "secondary" && opts.anchorUrl ? [opts.anchorUrl] : [];
   const imageUrls = [opts.imageUrl, ...anchorPart, ...opts.refUrls.slice(0, QA_REFS_SHOWN)];
   const prompt = buildQaPrompt(opts.variationText, opts.brandName, opts.formatLabel);

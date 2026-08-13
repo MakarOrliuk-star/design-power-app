@@ -1002,6 +1002,10 @@ export async function processRenderAssetJob(
       isAnchor,
       formatLabel: config.label,
       anchor,
+      // TASK glow-fade-density: плотность предметов и галки эффектов —
+      // данные типа бандла, правятся в /admin без деплоя (DI3-14/DI3-15).
+      ...(config.maxProps !== undefined ? { maxProps: config.maxProps } : {}),
+      ...(config.effects ? { effects: config.effects } : {}),
     });
 
     // Якорь готов → поехали зависимые форматы; якорь упал → они не имеют
@@ -1058,6 +1062,8 @@ export async function processRenderAssetJob(
       isAnchor: parentIsAnchor,
       formatLabel: parentConfig.label,
       anchor: parentAnchor,
+      ...(parentConfig.maxProps !== undefined ? { maxProps: parentConfig.maxProps } : {}),
+      ...(parentConfig.effects ? { effects: parentConfig.effects } : {}),
     });
     if (parentIsAnchor) {
       const dependents = dependentAiReferenceAssets(typeAssets).map((a) => a.key);

@@ -65,8 +65,13 @@ export function buildHealingPrompt(
   const centerRule = keepCenterClear
     ? "the wide central copy space (the middle half of the banner, top to bottom) must remain " +
       "COMPLETELY EMPTY white — remove any prop, coin, sparkle or particle that entered it; "
-    : "keep the existing composition and framing — this format has no reserved copy space, " +
-      "do not clear or empty the middle of the canvas; ";
+    : // Зависимый формат: центр чистить не надо, но перегруз (DI3-9) лечится
+      // именно удалением предметов — без этой оговорки «не меняй ничего»
+      // выше по промпту запрещает единственно верную правку.
+      "keep the existing composition and framing — this format has no reserved copy space, " +
+      "do not clear or empty the middle of the canvas; if an issue above asks to reduce the number " +
+      "of props or to declutter the scene, DELETING the extra props is exactly what is required — " +
+      "erase them and leave plain white background in their place, never replace them with other objects; ";
   return (
     "Retouch this existing casino promo hero composition. Apply ONLY the minimal " +
     "corrections needed to fix the QA issues listed below and change NOTHING else: " +
@@ -121,6 +126,8 @@ export async function healComposition(opts: {
   anchorUrl?: string | null;
   formatLabel?: string;
   maxAttempts?: number;
+  /** Лимит предметов зависимого формата (DI3-9) — тот же, что в генерации. */
+  maxProps?: number;
 }): Promise<HealOutcome> {
   const max = opts.maxAttempts ?? AI_HEAL_MAX_ATTEMPTS;
   const profile: QaProfile = opts.profile ?? "anchor";
@@ -206,6 +213,7 @@ export async function healComposition(opts: {
       profile,
       anchorUrl: opts.anchorUrl ?? null,
       ...(opts.formatLabel ? { formatLabel: opts.formatLabel } : {}),
+      ...(opts.maxProps !== undefined ? { maxProps: opts.maxProps } : {}),
     });
     const row: AiRefAttempt = {
       imageUrl: fitted.url,
