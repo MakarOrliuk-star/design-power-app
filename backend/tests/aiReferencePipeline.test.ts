@@ -32,7 +32,7 @@ const cloud = vi.hoisted(() => ({
   withRetry: vi.fn((fn: () => unknown) => fn()),
 }));
 const cache = vi.hoisted(() => ({ fetchBuffer: vi.fn() }));
-const validator = vi.hoisted(() => ({ validateAiAsset: vi.fn() }));
+const validator = vi.hoisted(() => ({ validateAiAsset: vi.fn(), SIDE_FILL_MIN_RATIO: 0.12 }));
 const reviewer = vi.hoisted(() => ({
   reviewComposition: vi.fn(),
   QA_REFS_SHOWN: 3,
@@ -464,6 +464,47 @@ describe("formatGeometryHint / buildSecondaryPrompt (DI2-3/DI2-4)", () => {
     expect(p).not.toContain("fill the canvas with a clear focal hierarchy");
   });
 
+  // Правка 2026-08-13 по эталонам `push1/push2 ok`: у широкого формата
+  // предметы КРУПНЫЕ и часть уходит за героя — у почти квадратного pop-up нет.
+  it("широкий формат (push) просит крупные предметы и глубину, pop-up — нет", () => {
+    const make = (targetW: number, targetH: number) =>
+      buildSecondaryPrompt({
+        variationText: "",
+        styleText: "",
+        hasAnchor: true,
+        formatLabel: "F",
+        targetW,
+        targetH,
+      });
+    const push = make(1024, 512); // 2:1
+    expect(push).toContain("SCALE (wide format)");
+    expect(push).toContain("oversized volumetric casino lettering");
+    expect(push).toContain("may sit BEHIND");
+
+    const popup = make(800, 600); // 4:3
+    expect(popup).toContain("clearly smaller than the character");
+    expect(popup).not.toContain("SCALE (wide format)");
+    expect(popup).not.toContain("may sit BEHIND");
+  });
+
+  it("предметы требуют разных планов резкости — «как у дизайнера»", () => {
+    const p = buildSecondaryPrompt({
+      variationText: "",
+      styleText: "",
+      hasAnchor: true,
+      formatLabel: "Push",
+      targetW: 1024,
+      targetH: 512,
+    });
+    expect(p).toContain("FOCUS");
+    expect(p).toContain("OUT OF FOCUS");
+    expect(p).toContain("motion blur");
+    expect(p).toContain("the hero is always the sharpest");
+    // Предметы на земле остаются запрещены, а «за героем» — уже нет.
+    expect(p).toContain("no props standing on the ground");
+    expect(p).not.toContain("stacked behind");
+  });
+
   it("лимит предметов нормализуется: мусор и выход за границы → безопасное число", () => {
     const build = (maxProps?: number) =>
       buildSecondaryPrompt({
@@ -563,8 +604,10 @@ describe("processAiReferenceAsset — зависимый формат (DI2-3)", 
 
   it("чек чистого центра не выполняется, приёмка идёт профилем secondary (DI2-4)", async () => {
     await processAiReferenceAsset(PUSH_OPTS);
+    // Чек центра у зависимых не выполняется, зато выполняется чек боков:
+    // у них центр занят героем, а пустовать не должны края (правка 2026-08-13).
     const techOpts = validator.validateAiAsset.mock.calls[0]![3];
-    expect(techOpts).toEqual({});
+    expect(techOpts).toEqual({ minSideFill: 0.12 });
     const [qaArgs] = reviewer.reviewComposition.mock.calls[0]!;
     expect(qaArgs.profile).toBe("secondary");
     expect(qaArgs.anchorUrl).toBe("https://cdn/email-base.png");

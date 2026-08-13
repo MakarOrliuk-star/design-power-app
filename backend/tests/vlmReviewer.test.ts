@@ -157,6 +157,13 @@ describe("профили чек-листа (DI2-4)", () => {
     expect(buildQaSystemPrompt("secondary")).toContain("between 8 and 14 props");
   });
 
+  it("размытие пропсов — приём, а не артефакт; пустые бока — брак", () => {
+    const secondary = buildQaSystemPrompt("secondary");
+    expect(secondary).toContain("FOCUS VARIETY");
+    expect(secondary).toContain("left and right thirds of the canvas are visibly empty");
+    expect(secondary).toContain("only a blurry HERO is a defect");
+  });
+
   it("пункт про плотность отсутствует в якорном профиле (DI3-10)", () => {
     expect(buildQaSystemPrompt("anchor", 5)).not.toContain("PROP DENSITY");
   });

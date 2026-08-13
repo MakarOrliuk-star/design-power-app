@@ -135,7 +135,6 @@ adminRouter.get("/catalog", async (_req: Request, res: Response) => {
         name: true,
         forcedAspectRatio: true,
         imageModel: true,
-        characterFidelity: true,
         nanoRef: { select: { referenceImages: true } },
       },
     }),
@@ -158,7 +157,6 @@ adminRouter.get("/catalog", async (_req: Request, res: Response) => {
       name: b.name,
       forcedAspectRatio: b.forcedAspectRatio,
       imageModel: b.imageModel,
-      characterFidelity: b.characterFidelity,
       referenceImages: b.nanoRef?.referenceImages ?? [],
       personPrompt: personByKey.get(b.name.toLowerCase()) ?? "",
     })),
@@ -218,10 +216,6 @@ adminRouter.post("/brands", async (req: Request, res: Response) => {
  */
 const patchBrandSchema = z.object({
   forcedAspectRatio: z.enum(["9:16"]).nullable().optional(),
-  // Сходство персонажа с референсами в ai_reference (правка 2026-08-13):
-  // "exact" — маскот один в один, "variant" (и null) — узнаваем, но с
-  // собственными чертами.
-  characterFidelity: z.enum(["exact", "variant"]).nullable().optional(),
   imageModel: z
     .string()
     .nullable()
@@ -237,27 +231,15 @@ adminRouter.patch("/brands/:id", async (req: Request, res: Response) => {
   const id = String(req.params.id ?? "");
 
   // Only write the keys the client actually sent (exactOptionalPropertyTypes).
-  const data: {
-    forcedAspectRatio?: string | null;
-    imageModel?: string | null;
-    characterFidelity?: string | null;
-  } = {};
+  const data: { forcedAspectRatio?: string | null; imageModel?: string | null } = {};
   if (parsed.data.forcedAspectRatio !== undefined) data.forcedAspectRatio = parsed.data.forcedAspectRatio;
   if (parsed.data.imageModel !== undefined) data.imageModel = parsed.data.imageModel;
-  if (parsed.data.characterFidelity !== undefined)
-    data.characterFidelity = parsed.data.characterFidelity;
 
   try {
     const brand = await prisma.brand.update({
       where: { id },
       data,
-      select: {
-        id: true,
-        name: true,
-        forcedAspectRatio: true,
-        imageModel: true,
-        characterFidelity: true,
-      },
+      select: { id: true, name: true, forcedAspectRatio: true, imageModel: true },
     });
     res.json({ brand });
   } catch {

@@ -67,7 +67,7 @@ const TEXT_RULE =
   "TEXT: the ONLY lettering allowed is single short casino words organically placed on props (slot reels, chips, crates, medallions). The allowed list includes, non-exhaustively: FS, FREE SPINS, SCATTER, BONUS, VIP, WILD, 777, JACKPOT, MEGA WIN, RELOAD, SPIN. Never flag a word from this list or a similar single casino term. FAIL only for: phrases or sentences, headlines, CTA buttons, logos, brand names, watermarks.";
 
 const ARTIFACTS_RULE =
-  "ANATOMY/ARTIFACTS: no deformed faces or hands, no extra limbs, no duplicated or melted objects, no visible generation artifacts. Intentional depth-of-field blur on small distant props is good design, NOT an artifact.";
+  "ANATOMY/ARTIFACTS: no deformed faces or hands, no extra limbs, no duplicated or melted objects, no visible generation artifacts. Intentional depth-of-field blur and light motion blur on props are good design, NOT artifacts — a few soft or blurred props next to sharp ones are exactly what is asked for, and only a blurry HERO is a defect.";
 
 const WHITE_BG_NOTE =
   "IMPORTANT: the composition is INTENTIONALLY rendered on a plain solid white background for later cut-out, even if the reference banners have scenic backgrounds. A white background is correct and must NEVER be reported as a style mismatch.";
@@ -160,11 +160,12 @@ function buildSecondaryChecklist(
     // Правка 2026-08-13: пункт стал двусторонним — заказчик сообщил, что
     // прежний односторонний лимит увёл кадры в пустоту. Перегруз по-прежнему
     // определяется КРУПНЫМИ объектами на земле, а не числом мелких.
-    `5. PROP DENSITY: count the props around the character. The composition should contain the hero, at most ONE larger prop held in their hands, and between 8 and ${maxProps} props floating in the air. It is a FAIL if: there are fewer than 8 floating props and the frame looks empty; or there are more than ${maxProps}; or any large object rests on the ground or is stacked behind the character (slot machine, fortune or roulette wheel, treasure chest, open suitcase or crate, stacks of banknotes, piles or heaps of coins or chips); or the props merge into one solid cluttered pile instead of floating separately. Report the counted number in the reasons when you fail this item.`,
-    `6. ${TEXT_RULE}`,
-    `7. ${ARTIFACTS_RULE}`,
-    "8. FORMAT FITNESS: the composition must read well in its own aspect ratio — a clear focal hierarchy, the character and the prop in their hands fully inside the frame, nothing important cut off. The floating props should be distributed across both sides and into the corners rather than clustered on one side. Small floating props partly cropped by the canvas edges are CORRECT and must never be reported; only a cropped character, a cropped hand-held prop, or a prop cropped so heavily it is unrecognisable is a FAIL.",
-    ...(gr ? [`9. ${gr}`] : []),
+    `5. PROP DENSITY: count the props around the character. The composition should contain the hero, at most ONE larger prop held in their hands, and between 8 and ${maxProps} props floating in the air. It is a FAIL if: there are fewer than 8 floating props and the frame looks empty; or there are more than ${maxProps}; or any large object rests on the ground or is stacked behind the character (slot machine, fortune or roulette wheel, treasure chest, open suitcase or crate, stacks of banknotes, piles or heaps of coins or chips); or the props merge into one solid cluttered pile instead of floating separately; or the left and right thirds of the canvas are visibly empty while everything sits in the middle. Report the counted number in the reasons when you fail this item.`,
+    "6. FOCUS VARIETY: the props must sit on different focal planes — a couple of them softly out of focus or lightly motion-blurred, the rest sharp, with the hero sharpest. A frame where every prop is equally sharp and flat is a FAIL.",
+    `7. ${TEXT_RULE}`,
+    `8. ${ARTIFACTS_RULE}`,
+    "9. FORMAT FITNESS: the composition must read well in its own aspect ratio — a clear focal hierarchy, the character and the prop in their hands fully inside the frame, nothing important cut off. The floating props should be distributed across both sides and into the corners rather than clustered on one side. Small floating props partly cropped by the canvas edges are CORRECT and must never be reported; only a cropped character, a cropped hand-held prop, or a prop cropped so heavily it is unrecognisable is a FAIL.",
+    ...(gr ? [`10. ${gr}`] : []),
   ];
 }
 

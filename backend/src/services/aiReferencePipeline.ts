@@ -13,7 +13,7 @@ import {
 import type { EffectsToggle, PromoEffectsConfig } from "../lib/promoEffects.js";
 import { pickGlowColor } from "../lib/glowColor.js";
 import { fetchBuffer } from "./layerCache.js";
-import { validateAiAsset } from "../lib/aiAssetValidator.js";
+import { validateAiAsset, SIDE_FILL_MIN_RATIO } from "../lib/aiAssetValidator.js";
 import { getLayoutGuideUrl, LAYOUT_GUIDE_INSTRUCTION } from "../lib/layoutGuide.js";
 import { MAX_EDIT_REFS } from "./variationRefs.js";
 import { reviewComposition, QA_REFS_SHOWN, qaThreshold } from "../lib/vlmReviewer.js";
@@ -380,8 +380,31 @@ export function clampMaxProps(value?: number | null): number {
  * по-прежнему берётся с референсов формата — меняем количество и калибр,
  * а не стилистику предметов (DI3-11).
  */
-export function buildSecondaryContract(maxProps: number = DEFAULT_MAX_PROPS): string {
+export function buildSecondaryContract(
+  maxProps: number = DEFAULT_MAX_PROPS,
+  /**
+   * Широкий формат (push, ~2:1). Логика ПРЕДМЕТОВ у него другая, чем у
+   * почти квадратного pop-up: по эталонам `push1/push2 ok` дизайнер ставит
+   * несколько КРУПНЫХ объектов (объёмные золотые буквы во всю треть высоты,
+   * листва, реквизит), сильно обрезанных краями, и часть из них уходит ЗА
+   * персонажа. Сборку кадра заказчик оставил как есть — различается только
+   * калибр и глубина предметов.
+   */
+  wide = false,
+): string {
   const cap = clampMaxProps(maxProps);
+  const scale = wide
+    ? "SCALE (wide format): the props are BIG — the largest ones stand as tall as a third of the canvas " +
+      "height, and oversized volumetric casino lettering (FS, BONUS, VIP, 777) works as a full-blown prop, " +
+      "not as a caption. Mix two or three of these large pieces with the smaller ones; a frame built only " +
+      "from small props reads as empty in this aspect ratio. "
+    : "SCALE: keep the props clearly smaller than the character, mixing a few medium ones near the hero " +
+      "with smaller ones further out. "
+  const depth = wide
+    ? "DEPTH: a few large decorative pieces — foliage, fabric, ribbons, oversized lettering — may sit BEHIND " +
+      "the hero and run off the canvas edges, framing the character and giving the shot depth. Keep them " +
+      "softer and lower in contrast than the hero so they stay background. "
+    : "";
   return (
     "Create ONE new cohesive casino promo composition for this format, belonging to an EXISTING campaign. " +
     "STYLE SOURCE: the FIRST image is the APPROVED anchor creative of that same campaign — reproduce its palette, " +
@@ -398,8 +421,19 @@ export function buildSecondaryContract(maxProps: number = DEFAULT_MAX_PROPS): st
     // то, как подбираются и раскладываются сами items.
     `(2) FLOATING PROPS: between ${MIN_PROPS} and ${cap} props float in the air around the hero, arranged around ` +
     "the head and shoulders, spread roughly evenly between the left and the right side and reaching into all four corners. " +
-    "Vary them deliberately: different sizes, different tilt angles, some close and crisp, some further and softer — " +
+    "Vary them deliberately: different sizes, different tilt angles, different distances — " +
     "never a uniform ring of identical objects, never a symmetric mirror. " +
+    // Правка 2026-08-13 (заказчик: «то блюрены то обычные, как будто дизайнер
+    // делает»): по эталонам push1/push2 часть пропсов идёт в расфокусе или
+    // смазе, и именно это отличает кадр дизайнера от плоской раскладки
+    // наклеек. Требуем явно — «some softer» модель игнорировала.
+    "FOCUS: shoot the scene with a real lens. Two or three props must be visibly OUT OF FOCUS — soft and " +
+    "slightly blurred, as if closer to or further from the camera than the hero — and one or two may carry a " +
+    "light motion blur, as if caught mid-flight. The rest stay tack sharp with crisp edges, and the hero is " +
+    "always the sharpest element. A frame where every prop is equally sharp looks like flat stickers, not " +
+    "like a designed composition. " +
+    scale +
+    depth +
     `The frame must feel abundant, not empty: fewer than ${MIN_PROPS} floating props is wrong, more than ${cap} is wrong too. ` +
     // Просьба заказчика 2026-08-13: «items по своему вкусу, будто дизайнер
     // рисовал вручную, но композиция единая». Стиль наследуется от якоря
@@ -410,8 +444,8 @@ export function buildSecondaryContract(maxProps: number = DEFAULT_MAX_PROPS): st
     "but the specific objects and their arrangement are yours to choose. The result should look like the same campaign " +
     "drawn by the same hand for a different placement — not like the anchor rearranged. " +
     "FORBIDDEN: no slot machines, no fortune wheels, no roulette wheels, no treasure chests, no open suitcases or crates, " +
-    "no stacks of banknotes, no piles or heaps of coins or chips, no large objects resting on the ground or stacked behind " +
-    "the character, no second character. The props FLOAT and stay separated — never let them merge into a solid pile. " +
+    "no stacks of banknotes, no piles or heaps of coins or chips, no props standing on the ground or piled up around the " +
+    "hero's feet, no second character. The props FLOAT and stay separated — never let them merge into a solid mass. " +
     "There is NO reserved copy space in this format, the center may be occupied by the character. " +
     "EDGES: the character and the prop in their hands stay fully inside the frame. Small floating props, on the contrary, may " +
     "run past the canvas edges and be partly cropped — that is how the reference layouts breathe; just never crop them so " +
@@ -466,7 +500,12 @@ export function buildSecondaryPrompt(opts: {
   fidelity?: CharacterFidelity;
 }): string {
   const brief = opts.variationText.trim();
-  const base = buildSecondaryContract(clampMaxProps(opts.maxProps));
+  // Широкий формат определяем по геометрии, а не по ключу ассета: ключи
+  // задаются в админке и у каждого клиента свои.
+  const base = buildSecondaryContract(
+    clampMaxProps(opts.maxProps),
+    opts.targetW / opts.targetH >= 1.6,
+  );
   const contract = opts.hasAnchor
     ? base
     : // Без якоря первая картинка — обычный референс формата: убираем блок
@@ -625,6 +664,9 @@ export async function processAiReferenceAsset(opts: {
   // Чистый центр — требование ТОЛЬКО якорного формата (DI2-4): на push/pop-up
   // текста не будет, и пустая середина там читается как дыра в композиции.
   const centerZone = isAnchor ? AI_REF_CENTER_CLEAR_ZONE : undefined;
+  // Зеркальное требование для зависимых форматов (правка 2026-08-13): у них
+  // центр занят героем, а пустовать не должны БОКА — там живут предметы.
+  const minSideFill = isAnchor ? undefined : SIDE_FILL_MIN_RATIO;
   const [notextKey, transparentKey] = derivedAssetKeys(assetKey);
 
   // Legacy-строки трёх-ассетной схемы (старые бандлы): любой новый прогон —
@@ -804,6 +846,7 @@ export async function processAiReferenceAsset(opts: {
     // Стадия C ДО стадии B: детерминированные проверки бесплатны, VLM — нет.
     const tech = await validateAiAsset(buffer, targetW, targetH, {
       ...(centerZone ? { centerClearZone: centerZone } : {}),
+      ...(minSideFill !== undefined ? { minSideFill } : {}),
     });
     if (!tech.passed) {
       const reasons = tech.checks.filter((c) => !c.passed).map((c) => `${c.key}: ${c.detail}`);
@@ -917,6 +960,7 @@ export async function processAiReferenceAsset(opts: {
       // Лечим в том же контуре, в котором генерировали: у зависимых форматов
       // ни чека центра, ни требования пустой середины в промпте (DI2-4).
       ...(centerZone ? { centerClearZone: centerZone } : {}),
+      ...(minSideFill !== undefined ? { minSideFill } : {}),
       profile,
       anchorUrl,
       formatLabel,

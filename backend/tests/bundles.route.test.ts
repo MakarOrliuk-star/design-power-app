@@ -317,6 +317,8 @@ describe("GET /api/bundles/meta", () => {
           { name: "Betnella(Men)", displayName: "Betnella (Men)" },
           { name: "Betnella(Women)", displayName: "Betnella (Women)" },
         ],
+        // Сходство персонажа (правка 2026-08-13): дефолт — вариативный.
+        exactCharacter: false,
       },
     ]);
   });

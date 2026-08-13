@@ -47,6 +47,12 @@ export interface BrandGroup {
   key: string; // base name (one toggle = both tone variants, D3/D7)
   displayName: string;
   variants: Array<{ name: string; displayName: string }>;
+  /**
+   * Персонаж копируется с референсов один в один (правка 2026-08-13).
+   * false — вариативный (дефолт): узнаваем, но с собственными чертами.
+   * Настройка бренда целиком, ставится в «Вариациях и референсах».
+   */
+  exactCharacter: boolean;
 }
 
 /** Composition metadata of an engine-rendered asset (TASK email-composition):

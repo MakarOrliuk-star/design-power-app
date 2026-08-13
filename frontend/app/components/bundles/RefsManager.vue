@@ -225,7 +225,36 @@ async function fetchRefs() {
 
 // Смена бренда сбрасывает тон на «Общие» — иначе с бренда с разделением
 // можно унести чужой ключ варианта на бренд, где его нет.
+// Сходство персонажа с референсами (правка 2026-08-13). Настройка бренда
+// целиком: пишется во все его тон-варианты, поэтому чекбокс один на бренд.
+const fidelityBusy = ref(false);
+const fidelityMsg = ref("");
+
+const exactCharacter = computed(
+  () => store.brands.find((b) => b.key === selectedBrand.value)?.exactCharacter ?? false,
+);
+
+async function toggleExactCharacter(e: Event) {
+  const brandKey = selectedBrand.value;
+  if (!brandKey || fidelityBusy.value) return;
+  const exact = (e.target as HTMLInputElement).checked;
+  fidelityBusy.value = true;
+  fidelityMsg.value = "";
+  try {
+    await api("/api/crm-admin/brand-fidelity", { method: "PATCH", body: { brandKey, exact } });
+    // Локально — чтобы галка не «отскакивала» до следующей загрузки справочника.
+    const group = store.brands.find((b) => b.key === brandKey);
+    if (group) group.exactCharacter = exact;
+    fidelityMsg.value = exact ? "Персонаж: один в один ✓" : "Персонаж: вариативный ✓";
+  } catch {
+    fidelityMsg.value = "Не удалось сохранить";
+  } finally {
+    fidelityBusy.value = false;
+  }
+}
+
 watch(selectedBrand, (brand) => {
+  fidelityMsg.value = "";
   selectedTone.value = brand;
 });
 watch([selectedPresetId, selectedTone, selectedFormat], () => {
@@ -377,6 +406,20 @@ onMounted(() => {
               {{ b.displayName }}{{ brandTotal(b.key) ? ` — ${brandTotal(b.key)}` : "" }}
             </option>
           </select>
+          <label
+            v-if="selectedBrand"
+            class="fidelity"
+            title="Один в один — маскот бренда копируется с референсов без изменений (фиксированный персонаж). Снято — персонаж узнаваем по стилю и дизайну, но черты, поза и детали свои. Настройка действует на бренд целиком и на все три формата."
+          >
+            <input
+              type="checkbox"
+              :checked="exactCharacter"
+              :disabled="fidelityBusy"
+              @change="toggleExactCharacter"
+            />
+            Персонаж один в один
+          </label>
+          <span v-if="fidelityMsg" class="fidelity__msg">{{ fidelityMsg }}</span>
           <span v-if="tripleReady" class="count" :class="`count--${countState}`">{{ countLabel }}</span>
           <label v-if="tripleReady" class="btn btn--sm btn--primary upload" :class="{ 'upload--busy': uploadBusy }">
             <input type="file" accept="image/png,image/jpeg,image/webp" multiple :disabled="uploadBusy || refs.length >= MAX_REFS" @change="onFilesPicked" />
@@ -685,6 +728,18 @@ onMounted(() => {
   gap: 8px;
 }
 
+.fidelity {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 13px;
+  cursor: pointer;
+  white-space: nowrap;
+}
+.fidelity__msg {
+  font-size: 12px;
+  opacity: 0.7;
+}
 .brandsel {
   border: 1px solid var(--color-border);
   border-radius: var(--radius-sm);
