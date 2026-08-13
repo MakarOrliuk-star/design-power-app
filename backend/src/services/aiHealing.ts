@@ -137,6 +137,8 @@ export async function healComposition(opts: {
   maxProps?: number;
   /** Пол героя тон-варианта — тот же, что в генерации (правка 2026-08-13). */
   gender?: "male" | "female" | null;
+  /** Сходство персонажа с референсами — то же, что в генерации. */
+  fidelity?: "exact" | "variant";
 }): Promise<HealOutcome> {
   const max = opts.maxAttempts ?? AI_HEAL_MAX_ATTEMPTS;
   const profile: QaProfile = opts.profile ?? "anchor";
@@ -155,6 +157,7 @@ export async function healComposition(opts: {
     const prompt = buildHealingPrompt(best.reasons.length ? best.reasons : opts.source.reasons, {
       keepCenterClear,
       ...(opts.gender ? { gender: opts.gender } : {}),
+      ...(opts.fidelity ? { fidelity: opts.fidelity } : {}),
     });
     const gen = await runGptImage2Edit({
       prompt,
@@ -225,6 +228,7 @@ export async function healComposition(opts: {
       ...(opts.formatLabel ? { formatLabel: opts.formatLabel } : {}),
       ...(opts.maxProps !== undefined ? { maxProps: opts.maxProps } : {}),
       ...(opts.gender ? { gender: opts.gender } : {}),
+      ...(opts.fidelity ? { fidelity: opts.fidelity } : {}),
     });
     const row: AiRefAttempt = {
       imageUrl: fitted.url,

@@ -16,7 +16,7 @@ const db = vi.hoisted(() => ({
     findMany: vi.fn(),
   },
   variationReference: { findMany: vi.fn(), groupBy: vi.fn() },
-  brand: { findMany: vi.fn() },
+  brand: { findMany: vi.fn(), findUnique: vi.fn() },
 }));
 const fal = vi.hoisted(() => ({
   runPersonFal: vi.fn(),
@@ -161,6 +161,8 @@ beforeEach(() => {
   db.bundleAsset.deleteMany.mockResolvedValue({});
   db.bundleAsset.findMany.mockResolvedValue([{ status: "DONE" }]); // recompute
   db.bundle.update.mockResolvedValue({});
+  // Сходство персонажа — настройка бренда; дефолт «вариативный» (null).
+  db.brand.findUnique.mockResolvedValue({ characterFidelity: null });
 
   fal.runPersonFal.mockResolvedValue({ success: true, imageUrl: "https://fal/gen.png" });
   fal.runGptImage2Edit.mockResolvedValue({ success: true, imageUrl: "https://fal/gen.png" });
@@ -449,7 +451,13 @@ describe("formatGeometryHint / buildSecondaryPrompt (DI2-3/DI2-4)", () => {
     expect(p).toContain("no treasure chests");
     expect(p).toContain("must feel abundant, not empty");
     // Стилистику предметов не меняем — только количество и калибр (DI3-11).
-    expect(p).toContain("same prop family as the reference banners");
+    expect(p).toContain("same visual family as the brand's reference banners");
+    // Правка 2026-08-13: набор предметов свой, а не копия якоря; мелкие
+    // пропсы можно резать краем — так построены эталоны дизайнера.
+    expect(p).toContain("do NOT reproduce the anchor creative's set of objects");
+    expect(p).toContain("the way a designer would");
+    expect(p).toContain("may run past the canvas edges and be partly cropped");
+    expect(p).toContain("reaching into all four corners");
     expect(p).toContain("APPROVED anchor creative");
     // Прежние формулировки, порождавшие перегруз, ушли.
     expect(p).not.toContain("anchor prop group");
@@ -610,6 +618,83 @@ describe("processAiReferenceAsset — зависимый формат (DI2-3)", 
     expect(genArgs.prompt).toContain("between 8 and 10 props");
     const [qaArgs] = reviewer.reviewComposition.mock.calls[0]!;
     expect(qaArgs.maxProps).toBe(10);
+  });
+});
+
+// Правка 2026-08-13 (боевая ошибка «center: 90% белого (порог 95%), 3 попыток»
+// → ассет FAILED → каскад «якорный ассет не сгенерирован»). Провал ТЕХНИКИ на
+// всех попытках раньше ронял ассет, минуя auto-healing, хотя лечение «убери
+// объекты из центра» — ровно тот случай, ради которого healing и делался.
+describe("провал техвалидации на всех попытках лечится, а не роняет ассет", () => {
+  const techFail = (ratio: number) => ({
+    passed: false,
+    centerRatio: ratio,
+    checks: [
+      { key: "center", passed: false, detail: `чистая зона: ${Math.round(ratio * 100)}% белого (порог 95%)` },
+    ],
+  });
+
+  it("лечение запускается от самого чистого кадра, ассет становится DONE", async () => {
+    validator.validateAiAsset
+      .mockResolvedValueOnce(techFail(0.6))
+      .mockResolvedValueOnce(techFail(0.9)) // лучший — его и лечим
+      .mockResolvedValueOnce(techFail(0.75));
+    fit.fitAndStoreAsset
+      .mockResolvedValueOnce({ ok: true, url: "https://cdn/try1.png", publicId: "t1" })
+      .mockResolvedValueOnce({ ok: true, url: "https://cdn/try2.png", publicId: "t2" })
+      .mockResolvedValueOnce({ ok: true, url: "https://cdn/try3.png", publicId: "t3" });
+    healing.healComposition.mockResolvedValue({
+      attempts: [{ imageUrl: "https://cdn/healed.png", score: 88, pass: true, reasons: [], tech: null }],
+      winner: { imageUrl: "https://cdn/healed.png", pass: true, score: 88, healingIndex: 0 },
+    });
+
+    const result = await processAiReferenceAsset(OPTS);
+
+    expect(result.ok).toBe(true);
+    const [healArgs] = healing.healComposition.mock.calls[0]!;
+    expect(healArgs.source.imageUrl).toBe("https://cdn/try2.png");
+    expect(healArgs.source.reasons[0]).toContain("center:");
+    const parent = parentDoneCall()!;
+    expect(parent.data.status).toBe("DONE");
+    expect(parent.data.metadata.qa.qaPassed).toBe(true);
+  });
+
+  it("ни одного кадра вообще (генерация не отдала картинку) → FAILED как раньше", async () => {
+    fal.runGptImage2Edit.mockResolvedValue({ success: false, error: "HTTP 500" });
+    const result = await processAiReferenceAsset(OPTS);
+    expect(result.ok).toBe(false);
+    expect(healing.healComposition).not.toHaveBeenCalled();
+  });
+});
+
+// Правка 2026-08-13 (запрос заказчика): «у части брендов персонаж один в
+// один, у части немного вариативный» — настройка Brand.characterFidelity.
+describe("сходство персонажа с референсами", () => {
+  it("дефолт — вариативный: пол и черты варьируются, персонаж узнаваем", async () => {
+    db.brand.findUnique.mockResolvedValue({ characterFidelity: null });
+    await processAiReferenceAsset(OPTS);
+    const [args] = fal.runGptImage2Edit.mock.calls[0]!;
+    expect(args.prompt).toContain("give this particular creative its own take");
+    expect(args.prompt).not.toContain("fixed asset");
+    const [qaArgs] = reviewer.reviewComposition.mock.calls[0]!;
+    expect(qaArgs.fidelity).toBe("variant");
+  });
+
+  it("exact — маскот копируется один в один, приёмка судит строго", async () => {
+    db.brand.findUnique.mockResolvedValue({ characterFidelity: "exact" });
+    await processAiReferenceAsset(OPTS);
+    const [args] = fal.runGptImage2Edit.mock.calls[0]!;
+    expect(args.prompt).toContain("reproduce the character from the reference banners EXACTLY");
+    expect(args.prompt).toContain("fixed asset");
+    const [qaArgs] = reviewer.reviewComposition.mock.calls[0]!;
+    expect(qaArgs.fidelity).toBe("exact");
+  });
+
+  it("настройка читается по ТОЧНОМУ имени тон-варианта, не по базовому", async () => {
+    await processAiReferenceAsset(OPTS);
+    expect(db.brand.findUnique).toHaveBeenCalledWith(
+      expect.objectContaining({ where: { name: "Betnella(Men)" } }),
+    );
   });
 });
 
