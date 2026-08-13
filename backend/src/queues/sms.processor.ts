@@ -76,7 +76,6 @@ export async function processSmsJob(jobData: SmsBatchJobData) {
 
       const templateBody = userTemplate.body || "Code: [[TOKEN]]";
       
-      
       let fullMessageBody = "";
       if (templateBody.includes("[[TOKEN]]")) {
         fullMessageBody = templateBody.replace(/\[\[TOKEN\]\]/g, testToken);
@@ -246,13 +245,13 @@ async function getTelqToken(): Promise<string> {
   return data.value || data.token || data.accessToken;
 }
 
-// Reserving the number with isOtp ON
+// Резервация номеров TelQ с флагом isOtp
 async function reserveTelqNumbers(token: string, targets: SmsBatchJobData["targets"], isOtp: boolean = false) {
   const payload: any = {
     destinationNetworks: targets.map((t) => ({ mcc: t.mcc, mnc: t.mnc })),
   };
 
-  // Requiring 6-digit-code if OTP chosen 
+  // Если это OTP, запрашиваем 6-значный цифровой код
   if (isOtp) {
     payload.testIdTextType = "NUMERIC";
     payload.testIdTextLength = 6;
@@ -384,9 +383,30 @@ async function sendSMS(params: {
           process.env.DM_API_KEY ||
           "";
 
-        const payload = isOtp
-          ? { phoneNumber: cleanPhone, sender: params.senderId, message: params.text }
-          : { message: params.text, sender: params.senderId, contacts: [{ phoneNumber: cleanPhone }] };
+        // Проверяем имя отправителя для OTP
+        const customSender = params.senderId && params.senderId.trim();
+        const isValidCustomSender = Boolean(
+          customSender && 
+          customSender.toLowerCase() !== "info" && 
+          customSender.length > 0
+        );
+
+        // Для OTP: если sender пустой или "Info", вообще НЕ передаем поле sender.
+        // DM автоматически подставит "DMVerif".
+        let payload: any;
+        if (isOtp) {
+          payload = {
+            phoneNumber: cleanPhone,
+            message: params.text,
+            ...(isValidCustomSender ? { sender: customSender } : {}),
+          };
+        } else {
+          payload = {
+            message: params.text,
+            sender: params.senderId,
+            contacts: [{ phoneNumber: cleanPhone }],
+          };
+        }
 
         const res = await fetch(endpoint, {
           method: "POST",
@@ -398,7 +418,15 @@ async function sendSMS(params: {
         });
 
         const body = await res.text();
-        return res.ok ? { success: true } : { success: false, error: body };
+
+        if (!res.ok) {
+          return {
+            success: false,
+            error: `DM Error [HTTP ${res.status}]: ${body || res.statusText}`,
+          };
+        }
+
+        return { success: true };
       }
     }
   } catch (err: any) {
