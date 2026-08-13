@@ -16,7 +16,11 @@ export async function processSmsJob(jobData: SmsBatchJobData) {
     });
 
     const telqToken = await getTelqToken();
-    const reservedNumbers = await reserveTelqNumbers(telqToken, targets);
+    
+    const isOtp = Boolean(dmTokenKey && dmTokenKey.toUpperCase().includes("OTP"));
+    
+    // Передаем флаг isOtp в функцию резервации
+    const reservedNumbers = await reserveTelqNumbers(telqToken, targets, isOtp);
 
     const createdMessages = [];
     for (const item of reservedNumbers) {
@@ -71,11 +75,14 @@ export async function processSmsJob(jobData: SmsBatchJobData) {
       }
 
       const templateBody = userTemplate.body || "Code: [[TOKEN]]";
-      const messagePrefix = templateBody.includes("[[TOKEN]]")
-        ? templateBody.replace("[[TOKEN]]", testToken)
-        : templateBody;
-
-      const fullMessageBody = `${testToken} ${messagePrefix}`.trim();
+      
+      
+      let fullMessageBody = "";
+      if (templateBody.includes("[[TOKEN]]")) {
+        fullMessageBody = templateBody.replace(/\[\[TOKEN\]\]/g, testToken);
+      } else {
+        fullMessageBody = `${testToken} ${templateBody}`.trim();
+      }
 
       await prisma.smsMessage.update({
         where: { id: msg.id },
@@ -239,16 +246,25 @@ async function getTelqToken(): Promise<string> {
   return data.value || data.token || data.accessToken;
 }
 
-async function reserveTelqNumbers(token: string, targets: SmsBatchJobData["targets"]) {
+// Reserving the number with isOtp ON
+async function reserveTelqNumbers(token: string, targets: SmsBatchJobData["targets"], isOtp: boolean = false) {
+  const payload: any = {
+    destinationNetworks: targets.map((t) => ({ mcc: t.mcc, mnc: t.mnc })),
+  };
+
+  // Requiring 6-digit-code if OTP chosen 
+  if (isOtp) {
+    payload.testIdTextType = "NUMERIC";
+    payload.testIdTextLength = 6;
+  }
+
   const res = await fetch("https://api.telqtele.com/v3/client/tests", {
     method: "POST",
     headers: {
       Authorization: `Bearer ${token}`,
       "Content-Type": "application/json",
     },
-    body: JSON.stringify({
-      destinationNetworks: targets.map((t) => ({ mcc: t.mcc, mnc: t.mnc })),
-    }),
+    body: JSON.stringify(payload),
   });
 
   if (!res.ok) throw new Error(`TelQ Batch Reserve Failed: ${await res.text()}`);
