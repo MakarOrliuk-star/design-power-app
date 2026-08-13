@@ -3,7 +3,15 @@ import type { Prisma } from "../../generated/prisma/client.js";
 import { runPersonFal, runGptImage2Edit, runBriaRemoveBg } from "../lib/fal.js";
 import { fitAndStoreAsset } from "../lib/assetFit.js";
 import { nearestFalAspect } from "../lib/imageSize.js";
-import { uploadFromUrl, withRetry } from "../lib/cloudinary.js";
+import { uploadFromUrl, uploadBuffer, withRetry } from "../lib/cloudinary.js";
+import {
+  applyPromoEffects,
+  recommendedTextColorFor,
+  resolveEffectsConfig,
+  zoneLuminanceOverWhite,
+} from "../lib/promoEffects.js";
+import type { EffectsToggle, PromoEffectsConfig } from "../lib/promoEffects.js";
+import { pickGlowColor } from "../lib/glowColor.js";
 import { fetchBuffer } from "./layerCache.js";
 import { validateAiAsset } from "../lib/aiAssetValidator.js";
 import { getLayoutGuideUrl, LAYOUT_GUIDE_INSTRUCTION } from "../lib/layoutGuide.js";
@@ -74,6 +82,126 @@ export const AI_REF_CENTER_CLEAR_ZONE = { x: 0.28, y: 0.08, w: 0.44, h: 0.62 };
 export const AI_REF_SUFFIX_NOTEXT = "_notext";
 export const AI_REF_SUFFIX_TRANSPARENT = "_transparent";
 
+/**
+ * Суффикс public id картинки С ЭФФЕКТАМИ (TASK glow-fade-density). В отличие
+ * от двух суффиксов выше это НЕ assetKey и не строка в БД — только имя файла
+ * в Cloudinary. Схема остаётся одноассетной: `_transparent` — чистый вырез
+ * (источник), `_final` — он же со свечением и фейдом, и именно он попадает в
+ * `BundleAsset.imageUrl`. Разделение даёт идемпотентность: пере-применение
+ * эффектов всегда идёт от `_transparent`.
+ */
+export const AI_REF_SUFFIX_FINAL = "_final";
+
+/** Версия схемы `metadata.effects` — на случай смены набора полей. */
+export const AI_REF_EFFECTS_VERSION = 1;
+
+/** Проекция эффектов в `metadata.effects` (её читают админка и скрипт). */
+export interface AiRefEffectsMeta {
+  applied: boolean;
+  glowHex: string | null;
+  /** «inherited» — цвет пришёл с якоря кампании (DI3-4), без своего запроса. */
+  glowSource: "vlm" | "fallback" | "inherited" | null;
+  glowReason: string | null;
+  fadeHeightPct: number | null;
+  /** Чистый вырез без эффектов — источник для пере-применения. */
+  sourceUrl: string;
+  version: number;
+  /** Заполнено, если эффекты не легли: ассет остался чистым (fail-open). */
+  error?: string;
+}
+
+export interface AiRefEffectsOutcome {
+  /** Что записать в `BundleAsset.imageUrl`. */
+  imageUrl: string;
+  meta: AiRefEffectsMeta;
+  /** Подсказка вёрстке для safe zone; null — зоны нет или эффекты не легли. */
+  textColor: string | null;
+}
+
+/**
+ * Наложение эффектов на готовый вырез и заливка результата (R-PLAN §3.3).
+ * Вынесено отдельно и экспортировано: этой же функцией работает скрипт
+ * пере-применения к старым бандлам (§3.6).
+ *
+ * FAIL-OPEN по построению: композиция уже прошла дорогую генерацию, приёмку и
+ * (возможно) лечение. Сбой скачивания или заливки эффектов — повод отдать
+ * чистый прозрачный ассет с пометкой в metadata, но не повод ронять ассет.
+ */
+export async function applyEffectsToAsset(opts: {
+  /** Чистый вырез — источник и одновременно фолбэк-результат. */
+  transparentUrl: string;
+  /** Картинка для выбора цвета (белый фон, до removeBg). */
+  colorSourceUrl: string;
+  refUrls: string[];
+  config: PromoEffectsConfig;
+  /** Цвет якоря кампании; задан — свой запрос не делается (DI3-4). */
+  inheritedGlowHex: string | null;
+  publicId: string;
+  folder: string;
+  logTag: string;
+  /** Safe zone формата в долях — только у якоря; null → текст-подсказки нет. */
+  safeZone: { x: number; y: number; w: number; h: number } | null;
+}): Promise<AiRefEffectsOutcome> {
+  const meta: AiRefEffectsMeta = {
+    applied: false,
+    glowHex: null,
+    glowSource: null,
+    glowReason: null,
+    fadeHeightPct: null,
+    sourceUrl: opts.transparentUrl,
+    version: AI_REF_EFFECTS_VERSION,
+  };
+  const skip = (error?: string): AiRefEffectsOutcome => ({
+    imageUrl: opts.transparentUrl,
+    meta: error ? { ...meta, error } : meta,
+    textColor: null,
+  });
+
+  if (!opts.config.glow && !opts.config.fade) return skip();
+
+  const buffer = await fetchBuffer(opts.transparentUrl);
+  if (!buffer) {
+    console.warn(`⚠ ${opts.logTag}: не удалось скачать вырез — эффекты пропущены`);
+    return skip("download failed");
+  }
+
+  let glowHex: string | null = null;
+  if (opts.config.glow) {
+    if (opts.inheritedGlowHex) {
+      glowHex = opts.inheritedGlowHex;
+      meta.glowSource = "inherited";
+      meta.glowReason = "цвет якоря кампании";
+    } else {
+      const picked = await pickGlowColor({
+        imageUrl: opts.colorSourceUrl,
+        refUrls: opts.refUrls,
+        buffer,
+      });
+      glowHex = picked.hex;
+      meta.glowSource = picked.source;
+      meta.glowReason = picked.reason;
+    }
+    meta.glowHex = glowHex;
+  }
+
+  const rendered = await applyPromoEffects(buffer, { glowHex, config: opts.config });
+  const up = await withRetry(
+    () => uploadBuffer(rendered, opts.publicId, opts.folder),
+    opts.logTag,
+  );
+  if (!up.success || !up.secure_url) {
+    console.warn(`⚠ ${opts.logTag}: заливка не удалась (${up.error ?? "unknown"})`);
+    return skip(`upload: ${up.error ?? "unknown"}`);
+  }
+
+  meta.applied = true;
+  meta.fadeHeightPct = opts.config.fade ? opts.config.fade.heightPct : null;
+  const textColor = opts.safeZone
+    ? recommendedTextColorFor(await zoneLuminanceOverWhite(rendered, opts.safeZone))
+    : null;
+  return { imageUrl: up.secure_url, meta, textColor };
+}
+
 export function derivedAssetKeys(parentKey: string): [string, string] {
   return [`${parentKey}${AI_REF_SUFFIX_NOTEXT}`, `${parentKey}${AI_REF_SUFFIX_TRANSPARENT}`];
 }
@@ -134,6 +262,21 @@ export function buildAiReferencePrompt(variationText: string): string {
 }
 
 /**
+ * Плотность предметов на зависимых форматах (TASK glow-fade-density, DI3-9):
+ * верхняя граница нормы «герой + 0–1 крупный пропс в руках + 4–8 мелких».
+ * Настраивается в админке на формат (`BundleTypeAsset.maxProps`, DI3-14) —
+ * калибруется по логам без деплоя.
+ */
+export const DEFAULT_MAX_PROPS = 8;
+/** Нижняя граница нормы: кадр из одного героя читается как обрезанный портрет. */
+export const MIN_PROPS = 4;
+
+export function clampMaxProps(value?: number | null): number {
+  if (typeof value !== "number" || !Number.isFinite(value)) return DEFAULT_MAX_PROPS;
+  return Math.max(MIN_PROPS, Math.min(20, Math.round(value)));
+}
+
+/**
  * Контракт зависимого формата (TASK multiformat-promo, DI2-3/DI2-4): push и
  * pop-up собираются ПОСЛЕ email и обязаны выглядеть как та же кампания.
  * Отличия от якорного контракта:
@@ -141,21 +284,47 @@ export function buildAiReferencePrompt(variationText: string): string {
  *    её раскладку копировать запрещено — только палитру/героя/пропсы/свет;
  *  - copy space не резервируется: текста на этих форматах не будет (DI2-4),
  *    поэтому центр канваса можно занимать.
+ *
+ * TASK glow-fade-density (задание 3, DI3-9/DI3-11): прежняя редакция сама
+ * провоцировала перегруз — она требовала «the main character AND the anchor
+ * prop group» и «fill the canvas», а первой картинкой отдавала плотный
+ * email-якорь. Теперь состав кадра задан числом, крупные объекты на переднем
+ * плане перечислены поимённо как запрет, и явно сказано, что у якоря
+ * наследуется стиль, но НЕ плотность (R-P2). Семейство пропсов при этом
+ * по-прежнему берётся с референсов формата — меняем количество и калибр,
+ * а не стилистику предметов (DI3-11).
  */
-export const AI_REF_SECONDARY_CONTRACT =
-  "Create ONE new cohesive casino promo composition for this format, belonging to an EXISTING campaign. " +
-  "STYLE SOURCE: the FIRST image is the APPROVED anchor creative of that same campaign — reproduce its palette, " +
-  "character design and outfit, prop family, material quality, lighting and rendering EXACTLY; it is the same " +
-  "campaign and the same hero. Do NOT copy its layout, crop or arrangement — compose a NEW scene that fits this canvas. " +
-  "The remaining images are reference banners of this brand for THIS format — follow them for framing, prop density and scale. " +
-  "BACKGROUND: pure solid white (#FFFFFF), completely flat — no scenery, no gradients, no glow, no bokeh, no light rays " +
-  "and no cast shadows on the background; the artwork will be cut out later, so every element needs clean crisp edges. " +
-  "COMPOSITION: fill the canvas with a clear focal hierarchy — the main character and the anchor prop group read " +
-  "instantly at a glance, smaller props support them; there is NO reserved copy space in this format, the center may be occupied. " +
-  "EDGES: the character and all key props stay fully inside the frame with a clear margin from the canvas edges. " +
-  "STRICTLY NO text, captions, headlines, CTA buttons, logos or watermarks anywhere; the only lettering allowed is short " +
-  "casino words that naturally belong to props (slot reels, chips, medallions), such as FS, SCATTER, BONUS, VIP, WILD or 777. " +
-  "Professional advertising quality, coherent lighting across all elements.";
+export function buildSecondaryContract(maxProps: number = DEFAULT_MAX_PROPS): string {
+  const cap = clampMaxProps(maxProps);
+  return (
+    "Create ONE new cohesive casino promo composition for this format, belonging to an EXISTING campaign. " +
+    "STYLE SOURCE: the FIRST image is the APPROVED anchor creative of that same campaign — reproduce its palette, " +
+    "character design and outfit, prop family, material quality, lighting and rendering EXACTLY; it is the same " +
+    "campaign and the same hero. Do NOT copy its layout, crop, arrangement or its prop density — compose a NEW, " +
+    "much simpler scene that fits this canvas. " +
+    "The remaining images are reference banners of this brand for THIS format — follow them for framing, prop choice and scale. " +
+    "BACKGROUND: pure solid white (#FFFFFF), completely flat — no scenery, no gradients, no glow, no bokeh, no light rays " +
+    "and no cast shadows on the background; the artwork will be cut out later, so every element needs clean crisp edges. " +
+    "COMPOSITION: a clean, uncluttered scene made of exactly two things. " +
+    "(1) THE HERO: the character large and close-up, filling most of the canvas height, holding AT MOST ONE larger prop in their hands. " +
+    `(2) FLOATING PROPS: between ${MIN_PROPS} and ${cap} SMALL props floating freely in the air around the character, ` +
+    "well separated from each other, each small relative to the character. Nothing else belongs in the frame. " +
+    "The floating props must come from the same prop family as the reference banners — the same objects, materials and finish. " +
+    `Count them before you finish: more than ${cap} floating props is wrong. ` +
+    "FORBIDDEN: no slot machines, no fortune wheels, no roulette wheels, no treasure chests, no open suitcases or crates, " +
+    "no stacks of banknotes, no piles or heaps of coins or chips, no large objects resting on the ground or stacked behind " +
+    "the character, no second character. Never build a crowded pile of casino objects around the hero. " +
+    "Do NOT fill the canvas — generous empty background between the props is part of the design; " +
+    "there is NO reserved copy space in this format, the center may be occupied by the character. " +
+    "EDGES: the character and all key props stay fully inside the frame with a clear margin from the canvas edges. " +
+    "STRICTLY NO text, captions, headlines, CTA buttons, logos or watermarks anywhere; the only lettering allowed is short " +
+    "casino words that naturally belong to props (slot reels, chips, medallions), such as FS, SCATTER, BONUS, VIP, WILD or 777. " +
+    "Professional advertising quality, coherent lighting across all elements."
+  );
+}
+
+/** Обратная совместимость: константа = контракт с дефолтным лимитом. */
+export const AI_REF_SECONDARY_CONTRACT = buildSecondaryContract();
 
 /** Соотношение сторон в человекочитаемом виде («1024×512 (2:1)»). */
 function aspectLabel(w: number, h: number): string {
@@ -190,13 +359,16 @@ export function buildSecondaryPrompt(opts: {
   formatLabel: string;
   targetW: number;
   targetH: number;
+  /** Лимит мелких предметов (DI3-9); не задан — дефолт. */
+  maxProps?: number;
 }): string {
   const brief = opts.variationText.trim();
+  const base = buildSecondaryContract(clampMaxProps(opts.maxProps));
   const contract = opts.hasAnchor
-    ? AI_REF_SECONDARY_CONTRACT
+    ? base
     : // Без якоря первая картинка — обычный референс формата: убираем блок
       // «STYLE SOURCE», иначе модель примет за эталон случайный баннер.
-      AI_REF_SECONDARY_CONTRACT.replace(
+      base.replace(
         /STYLE SOURCE:.*?The remaining images are reference banners/s,
         "The images are reference banners",
       );
@@ -230,6 +402,12 @@ export interface AiRefAnchorContext {
   styleText: string;
   /** true — взят imageUrl готового ассета вместо qa.baseUrl (старый бандл). */
   fallback?: boolean;
+  /**
+   * Цвет свечения кампании (DI3-4: «свечение одинаковое»). Считается один раз
+   * на якоре; пусто — якорь сделан до задания либо эффекты были выключены,
+   * тогда зависимый формат посчитает цвет сам.
+   */
+  glowHex?: string;
 }
 
 /** Результат прогона: процессор ставит зависимые форматы только после ok. */
@@ -239,6 +417,8 @@ export interface AiRefResult {
   baseUrl?: string;
   /** Описание стиля, снятое с якоря (только для якорного ассета). */
   styleText?: string;
+  /** Цвет свечения кампании, выбранный на якоре (DI3-4). */
+  glowHex?: string;
 }
 
 /**
@@ -256,11 +436,20 @@ export async function loadAnchorContext(
     select: { status: true, imageUrl: true, metadata: true },
   });
   if (!anchor || anchor.status !== "DONE") return null;
-  const meta = anchor.metadata as { styleAnchor?: unknown; qa?: { baseUrl?: unknown } } | null;
+  const meta = anchor.metadata as {
+    styleAnchor?: unknown;
+    qa?: { baseUrl?: unknown };
+    effects?: { glowHex?: unknown };
+  } | null;
   const styleText = typeof meta?.styleAnchor === "string" ? meta.styleAnchor : "";
   const baseUrl = typeof meta?.qa?.baseUrl === "string" ? meta.qa.baseUrl : "";
-  if (baseUrl) return { imageUrl: baseUrl, styleText };
-  if (anchor.imageUrl) return { imageUrl: anchor.imageUrl, styleText, fallback: true };
+  // Цвет свечения кампании (DI3-4): зависимые форматы обязаны взять ТОТ ЖЕ
+  // цвет, что уже утверждён на якоре, — в том числе при одиночной
+  // регенерации push спустя недели после email.
+  const glowHex = typeof meta?.effects?.glowHex === "string" ? meta.effects.glowHex : "";
+  const withGlow = glowHex ? { glowHex } : {};
+  if (baseUrl) return { imageUrl: baseUrl, styleText, ...withGlow };
+  if (anchor.imageUrl) return { imageUrl: anchor.imageUrl, styleText, fallback: true, ...withGlow };
   return null;
 }
 
@@ -300,12 +489,23 @@ export async function processAiReferenceAsset(opts: {
   formatLabel?: string;
   /** Контекст якоря — обязателен по смыслу для зависимых форматов. */
   anchor?: AiRefAnchorContext | null;
+  /**
+   * Лимит мелких предметов зависимого формата (DI3-9/DI3-14, задание 3).
+   * У якоря игнорируется: плотность email не трогаем (DI3-10).
+   */
+  maxProps?: number;
+  /** Галки эффектов формата из админки (DI3-15); не заданы — включены. */
+  effects?: EffectsToggle | null;
 }): Promise<AiRefResult> {
   const { bundleId, variantId, assetId, assetKey, targetW, targetH } = opts;
   const isAnchor = opts.isAnchor ?? true;
   const profile: QaProfile = isAnchor ? "anchor" : "secondary";
   const formatLabel = opts.formatLabel ?? assetKey;
   const anchorUrl = isAnchor ? null : (opts.anchor?.imageUrl ?? null);
+  // Лимит предметов существует только у зависимых форматов и обязан быть
+  // одинаковым в промпте генерации, чек-листе приёмки и промпте лечения.
+  const maxProps = isAnchor ? undefined : clampMaxProps(opts.maxProps);
+  const effectsConfig = resolveEffectsConfig(opts.effects);
   // Чистый центр — требование ТОЛЬКО якорного формата (DI2-4): на push/pop-up
   // текста не будет, и пустая середина там читается как дыра в композиции.
   const centerZone = isAnchor ? AI_REF_CENTER_CLEAR_ZONE : undefined;
@@ -397,6 +597,7 @@ export async function processAiReferenceAsset(opts: {
       formatLabel,
       targetW,
       targetH,
+      ...(maxProps !== undefined ? { maxProps } : {}),
     });
   }
   const aspect = nearestFalAspect(targetW, targetH);
@@ -489,6 +690,7 @@ export async function processAiReferenceAsset(opts: {
       profile,
       anchorUrl,
       formatLabel,
+      ...(maxProps !== undefined ? { maxProps } : {}),
     });
     const attemptRow: AiRefAttempt = {
       imageUrl: fitted.url,
@@ -560,6 +762,7 @@ export async function processAiReferenceAsset(opts: {
       profile,
       anchorUrl,
       formatLabel,
+      ...(maxProps !== undefined ? { maxProps } : {}),
     });
     finalUrl = heal.winner.imageUrl;
     qaPassed = heal.winner.pass;
@@ -644,14 +847,39 @@ export async function processAiReferenceAsset(opts: {
     return { ok: false };
   }
 
+  // Эффекты (TASK glow-fade-density, задания 1–2). Чистый вырез остаётся в
+  // Cloudinary под `_transparent` и служит ИСТОЧНИКОМ: пере-применение с
+  // другими параметрами, выключение эффектов и обработка старых бандлов идут
+  // от него, а не от готовой картинки (иначе свечение легло бы на свечение).
+  const effects = await applyEffectsToAsset({
+    transparentUrl: trUp.secure_url,
+    // Цвет выбирается по композиции ДО removeBg: у неё гарантированно
+    // корректный белый фон, а прозрачный PNG vision-модель отрендерит на чём
+    // попало. Гистограмма фолбэка считает по вырезанным пикселям.
+    colorSourceUrl: finalUrl,
+    refUrls,
+    config: effectsConfig,
+    inheritedGlowHex: isAnchor ? null : (opts.anchor?.glowHex ?? null),
+    publicId: `${variantId}_${assetKey}${AI_REF_SUFFIX_FINAL}`,
+    folder,
+    logTag: `ai-ref-effects#${assetId}`,
+    safeZone: isAnchor ? AI_REF_SAFE_ZONE : null,
+  });
+
   await prisma.bundleAsset.update({
     where: { id: assetId },
     data: {
       status: "DONE",
-      imageUrl: trUp.secure_url,
+      imageUrl: effects.imageUrl,
       errorMessage: null,
-      // transparent — сигнал API добавить к подписи «— прозрачный фон» (A1/A2).
-      metadata: { ...baseMeta, transparent: true } as unknown as Prisma.InputJsonValue,
+      metadata: {
+        ...baseMeta,
+        // Свечение — фоновая заливка, но она полупрозрачная и по краям сходит
+        // в ноль: ассет остаётся вырезанным, подпись «— прозрачный фон» верна.
+        transparent: true,
+        ...(effects.textColor ? { recommendedTextColor: effects.textColor } : {}),
+        effects: effects.meta,
+      } as unknown as Prisma.InputJsonValue,
     },
   });
   await dropLegacyDerived();
@@ -660,8 +888,17 @@ export async function processAiReferenceAsset(opts: {
     `🧩 ai-ref ${assetKey}#${assetId}: ${isAnchor ? "anchor" : "secondary"} refs=${refs.length} ` +
       `attempts=${attempts.length}` +
       (healingMeta ? ` heal=${healingMeta.attempts.length} healed=${healingMeta.used}` : "") +
-      ` qaPassed=${qaPassed}`,
+      (maxProps !== undefined ? ` maxProps=${maxProps}` : "") +
+      ` qaPassed=${qaPassed}` +
+      (effects.meta.applied
+        ? ` glow=${effects.meta.glowHex}(${effects.meta.glowSource})`
+        : ` effects=off${effects.meta.error ? `(${effects.meta.error})` : ""}`),
   );
   await recomputeBundleStatus(bundleId);
-  return { ok: true, baseUrl: finalUrl, styleText };
+  return {
+    ok: true,
+    baseUrl: finalUrl,
+    styleText,
+    ...(effects.meta.glowHex ? { glowHex: effects.meta.glowHex } : {}),
+  };
 }

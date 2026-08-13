@@ -143,6 +143,27 @@ describe("профили чек-листа (DI2-4)", () => {
     expect(secondary).toContain("NO required empty copy space");
   });
 
+  // TASK glow-fade-density, задание 3 (DI3-12): перегруз ловит приёмщик и
+  // отправляет попытку в авто-ретрай, а не показывает её человеку.
+  it("зависимый профиль считает предметы по числу из конфига", () => {
+    const secondary = buildQaSystemPrompt("secondary", 5);
+    expect(secondary).toContain("PROP DENSITY");
+    expect(secondary).toContain("at most 5 small props");
+    expect(secondary).toContain("more than 5 floating props");
+    expect(secondary).toContain("slot machine");
+    // Число подставляется, а не зашито: дефолт остаётся дефолтом.
+    expect(buildQaSystemPrompt("secondary")).toContain("at most 8 small props");
+  });
+
+  it("пункт про плотность отсутствует в якорном профиле (DI3-10)", () => {
+    expect(buildQaSystemPrompt("anchor", 5)).not.toContain("PROP DENSITY");
+  });
+
+  it("более простая композиция, чем у якоря, браком не считается (R-P2)", () => {
+    const secondary = buildQaSystemPrompt("secondary");
+    expect(secondary).toContain("A LOWER prop density than the anchor is also CORRECT");
+  });
+
   it("зависимый профиль сверяет стиль с якорем и не считает другую раскладку браком", () => {
     const secondary = buildQaSystemPrompt("secondary");
     expect(secondary).toContain("CAMPAIGN STYLE MATCH");

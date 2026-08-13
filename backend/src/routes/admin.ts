@@ -473,6 +473,14 @@ const bundleTypeAssetSchema = z.object({
   decorUrls: z.array(z.string().url()).max(20).optional(),
   // Golden composite for the validator's SSIM check (Phase 4/6).
   goldenUrl: z.string().url().optional(),
+  // TASK glow-fade-density (DI3-15): галки пост-обработки ai_reference-ассета.
+  // Отсутствие поля = оба эффекта включены (см. resolveEffectsConfig).
+  effects: z
+    .object({ glow: z.boolean().optional(), fade: z.boolean().optional() })
+    .optional(),
+  // Лимит мелких предметов зависимого формата (DI3-9/DI3-14). Нижняя граница
+  // — норма композиции из интервью, верхняя — здравый смысл против опечатки.
+  maxProps: z.number().int().min(4).max(20).optional(),
 });
 
 const bundleTypeSchema = z.object({
