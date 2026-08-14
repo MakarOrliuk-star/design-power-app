@@ -411,7 +411,8 @@ async function sendSMS(params: {
         const res = await fetch(endpoint, {
           method: "POST",
           headers: {
-            Authorization: `Bearer ${token}`,
+            "Authorization": `Bearer ${token}`,
+            "api-key": token, 
             "Content-Type": "application/json",
           },
           body: JSON.stringify(payload),
