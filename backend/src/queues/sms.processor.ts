@@ -370,13 +370,15 @@ async function sendSMS(params: {
 
       case "dm":
       default: {
-        const baseUrl = "https://api.sms.dynamicmessaging.co.uk";
+        const rawDmUrl =
+          process.env.DM_API_URL || "https://api.sms.dynamicmessaging.co.uk";
+        const dmUrl = rawDmUrl.replace(/\/$/, "");
+
         const isOtp = params.dmTokenKey?.toUpperCase().includes("OTP");
-        
-        // Жесткий URL для OTP как в GAS; для маркетинга используем Env или резервный
+
         const endpoint = isOtp
-          ? `${baseUrl}/api/smsverify/message`
-          : `${process.env.DM_API_URL || baseUrl}/api/SMSMessages/v2`;
+          ? `${dmUrl}/api/smsverify/message`
+          : `${dmUrl}/api/SMSMessages/v2`;
 
         const token =
           (params.dmTokenKey && process.env[params.dmTokenKey]) ||
@@ -384,25 +386,25 @@ async function sendSMS(params: {
           "";
 
         let payload: any;
+
         if (isOtp) {
-          // Идеальная копия структуры payload из Senderservice.gs
           payload = {
             phoneNumber: cleanPhone,
-            sender: params.senderId || "Info",
-            message: params.text
+            sender: params.senderId?.substring(0, 11),
+            message: params.text,
           };
         } else {
           payload = {
             message: params.text,
             sender: params.senderId || "Info",
-            contacts: [{ phoneNumber: cleanPhone }]
+            contacts: [{ phoneNumber: cleanPhone }],
           };
         }
 
         const res = await fetch(endpoint, {
           method: "POST",
           headers: {
-            "Authorization": `Bearer ${token}`,
+            Authorization: `Bearer ${token}`,
             "Content-Type": "application/json",
           },
           body: JSON.stringify(payload),
