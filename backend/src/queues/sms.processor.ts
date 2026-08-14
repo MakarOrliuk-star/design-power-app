@@ -245,13 +245,11 @@ async function getTelqToken(): Promise<string> {
   return data.value || data.token || data.accessToken;
 }
 
-// Резервация номеров TelQ с флагом isOtp
 async function reserveTelqNumbers(token: string, targets: SmsBatchJobData["targets"], isOtp: boolean = false) {
   const payload: any = {
     destinationNetworks: targets.map((t) => ({ mcc: t.mcc, mnc: t.mnc })),
   };
 
-  // Если это OTP, запрашиваем 6-значный цифровой код
   if (isOtp) {
     payload.testIdTextType = "NUMERIC";
     payload.testIdTextLength = 6;
@@ -372,46 +370,32 @@ async function sendSMS(params: {
 
       case "dm":
       default: {
-        const rawDmUrl = process.env.DM_API_URL || "https://api.sms.dynamicmessaging.co.uk";
-        const dmUrl = rawDmUrl.replace(/\/$/, ""); // Убираем слэш на конце на всякий случай
-        
+        const baseUrl = "https://api.sms.dynamicmessaging.co.uk";
         const isOtp = params.dmTokenKey?.toUpperCase().includes("OTP");
+        
+        // Жесткий URL для OTP как в GAS; для маркетинга используем Env или резервный
         const endpoint = isOtp
-          ? `${dmUrl}/api/smsverify/verify`
-          : `${dmUrl}/api/SMSMessages/v2`;
+          ? `${baseUrl}/api/smsverify/message`
+          : `${process.env.DM_API_URL || baseUrl}/api/SMSMessages/v2`;
 
         const token =
           (params.dmTokenKey && process.env[params.dmTokenKey]) ||
           process.env.DM_API_KEY ||
           "";
 
-        // Проверяем имя отправителя для OTP
-        const customSender = params.senderId && params.senderId.trim();
-        const isValidCustomSender = Boolean(
-          customSender && 
-          customSender.toLowerCase() !== "info" && 
-          customSender.length > 0
-        );
-
         let payload: any;
         if (isOtp) {
-          // ХАК ДЛЯ ТЕКСТА: добавляем {code}, чтобы DM пропустил запрос
-          let finalOtpText = params.text;
-          if (!finalOtpText.includes("{code}")) {
-            finalOtpText = `${finalOtpText} {code}`;
-          }
-
-          // КЛЮЧИ С БОЛЬШОЙ БУКВЫ ПО ДОКУМЕНТАЦИИ DM OTP
+          // Идеальная копия структуры payload из Senderservice.gs
           payload = {
-            PhoneNumber: cleanPhone,
-            MessageText: finalOtpText,
-            ...(isValidCustomSender ? { SenderId: customSender.substring(0, 11) } : {}),
+            phoneNumber: cleanPhone,
+            sender: params.senderId || "Info",
+            message: params.text
           };
         } else {
           payload = {
             message: params.text,
-            sender: params.senderId,
-            contacts: [{ phoneNumber: cleanPhone }],
+            sender: params.senderId || "Info",
+            contacts: [{ phoneNumber: cleanPhone }]
           };
         }
 
@@ -419,7 +403,6 @@ async function sendSMS(params: {
           method: "POST",
           headers: {
             "Authorization": `Bearer ${token}`,
-            "api-key": token, 
             "Content-Type": "application/json",
           },
           body: JSON.stringify(payload),
