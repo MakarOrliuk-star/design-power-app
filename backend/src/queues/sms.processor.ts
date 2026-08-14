@@ -372,10 +372,12 @@ async function sendSMS(params: {
 
       case "dm":
       default: {
-        const dmUrl = process.env.DM_API_URL || "https://api.sms.dynamicmessaging.co.uk";
+        const rawDmUrl = process.env.DM_API_URL || "https://api.sms.dynamicmessaging.co.uk";
+        const dmUrl = rawDmUrl.replace(/\/$/, ""); // Убираем слэш на конце на всякий случай
+        
         const isOtp = params.dmTokenKey?.toUpperCase().includes("OTP");
         const endpoint = isOtp
-          ? `${dmUrl}/api/smsverify/message`
+          ? `${dmUrl}/api/smsverify/verify`
           : `${dmUrl}/api/SMSMessages/v2`;
 
         const token =
@@ -391,14 +393,19 @@ async function sendSMS(params: {
           customSender.length > 0
         );
 
-        // Для OTP: если sender пустой или "Info", вообще НЕ передаем поле sender.
-        // DM автоматически подставит "DMVerif".
         let payload: any;
         if (isOtp) {
+          // ХАК ДЛЯ ТЕКСТА: добавляем {code}, чтобы DM пропустил запрос
+          let finalOtpText = params.text;
+          if (!finalOtpText.includes("{code}")) {
+            finalOtpText = `${finalOtpText} {code}`;
+          }
+
+          // КЛЮЧИ С БОЛЬШОЙ БУКВЫ ПО ДОКУМЕНТАЦИИ DM OTP
           payload = {
-            phoneNumber: cleanPhone,
-            message: params.text,
-            ...(isValidCustomSender ? { sender: customSender } : {}),
+            PhoneNumber: cleanPhone,
+            MessageText: finalOtpText,
+            ...(isValidCustomSender ? { SenderId: customSender.substring(0, 11) } : {}),
           };
         } else {
           payload = {
