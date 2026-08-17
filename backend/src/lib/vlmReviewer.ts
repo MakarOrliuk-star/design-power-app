@@ -105,7 +105,15 @@ const ANATOMY_RULE =
   "belong, six or more digits, fused, doubled, stumped or backwards-bent fingers, two hands with different digit " +
   "counts, a hand that does not actually grip the prop it holds, or extra/missing arms or legs. A hand hidden " +
   "behind a prop, behind the body or outside the crop is NOT a defect — judge only what is visible. When you fail " +
-  "this item, say which hand is wrong and how many digits you counted.";
+  "this item, say which hand is wrong and how many digits you counted. " +
+  // Усиление 2026-08-17 (заказчик: брак по пальцам доходит до CRM). Приёмщик
+  // «осматривал» руку целиком и на беглом взгляде принимал сломанную кисть.
+  // Процедура с явным перечислением заставляет его обработать пальцы по
+  // одному; запрет на «выглядит нормально» закрывает уход от ответа.
+  "PROCEDURE for this item: for EACH visible hand, list the digits you can see one by one (thumb, index, middle, " +
+  "ring, little) and state the total, then compare the two hands. Do not answer this item from a general " +
+  "impression — a hand that 'looks fine' but has four fingers is exactly the defect that keeps reaching the " +
+  "client. If a hand is too small or too blurred to count reliably, say so explicitly instead of passing it.";
 
 const WHITE_BG_NOTE =
   "IMPORTANT: the composition is INTENTIONALLY rendered on a plain solid white background for later cut-out, even if the reference banners have scenic backgrounds. A white background is correct and must NEVER be reported as a style mismatch.";

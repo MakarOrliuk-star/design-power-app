@@ -72,18 +72,33 @@ describe("formatStyleAnchor", () => {
 describe("describeCampaignStyle", () => {
   it("отдаёт готовый абзац по вердикту VLM", async () => {
     visionMock.mockResolvedValue({ success: true, output: JSON.stringify(FULL) });
-    const res = await describeCampaignStyle("https://cdn/email-base.png");
+    const res = await describeCampaignStyle("https://cdn/email-base.png", undefined, true);
     expect(res.anchor).toEqual(FULL);
     expect(res.text).toContain("Campaign style to reproduce");
     const call = visionMock.mock.calls[0]![0] as { imageUrls: string[] };
     expect(call.imageUrls).toEqual(["https://cdn/email-base.png"]);
   });
 
+  /**
+   * TASK no-baked-text: инвентарь якоря уходит в push/pop-up как набор
+   * кампании. Если на email буква всё-таки осталась, прежняя логика её
+   * узаконивала — зависимые форматы получали прямое указание её нарисовать.
+   */
+  it("строгий режим: надписи вычищаются из снятого инвентаря", async () => {
+    visionMock.mockResolvedValue({ success: true, output: JSON.stringify(FULL) });
+    const res = await describeCampaignStyle("https://cdn/email-base.png");
+    expect(res.propInventory).toBe("golden coin with a ruby, red poker chip, purple gift box");
+    expect(res.propInventory).not.toContain("FS");
+    const call = visionMock.mock.calls[0]![0] as { systemPrompt: string };
+    expect(call.systemPrompt).not.toContain("volumetric golden FS letter");
+    expect(call.systemPrompt).toContain("Never put lettering into");
+  });
+
   // Правка 2026-08-15: набор предметов кампании снимается ТЕМ ЖЕ запросом —
   // дополнительных обращений к VLM (и денег) правка не стоит.
   it("набор предметов отдаётся отдельным полем, бриф уходит в тот же запрос", async () => {
     visionMock.mockResolvedValue({ success: true, output: JSON.stringify(FULL) });
-    const res = await describeCampaignStyle("https://cdn/email-base.png", "Lucky Friday reload");
+    const res = await describeCampaignStyle("https://cdn/email-base.png", "Lucky Friday reload", true);
     expect(res.propInventory).toBe(FULL.propInventory);
     // В абзац стиля перечисление НЕ дублируется — у него свой блок контракта.
     expect(res.text).not.toContain("volumetric golden FS letter");

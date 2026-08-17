@@ -90,6 +90,11 @@ export interface BundleAssetMeta {
      */
     textGate: { clean: boolean; found: string; skipped: boolean } | null;
   } | null;
+  /**
+   * Свечение стоит в фиксированной точке холста и за объектом не следует:
+   * `ok: false` — свет горит мимо, стоит посмотреть глазами. Не блокирует.
+   */
+  glowCheck: { ok: boolean; coverage: number } | null;
 }
 
 export interface BundleDetails {
@@ -377,7 +382,14 @@ export const useBundlesStore = defineStore("bundles", () => {
       return true;
     } catch (err) {
       const status = (err as { statusCode?: number })?.statusCode;
-      actionError.value = status === 503 ? "queue_unavailable" : errorLabel;
+      // Код ошибки бэкенда (правка 2026-08-17). До неё сохранялся только
+      // статус, и всё, кроме 503, схлопывалось в общий errorLabel — поэтому
+      // «зависимые форматы ещё генерируются» доходило до менеджера как
+      // «Действие не выполнено, попробуйте ещё раз», то есть как предложение
+      // повторить действие, которое заведомо не пройдёт.
+      const code = (err as { data?: { error?: string } })?.data?.error;
+      actionError.value =
+        typeof code === "string" && code ? code : status === 503 ? "queue_unavailable" : errorLabel;
       await refreshSelected();
       return false;
     }

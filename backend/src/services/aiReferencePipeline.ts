@@ -6,13 +6,15 @@ import { nearestFalAspect } from "../lib/imageSize.js";
 import { uploadBuffer, withRetry } from "../lib/cloudinary.js";
 import {
   applyPromoEffects,
+  checkGlowCoverage,
+  GLOW_MIN_SUBJECT_COVERAGE,
   recommendedTextColorFor,
   resolveEffectsConfig,
   zoneLuminanceOverWhite,
 } from "../lib/promoEffects.js";
-import type { EffectsToggle, PromoEffectsConfig } from "../lib/promoEffects.js";
+import type { EffectsToggle, GlowCheck, PromoEffectsConfig } from "../lib/promoEffects.js";
 import { pickGlowColor } from "../lib/glowColor.js";
-import { keyWhiteBackground, mergeCutoutAlpha, cutoutMode } from "../lib/whiteKey.js";
+import { keyWhiteBackgroundDetailed, mergeCutoutAlpha, cutoutMode } from "../lib/whiteKey.js";
 import { fetchBuffer } from "./layerCache.js";
 import { validateAiAsset, SIDE_FILL_MIN_RATIO } from "../lib/aiAssetValidator.js";
 import {
@@ -116,6 +118,14 @@ export interface AiRefEffectsMeta {
   /** Чистый вырез без эффектов — источник для пере-применения. */
   sourceUrl: string;
   version: number;
+  /**
+   * Осмысленность свечения (правка 2026-08-17): пятно света стоит в
+   * фиксированной точке холста и за объектом не следует, поэтому на «широких»
+   * композициях горит в пустоте. Позицию НЕ трогаем (она снята с эталонов
+   * пиксельно) — только измеряем и показываем человеку.
+   * null — свечение выключено или проверка не отработала.
+   */
+  glowCheck?: GlowCheck | null;
   /** Заполнено, если эффекты не легли: ассет остался чистым (fail-open). */
   error?: string;
 }
@@ -192,6 +202,20 @@ export async function applyEffectsToAsset(opts: {
       meta.glowReason = picked.reason;
     }
     meta.glowHex = glowHex;
+
+    // Проверка идёт по ЧИСТОМУ вырезу и ДО наложения: после наложения альфа
+    // фона уже поднята самим свечением, и «объект под светом» не отличить от
+    // «свет в пустоте» — измерять стало бы нечего.
+    const check = await checkGlowCoverage(buffer, opts.config.glow!);
+    meta.glowCheck = check;
+    if (check && !check.ok) {
+      console.warn(
+        `⚠ ${opts.logTag}: свечение горит мимо объекта — ядро накрыто на ` +
+          `${Math.round(check.coverage * 100)}% (порог ${Math.round(GLOW_MIN_SUBJECT_COVERAGE * 100)}%), ` +
+          `центр масс смещён на ${Math.round(check.offsetXPct * 100)}% по X и ` +
+          `${Math.round(check.offsetYPct * 100)}% по Y`,
+      );
+    }
   }
 
   const rendered = await applyPromoEffects(buffer, { glowHex, config: opts.config });
@@ -260,7 +284,22 @@ export const AI_REF_ANATOMY_CONTRACT =
   "a sixth finger, never fuse, duplicate, stump or bend digits backwards, and never give the hero extra or " +
   "missing arms, legs, ears or tails. A hand that holds a prop must wrap around it with every finger in a " +
   "plausible place. If a pose makes a hand hard to draw, change the pose or let the hand be naturally hidden " +
-  "behind a prop or behind the body — a hidden hand is fine, a malformed one ruins the whole creative.";
+  "behind a prop or behind the body — a hidden hand is fine, a malformed one ruins the whole creative. " +
+  // Усиление 2026-08-17 (заказчик: «на генерацию пальцев более жёсткий упор»).
+  // Прежняя редакция описывала ТРЕБОВАНИЕ, но не задавала процедуру: модель
+  // рисует кисть одним жестом и не считает. Три добавки, каждая по своей
+  // причине: (1) явная команда пересчитать — единственное, что заставляет
+  // модель обработать пальцы как дискретные объекты; (2) запрет сложных поз —
+  // основной источник брака не «неумение», а растопыренная ладонь и жесты;
+  // (3) прямая рекомендация простых форм кисти, которые почти невозможно
+  // сломать. Формулировка «prefer», а не «always», намеренная: жёсткий запрет
+  // всех открытых ладоней выхолостил бы позы героя.
+  "COUNT THE FINGERS: before finishing the hero, look at every visible hand and count its digits one by one; " +
+  "the count must match on both hands. Prefer SIMPLE, closed hand shapes that are hard to get wrong — a fist, " +
+  "a hand gripping a prop, a thumbs-up, a hand resting on the hip, a hand partly behind a prop — over open " +
+  "spread palms, splayed fingers, pointing gestures, peace signs, crossed fingers or hands framing the face. " +
+  "An open palm with all five fingers spread toward the camera is the single most common way this goes wrong: " +
+  "avoid that pose entirely unless the references demand it.";
 
 /**
  * Правило текста в промпте ГЕНЕРАЦИИ (TASK no-baked-text, 2026-08-17).
@@ -1382,7 +1421,7 @@ export async function processAiReferenceAsset(opts: {
   if (isAnchor) {
     // Бриф уходит в тот же запрос (правка 2026-08-15): набор предметов
     // называется в терминах кампании, а не «металлическая деталь».
-    const style = await describeCampaignStyle(finalUrl, variationText);
+    const style = await describeCampaignStyle(finalUrl, variationText, allowText);
     styleText = style.text;
     anchorPropInventory = style.propInventory;
     // Планировщик набора (правка 2026-08-15, заказчик: «предметы сами
@@ -1391,7 +1430,7 @@ export async function processAiReferenceAsset(opts: {
     // снятого с картинки: в кадр могло попасть выдуманное мимо референсов, а
     // главные объекты акции он ещё и помечает — на них строится иерархия
     // композиции у зависимых форматов. Список с картинки остаётся фолбэком.
-    const plan = await planCampaignProps({ refUrls, variationText, brandName: baseBrand });
+    const plan = await planCampaignProps({ refUrls, variationText, brandName: baseBrand, allowText });
     if (plan.text) {
       anchorPropInventory = plan.text;
     } else if (plan.error) {
@@ -1460,11 +1499,25 @@ export async function processAiReferenceAsset(opts: {
   // листва), кей возвращает стёртые ею объекты. Откат — env AI_REF_CUTOUT.
   const mode = cutoutMode();
   let keyed: Buffer | null = null;
+  // Маска сквозных отверстий (правка 2026-08-17): считается вместе с кеем и
+  // обязана дожить до слияния — Bria сегментирует объект сплошным силуэтом и
+  // без маски вернула бы белую заливку внутрь дырки обратно.
+  let holeMask: Uint8Array | null = null;
+  let holeCount = 0;
   if (mode !== "bria") {
     const srcBuffer = await fetchBuffer(finalUrl);
     if (srcBuffer) {
       try {
-        keyed = await keyWhiteBackground(srcBuffer);
+        const white = await keyWhiteBackgroundDetailed(srcBuffer);
+        keyed = white.png;
+        holeMask = white.holeMask;
+        holeCount = white.holes;
+        if (white.holes > 0) {
+          console.log(
+            `ai-ref white-key#${assetId}: пробито сквозных отверстий — ${white.holes} ` +
+              `(белых предметов сохранено: ${white.keptWhiteRegions})`,
+          );
+        }
       } catch (err) {
         console.warn(`⚠ ai-ref white-key#${assetId}: ${err instanceof Error ? err.message : err}`);
       }
@@ -1480,7 +1533,7 @@ export async function processAiReferenceAsset(opts: {
       if (briaBuffer) {
         if (keyed) {
           try {
-            cutout = await mergeCutoutAlpha(briaBuffer, keyed);
+            cutout = await mergeCutoutAlpha(briaBuffer, keyed, holeMask ?? undefined);
             cutoutSource = "hybrid";
           } catch (err) {
             console.warn(`⚠ ai-ref merge#${assetId}: ${err instanceof Error ? err.message : err}`);
@@ -1553,6 +1606,11 @@ export async function processAiReferenceAsset(opts: {
         // Свечение — фоновая заливка, но она полупрозрачная и по краям сходит
         // в ноль: ассет остаётся вырезанным, подпись «— прозрачный фон» верна.
         transparent: true,
+        // Сколько сквозных отверстий пробито при вырезании (правка
+        // 2026-08-17). В метаданных, чтобы по жалобе «объект не сквозной»
+        // сразу было видно: чистка не отработала или область не прошла
+        // критерий плоскости и была сочтена белым предметом.
+        holesKnockedOut: holeCount,
         ...(effects.textColor ? { recommendedTextColor: effects.textColor } : {}),
         effects: effects.meta,
       } as unknown as Prisma.InputJsonValue,

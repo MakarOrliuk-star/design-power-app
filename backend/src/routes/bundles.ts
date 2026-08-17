@@ -235,6 +235,13 @@ interface AssetPreviewMeta {
      */
     textGate: { clean: boolean; found: string; skipped: boolean } | null;
   } | null;
+  /**
+   * Проверка осмысленности свечения (правка 2026-08-17). Пятно света стоит в
+   * фиксированной точке холста, поэтому на «широких» композициях горит мимо
+   * объекта. `ok: false` — повод посмотреть глазами; картинку не блокирует.
+   * null — свечение выключено, проверка не отработала или legacy-ассет.
+   */
+  glowCheck: { ok: boolean; coverage: number } | null;
 }
 
 function isPctBox(v: unknown): v is NonNullable<AssetPreviewMeta["safeZonePct"]> {
@@ -273,6 +280,18 @@ export function assetPreviewMeta(raw: unknown): AssetPreviewMeta | null {
           }
         : null,
     qa: projectQaMeta(m.qa),
+    glowCheck: projectGlowCheck(m.effects),
+  };
+}
+
+/** metadata.effects.glowCheck → узкая проверенная проекция для CRM. */
+function projectGlowCheck(raw: unknown): AssetPreviewMeta["glowCheck"] {
+  if (typeof raw !== "object" || raw === null) return null;
+  const check = (raw as Record<string, unknown>).glowCheck as Record<string, unknown> | null | undefined;
+  if (!check || typeof check.ok !== "boolean") return null;
+  return {
+    ok: check.ok,
+    coverage: typeof check.coverage === "number" ? check.coverage : 0,
   };
 }
 
@@ -583,7 +602,11 @@ bundlesRouter.post("/:id/assets/:assetId/edit", async (req: Request, res: Respon
     return;
   }
   if (!result.ok) {
-    res.status(result.error === "not_editable" ? 409 : 503).json({ error: result.error });
+    // 409 — конфликт состояния (ассет не готов / зависимые форматы в работе),
+    // 503 — недоступна очередь. Код ошибки уходит в тело: фронт показывает по
+    // нему конкретное сообщение вместо общего «действие не выполнено».
+    const conflict = result.error === "not_editable" || result.error === "dependents_in_flight";
+    res.status(conflict ? 409 : 503).json({ error: result.error });
     return;
   }
   res.status(202).json({ ok: true });

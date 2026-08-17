@@ -305,6 +305,10 @@ describe("editAsset (D9)", () => {
       status: "DONE",
       imageUrl: "https://cdn/email.png",
       variantId: "v1",
+      assetKey: "email",
+      // Тип бандла нужен гейту якоря (TASK no-baked-text, правка Edit):
+      // здесь один формат, поэтому зависимых нет и гейт не срабатывает.
+      variant: { bundle: { bundleType: { assets: [{ key: "email", label: "Email" }] } } },
     });
     queue.add.mockResolvedValue({});
 
@@ -328,9 +332,93 @@ describe("editAsset (D9)", () => {
       status: "FAILED",
       imageUrl: null,
       variantId: "v1",
+      assetKey: "email",
+      variant: { bundle: { bundleType: { assets: [{ key: "email", label: "Email" }] } } },
     });
     expect(await editAsset("bun1", "a1", "x")).toEqual({ ok: false, error: "not_editable" });
     expect(queue.add).not.toHaveBeenCalled();
+  });
+
+  /**
+   * Правка 2026-08-17 (заказчик: «нажимаю Edit — push и pop-up падают с
+   * ошибкой про email»). Механика была такая: editAsset переводил якорь в
+   * GENERATING, а задачи зависимых форматов, вынутые из очереди позже,
+   * видели статус якоря != DONE и падали с «перегенерируйте email».
+   */
+  it("правка якоря блокируется, пока зависимые форматы в работе", async () => {
+    db.bundleAsset.findFirst.mockResolvedValue({
+      id: "a1",
+      status: "DONE",
+      imageUrl: "https://cdn/email.png",
+      variantId: "v1",
+      assetKey: "email",
+      variant: {
+        bundle: {
+          bundleType: {
+            assets: [
+              { key: "email", label: "Email", composeMode: "ai_reference" },
+              { key: "push", label: "Push", composeMode: "ai_reference" },
+            ],
+          },
+        },
+      },
+    });
+    db.bundleAsset.count.mockResolvedValue(1); // push ещё GENERATING
+
+    expect(await editAsset("bun1", "a1", "x")).toEqual({
+      ok: false,
+      error: "dependents_in_flight",
+    });
+    // Ассет НЕ трогаем: перевод якоря в GENERATING и был причиной падения.
+    expect(db.bundleAsset.update).not.toHaveBeenCalled();
+    expect(queue.add).not.toHaveBeenCalled();
+  });
+
+  it("зависимые форматы закончили → правка якоря проходит", async () => {
+    db.bundleAsset.findFirst.mockResolvedValue({
+      id: "a1",
+      status: "DONE",
+      imageUrl: "https://cdn/email.png",
+      variantId: "v1",
+      assetKey: "email",
+      variant: {
+        bundle: {
+          bundleType: {
+            assets: [
+              { key: "email", label: "Email", composeMode: "ai_reference" },
+              { key: "push", label: "Push", composeMode: "ai_reference" },
+            ],
+          },
+        },
+      },
+    });
+    db.bundleAsset.count.mockResolvedValue(0);
+    queue.add.mockResolvedValue({});
+    expect(await editAsset("bun1", "a1", "x")).toEqual({ ok: true });
+  });
+
+  it("правка ЗАВИСИМОГО формата не блокируется ничем", async () => {
+    db.bundleAsset.findFirst.mockResolvedValue({
+      id: "a2",
+      status: "DONE",
+      imageUrl: "https://cdn/push.png",
+      variantId: "v1",
+      assetKey: "push",
+      variant: {
+        bundle: {
+          bundleType: {
+            assets: [
+              { key: "email", label: "Email", composeMode: "ai_reference" },
+              { key: "push", label: "Push", composeMode: "ai_reference" },
+            ],
+          },
+        },
+      },
+    });
+    queue.add.mockResolvedValue({});
+    expect(await editAsset("bun1", "a2", "x")).toEqual({ ok: true });
+    // Счётчик занятости для зависимого не нужен — он никого не тянет.
+    expect(db.bundleAsset.count).not.toHaveBeenCalled();
   });
 
   it("marks the asset FAILED when the queue is unavailable", async () => {
@@ -339,6 +427,10 @@ describe("editAsset (D9)", () => {
       status: "DONE",
       imageUrl: "https://cdn/email.png",
       variantId: "v1",
+      assetKey: "email",
+      // Тип бандла нужен гейту якоря (TASK no-baked-text, правка Edit):
+      // здесь один формат, поэтому зависимых нет и гейт не срабатывает.
+      variant: { bundle: { bundleType: { assets: [{ key: "email", label: "Email" }] } } },
     });
     queue.add.mockRejectedValue(new Error("redis down"));
     db.bundleAsset.findMany.mockResolvedValue([{ status: "FAILED" }]); // recompute read
