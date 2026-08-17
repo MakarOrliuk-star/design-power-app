@@ -236,6 +236,100 @@ export async function applyEffectsToAsset(opts: {
   return { imageUrl: up.secure_url, meta, textColor };
 }
 
+export interface CutoutOutcome {
+  /** PNG с альфой; null — вырезать не удалось ни одним способом. */
+  cutout: Buffer | null;
+  /** Чем вырезано — уходит в лог: первый вопрос при разборе «пропал предмет». */
+  source: string;
+  /** Сколько сквозных отверстий пробито (правка 2026-08-17). */
+  holes: number;
+  /**
+   * Причина отказа Bria, когда вырезать не удалось совсем. Нужна в сообщении
+   * об ошибке ассета: «cutout не удался» без причины не даёт разобраться,
+   * лёг ли провайдер или не скачался кадр.
+   */
+  error?: string;
+}
+
+/**
+ * Вырезание фона композиции (вынесено из пайплайна 2026-08-17, чтобы тем же
+ * контуром шла правка через Edit — иначе отредактированный ассет оставался
+ * без выреза, без свечения и без фейда).
+ *
+ * Гибрид: альфа = max(Bria, кей по связному белому) + маска сквозных
+ * отверстий. Bria — ML-сегментация «главного объекта»: она стирала парящие
+ * пропсы, которые в кадре ЕСТЬ, и требование FOCUS усугубляло это. Фон же по
+ * контракту чисто белый, поэтому кей решает задачу без сегментации и по
+ * построению не может потерять предмет. Откат — env AI_REF_CUTOUT.
+ */
+export async function cutoutComposition(
+  sourceUrl: string,
+  logTag: string,
+): Promise<CutoutOutcome> {
+  const mode = cutoutMode();
+  let keyed: Buffer | null = null;
+  // Маска отверстий обязана дожить до слияния: Bria сегментирует объект
+  // сплошным силуэтом и без маски вернула бы белую заливку в дырку обратно.
+  let holeMask: Uint8Array | null = null;
+  let holes = 0;
+
+  if (mode !== "bria") {
+    const srcBuffer = await fetchBuffer(sourceUrl);
+    if (srcBuffer) {
+      try {
+        const white = await keyWhiteBackgroundDetailed(srcBuffer);
+        keyed = white.png;
+        holeMask = white.holeMask;
+        holes = white.holes;
+        if (white.holes > 0) {
+          console.log(
+            `${logTag} white-key: пробито сквозных отверстий — ${white.holes} ` +
+              `(белых предметов сохранено: ${white.keptWhiteRegions})`,
+          );
+        }
+      } catch (err) {
+        console.warn(`⚠ ${logTag} white-key: ${err instanceof Error ? err.message : err}`);
+      }
+    }
+  }
+
+  if (mode === "white") return { cutout: keyed, source: "white-key", holes };
+
+  const removed = await runBriaRemoveBg(sourceUrl);
+  let cutout: Buffer | null = null;
+  let source = "bria";
+  if (removed.success && removed.imageUrl) {
+    const briaBuffer = await fetchBuffer(removed.imageUrl);
+    if (briaBuffer) {
+      if (keyed) {
+        try {
+          cutout = await mergeCutoutAlpha(briaBuffer, keyed, holeMask ?? undefined);
+          source = "hybrid";
+        } catch (err) {
+          console.warn(`⚠ ${logTag} merge: ${err instanceof Error ? err.message : err}`);
+          cutout = briaBuffer;
+        }
+      } else {
+        cutout = briaBuffer;
+      }
+    }
+  }
+  // Bria недоступна: кей — полноценная замена, а не деградация, поэтому
+  // ассет из-за этого не падает.
+  if (!cutout && keyed) {
+    cutout = keyed;
+    source = "white-key (bria failed)";
+    console.warn(`⚠ ${logTag} cutout: Bria недоступна — вырезано кеем по белому`);
+  }
+  if (cutout) return { cutout, source, holes };
+  return {
+    cutout: null,
+    source,
+    holes,
+    error: `removeBg: ${removed.error ?? "результат не скачался"}`,
+  };
+}
+
 export function derivedAssetKeys(parentKey: string): [string, string] {
   return [`${parentKey}${AI_REF_SUFFIX_NOTEXT}`, `${parentKey}${AI_REF_SUFFIX_TRANSPARENT}`];
 }
@@ -1497,70 +1591,15 @@ export async function processAiReferenceAsset(opts: {
   // всякой сегментации и по построению не может потерять предмет.
   // Гибрид: альфа = max(Bria, кей) — у Bria лучше сложная кромка (шерсть,
   // листва), кей возвращает стёртые ею объекты. Откат — env AI_REF_CUTOUT.
-  const mode = cutoutMode();
-  let keyed: Buffer | null = null;
-  // Маска сквозных отверстий (правка 2026-08-17): считается вместе с кеем и
-  // обязана дожить до слияния — Bria сегментирует объект сплошным силуэтом и
-  // без маски вернула бы белую заливку внутрь дырки обратно.
-  let holeMask: Uint8Array | null = null;
-  let holeCount = 0;
-  if (mode !== "bria") {
-    const srcBuffer = await fetchBuffer(finalUrl);
-    if (srcBuffer) {
-      try {
-        const white = await keyWhiteBackgroundDetailed(srcBuffer);
-        keyed = white.png;
-        holeMask = white.holeMask;
-        holeCount = white.holes;
-        if (white.holes > 0) {
-          console.log(
-            `ai-ref white-key#${assetId}: пробито сквозных отверстий — ${white.holes} ` +
-              `(белых предметов сохранено: ${white.keptWhiteRegions})`,
-          );
-        }
-      } catch (err) {
-        console.warn(`⚠ ai-ref white-key#${assetId}: ${err instanceof Error ? err.message : err}`);
-      }
-    }
-  }
-
-  let cutout: Buffer | null = mode === "white" ? keyed : null;
-  let cutoutSource: string = mode === "white" ? "white-key" : "bria";
-  if (mode !== "white") {
-    const removed = await runBriaRemoveBg(finalUrl);
-    if (removed.success && removed.imageUrl) {
-      const briaBuffer = await fetchBuffer(removed.imageUrl);
-      if (briaBuffer) {
-        if (keyed) {
-          try {
-            cutout = await mergeCutoutAlpha(briaBuffer, keyed, holeMask ?? undefined);
-            cutoutSource = "hybrid";
-          } catch (err) {
-            console.warn(`⚠ ai-ref merge#${assetId}: ${err instanceof Error ? err.message : err}`);
-            cutout = briaBuffer;
-          }
-        } else {
-          cutout = briaBuffer;
-        }
-      }
-    }
-    // Bria недоступна или её результат не скачался: кей — полноценная замена,
-    // а не деградация, поэтому ассет из-за этого больше не падает.
-    if (!cutout && keyed) {
-      cutout = keyed;
-      cutoutSource = "white-key (bria failed)";
-      console.warn(`⚠ ai-ref cutout#${assetId}: Bria недоступна — вырезано кеем по белому`);
-    }
-    if (!cutout) {
-      await fail(
-        `removeBg: ${removed.error ?? "результат не скачался"}`,
-        baseMeta as unknown as Prisma.InputJsonValue,
-      );
-      return { ok: false };
-    }
-  }
+  const cut = await cutoutComposition(finalUrl, `ai-ref#${assetId}`);
+  const cutout = cut.cutout;
+  const cutoutSource = cut.source;
+  const holeCount = cut.holes;
   if (!cutout) {
-    await fail("cutout: не удалось вырезать фон", baseMeta as unknown as Prisma.InputJsonValue);
+    await fail(
+      cut.error ?? "cutout: не удалось вырезать фон",
+      baseMeta as unknown as Prisma.InputJsonValue,
+    );
     return { ok: false };
   }
 
