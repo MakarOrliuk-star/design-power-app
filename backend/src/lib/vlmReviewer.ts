@@ -62,9 +62,24 @@ const COMMON_TAIL = [
   '"score" is 0-100 overall quality. "reasons" lists concrete failures (empty if pass). Write reasons in Russian.',
 ];
 
-/** Текстовое правило (A-1) — одинаково для всех форматов. */
-const TEXT_RULE =
-  "TEXT: the ONLY lettering allowed is single short casino words organically placed on props (slot reels, chips, crates, medallions). The allowed list includes, non-exhaustively: FS, FREE SPINS, SCATTER, BONUS, VIP, WILD, 777, JACKPOT, MEGA WIN, RELOAD, SPIN. Never flag a word from this list or a similar single casino term. FAIL only for: phrases or sentences, headlines, CTA buttons, logos, brand names, watermarks.";
+/**
+ * Текстовое правило чек-листа (A-1) — одинаково для всех форматов, но зависит
+ * от режима вариации (TASK no-baked-text, `NeuralPromptPreset.allowText`).
+ *
+ * Разрешающая ветка — прежняя редакция. Строгая ветка обязана быть здесь, а не
+ * только в промпте генерации: до этой правки приёмщику прямым текстом велели
+ * «never flag FS / FREE SPINS», поэтому второй контур контроля пропускал ровно
+ * тот брак, на который жаловался заказчик.
+ */
+function textRule(allowText: boolean): string {
+  if (allowText) {
+    return "TEXT: the ONLY lettering allowed is single short casino words organically placed on props (slot reels, chips, crates, medallions). The allowed list includes, non-exhaustively: FS, FREE SPINS, SCATTER, BONUS, VIP, WILD, 777, JACKPOT, MEGA WIN, RELOAD, SPIN. Never flag a word from this list or a similar single casino term. FAIL only for: phrases or sentences, headlines, CTA buttons, logos, brand names, watermarks.";
+  }
+  return "TEXT (zero tolerance): this creative must contain NO lettering of any kind. FAIL if you can see any letter, word, number, digit, logo, brand mark, watermark, caption, headline or CTA button anywhere in the frame — including tiny, blurred, cropped or partially hidden ones, and including single casino words such as FS, FREE SPINS, BONUS, VIP, WILD, JACKPOT or the digits 777 on a slot reel or a denomination number on a chip. THE ONLY EXCEPTION is a standard playing card showing its natural rank marks (A, K, Q, J, 10) and suit pips — those are part of the card object and must never be flagged. When you fail this item, quote the exact text you can read and say where it is.";
+}
+
+/** Прежняя константа: правило в строгом режиме (новый дефолт). */
+const TEXT_RULE = textRule(false);
 
 const ARTIFACTS_RULE =
   "ANATOMY/ARTIFACTS: no deformed faces or hands, no extra limbs, no duplicated or melted objects, no visible generation artifacts. Intentional depth-of-field blur and light motion blur on props are good design, NOT artifacts — a few soft or blurred props next to sharp ones are exactly what is asked for, and only a blurry HERO is a defect.";
@@ -96,14 +111,18 @@ const WHITE_BG_NOTE =
   "IMPORTANT: the composition is INTENTIONALLY rendered on a plain solid white background for later cut-out, even if the reference banners have scenic backgrounds. A white background is correct and must NEVER be reported as a style mismatch.";
 
 /** Чек-лист якорного формата (email 1200×600), A-2/A-3 + правки 2026-08-13. */
-const anchorChecklist = (gender?: QaHeroGender | null, fidelity: QaFidelity = "variant"): string[] => [
+const anchorChecklist = (
+  gender?: QaHeroGender | null,
+  fidelity: QaFidelity = "variant",
+  allowText = false,
+): string[] => [
   "The remaining images are reference banners of the same brand — the ground truth for style.",
   WHITE_BG_NOTE,
   "Evaluate the generated composition against this checklist:",
   `1. STYLE: palette, prop family, lighting and rendering quality must match the reference banners. Ignore background differences (see above). ${fidelityRule(fidelity)}`,
   "2. BRIEF: the composition must express the campaign brief provided in the user prompt.",
   "3. BACKGROUND & CENTER: the background must be plain solid white with no scenery, gradients, glow or bokeh. The central band (the middle ~46% of the width, top to bottom) must be COMPLETELY EMPTY: any plate, oval, panel, frame, character part — and even a single small floating coin, gem, sparkle or particle — inside that band is a FAIL. The only exception is one or two tiny decorative props near the very bottom edge of the band. A headline and CTA will be overlaid there later.",
-  `4. ${TEXT_RULE}`,
+  `4. ${textRule(allowText)}`,
   `5. ${ARTIFACTS_RULE}`,
   `6. ${ANATOMY_RULE}`,
   "7. EMAIL HERO FITNESS: a clear designer-grade focal hierarchy (a large anchor group of props in a lower corner, the main character on the opposite side, smaller props around); the character and key props fully inside the frame, not cut by the canvas edges.",
@@ -176,6 +195,7 @@ function buildSecondaryChecklist(
   gender?: QaHeroGender | null,
   fidelity: QaFidelity = "variant",
   propInventory = "",
+  allowText = false,
 ): string[] {
   const gr = genderRule(gender);
   // Набор предметов кампании (правка 2026-08-15). Пункт 3 менялся дважды и
@@ -209,7 +229,7 @@ function buildSecondaryChecklist(
     // одинаковых по важности объектов проходил её без замечаний.
     "6. PROP COMPOSITION: the props must look composed by a designer, not scattered. Check all four: HIERARCHY — one or two props are clearly the largest and sharpest and sit near the hero's hands or face, the rest are visibly smaller supporting and accent pieces; GROUPS — the props form two or three clusters of overlapping objects with clean empty space between the clusters, not an even sprinkle across the canvas; FLOW — the clusters follow a diagonal or an arc that leads the eye to the hero, not a symmetric ring or a mirrored left-right layout; RHYTHM — spacing and tilt angles vary, nothing is lined up in a row, on a grid or at equal distances. It is a FAIL if the props are all roughly the same size, evenly spaced like stickers, or arranged symmetrically — say which of the four is broken.",
     "7. FOCUS VARIETY: the props must sit on different focal planes — a couple of them softly out of focus or lightly motion-blurred, the rest sharp, with the hero sharpest. A frame where every prop is equally sharp and flat is a FAIL.",
-    `8. ${TEXT_RULE}`,
+    `8. ${textRule(allowText)}`,
     `9. ${ARTIFACTS_RULE}`,
     `10. ${ANATOMY_RULE}`,
     // Правка 2026-08-15: «rather than clustered on one side» читалось как
@@ -235,6 +255,12 @@ export interface QaPromptOptions {
   fidelity?: QaFidelity;
   /** Набор предметов кампании; только у зависимых форматов. */
   propInventory?: string;
+  /**
+   * Режим текста вариации (TASK no-baked-text). Обязан совпадать с тем, что
+   * ушёл в промпт генерации: иначе приёмщик забракует то, что сам же промпт
+   * разрешил, — или наоборот пропустит запрещённое.
+   */
+  allowText?: boolean;
 }
 
 export function buildQaSystemPrompt(
@@ -242,6 +268,7 @@ export function buildQaSystemPrompt(
   opts: QaPromptOptions = {},
 ): string {
   const fidelity = opts.fidelity ?? "variant";
+  const allowText = opts.allowText ?? false;
   const checklist =
     profile === "secondary"
       ? buildSecondaryChecklist(
@@ -250,8 +277,9 @@ export function buildQaSystemPrompt(
           opts.gender,
           fidelity,
           opts.propInventory ?? "",
+          allowText,
         )
-      : anchorChecklist(opts.gender, fidelity);
+      : anchorChecklist(opts.gender, fidelity, allowText);
   return [...COMMON_HEAD, ...checklist, ...COMMON_TAIL].join("\n");
 }
 
@@ -335,6 +363,8 @@ export async function reviewComposition(opts: {
   fidelity?: QaFidelity;
   /** Набор предметов кампании — тот же, что ушёл в генерацию. */
   propInventory?: string;
+  /** Режим текста вариации — тот же, что ушёл в генерацию (TASK no-baked-text). */
+  allowText?: boolean;
 }): Promise<QaVerdict> {
   const profile: QaProfile = opts.profile ?? "anchor";
   const systemPrompt = buildQaSystemPrompt(profile, {
@@ -343,6 +373,7 @@ export async function reviewComposition(opts: {
     ...(opts.gender !== undefined ? { gender: opts.gender } : {}),
     ...(opts.fidelity !== undefined ? { fidelity: opts.fidelity } : {}),
     ...(opts.propInventory !== undefined ? { propInventory: opts.propInventory } : {}),
+    ...(opts.allowText !== undefined ? { allowText: opts.allowText } : {}),
   });
   const anchorPart = profile === "secondary" && opts.anchorUrl ? [opts.anchorUrl] : [];
   const imageUrls = [opts.imageUrl, ...anchorPart, ...opts.refUrls.slice(0, QA_REFS_SHOWN)];

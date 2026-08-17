@@ -719,6 +719,18 @@ model NeuralPromptPreset {
   text      String
   order     Int      @default(0)
   isActive  Boolean  @default(true)
+  /// Разрешён ли ЗАПЕЧЁННЫЙ текст на баннерах этой вариации (TASK no-baked-text,
+  /// заказчик 2026-08-17: «ИИ дорисовывает FS и Free spins»). Причиной был не
+  /// произвол модели, а наш собственный белый список казино-слов в промпте.
+  ///
+  /// false (дефолт) — модель не рисует букв, цифр, логотипов и watermark'ов;
+  /// единственное исключение — ранги и масти на игральных картах (решение
+  /// заказчика). true — прежнее поведение с белым списком (FS, SCATTER, 777...).
+  ///
+  /// Режим ОБЩИЙ на все форматы кампании: email-якорь задаёт стиль push/pop-up
+  /// через блок STYLE SOURCE, поэтому разные режимы у якоря и зависимых
+  /// форматов дали бы неустранимый конфликт двух контрактов.
+  allowText Boolean  @default(false)
   createdAt DateTime @default(now())
 
   references VariationReference[]

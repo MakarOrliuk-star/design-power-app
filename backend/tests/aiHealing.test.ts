@@ -10,12 +10,15 @@ const fit = vi.hoisted(() => ({ fitAndStoreAsset: vi.fn() }));
 const cache = vi.hoisted(() => ({ fetchBuffer: vi.fn() }));
 const validator = vi.hoisted(() => ({ validateAiAsset: vi.fn() }));
 const reviewer = vi.hoisted(() => ({ reviewComposition: vi.fn(), QA_REFS_SHOWN: 3 }));
+// Текстовый детектор (TASK no-baked-text) — свои тесты в textScan.test.ts.
+const textScan = vi.hoisted(() => ({ scanImageUrl: vi.fn(), newScanBudget: vi.fn() }));
 
 vi.mock("../src/lib/fal.js", () => fal);
 vi.mock("../src/lib/assetFit.js", () => fit);
 vi.mock("../src/services/layerCache.js", () => cache);
 vi.mock("../src/lib/aiAssetValidator.js", () => validator);
 vi.mock("../src/lib/vlmReviewer.js", () => reviewer);
+vi.mock("../src/lib/textScan.js", () => textScan);
 
 import {
   buildHealingPrompt,
@@ -52,6 +55,7 @@ beforeEach(() => {
   cache.fetchBuffer.mockReset();
   validator.validateAiAsset.mockReset();
   reviewer.reviewComposition.mockReset();
+  textScan.scanImageUrl.mockReset();
 
   fal.runGptImage2Edit.mockResolvedValue({ success: true, imageUrl: "https://fal/healed.png" });
   fit.fitAndStoreAsset.mockResolvedValue({ ok: true, url: "https://cdn/heal1.png", publicId: "h1" });
@@ -68,7 +72,26 @@ describe("buildHealingPrompt (B2)", () => {
     expect(p).toContain("change NOTHING else");
     expect(p).toContain("pure solid white");
     expect(p).toContain("COMPLETELY EMPTY");
+    // TASK no-baked-text: прежнее «do not add any text» запрещало ДОБАВЛЯТЬ
+    // надпись, но не велело стирать уже нарисованную — а «не меняй ничего»
+    // выше по промпту прямо этому мешало.
+    expect(p).toContain("never add any text");
+    expect(p).toContain("ERASE that lettering");
+  });
+
+  it("строгий режим: стереть надпись, но сохранить сам предмет-носитель", () => {
+    const p = buildHealingPrompt(["на изображении есть запечённый текст «FS»"]);
+    // Без этой оговорки gpt-image-2 выпиливает вместе с надписью весь
+    // носитель — барабан, фишку, ящик.
+    expect(p).toContain("keep the object that carried it");
+    expect(p).toContain("never delete the object");
+    expect(p).toContain("Never replace the erased words with other words");
+  });
+
+  it("allowText=true: прежний хвост, требования стирать надписи нет", () => {
+    const p = buildHealingPrompt(["свечение на фоне"], { allowText: true });
     expect(p).toContain("do not add any text");
+    expect(p).not.toContain("ERASE that lettering");
   });
 
   it("пустой список замечаний → generic cleanup, промпт не ломается", () => {
@@ -252,7 +275,7 @@ describe("лечение зависимых форматов (DI2-4)", () => {
     expect(p).not.toContain("COMPLETELY EMPTY");
     expect(p).toContain("this format has no reserved copy space");
     expect(p).toContain("pure solid white");
-    expect(p).toContain("do not add any text");
+    expect(p).toContain("never add any text");
   });
 
   it("без centerClearZone: чек центра не выполняется, приёмка идёт профилем secondary", async () => {
@@ -271,5 +294,73 @@ describe("лечение зависимых форматов (DI2-4)", () => {
     expect(qaArgs.anchorUrl).toBe("https://cdn/email-base.png");
     const [genArgs] = fal.runGptImage2Edit.mock.calls[0]!;
     expect(genArgs.prompt).not.toContain("COMPLETELY EMPTY");
+  });
+});
+
+/**
+ * Текстовый гейт внутри лечения (TASK no-baked-text): перескан каждой
+ * вылеченной версии и правило «чистая побеждает грязную независимо от score».
+ */
+describe("лечение и запечённый текст", () => {
+  const budget = { deadline: Date.now() + 120_000 };
+  const scan = (hasText: boolean, text = "") => ({
+    md5: "m", hasText, text, confidence: 0.9, approvedOk: false,
+  });
+
+  it("вылеченная версия пересканируется: текст остался → приёмка не спасает", async () => {
+    // Ретушь прошла приёмку с высоким score, но надпись на месте.
+    reviewer.reviewComposition.mockResolvedValue({ pass: true, score: 92, reasons: [] });
+    textScan.scanImageUrl.mockResolvedValue(scan(true, "FS"));
+
+    const out = await healComposition({
+      ...OPTS,
+      source: { ...OPTS.source, textClean: false },
+      textBudget: budget,
+    });
+
+    // Победы нет — цикл отработал все попытки, а не принял грязную с ходу.
+    expect(fal.runGptImage2Edit).toHaveBeenCalledTimes(AI_HEAL_MAX_ATTEMPTS);
+    expect(out.winner.textClean).toBe(false);
+    expect(out.winner.textFound).toBe("FS");
+    expect(out.textScanned).toBe(AI_HEAL_MAX_ATTEMPTS);
+  });
+
+  it("чистая версия побеждает грязный исходник даже с меньшим score", async () => {
+    // Исходник: score 55 и надпись. Ретушь: score 40, но чисто.
+    reviewer.reviewComposition.mockResolvedValue({ pass: false, score: 40, reasons: ["композиция"] });
+    textScan.scanImageUrl.mockResolvedValue(scan(false));
+
+    const out = await healComposition({
+      ...OPTS,
+      source: { ...OPTS.source, textClean: false },
+      textBudget: budget,
+    });
+
+    expect(out.winner.imageUrl).toBe("https://cdn/heal1.png");
+    expect(out.winner.score).toBe(40); // score ниже исходных 55 — и это верно
+    expect(out.winner.textClean).toBe(true);
+  });
+
+  it("победа только когда сошлись оба контура: приёмка И чистота", async () => {
+    reviewer.reviewComposition.mockResolvedValue({ pass: true, score: 90, reasons: [] });
+    textScan.scanImageUrl.mockResolvedValue(scan(false));
+
+    const out = await healComposition({
+      ...OPTS,
+      source: { ...OPTS.source, textClean: false },
+      textBudget: budget,
+    });
+    // Первая же попытка закрывает оба условия — второй вызов не нужен.
+    expect(fal.runGptImage2Edit).toHaveBeenCalledTimes(1);
+    expect(out.winner.pass).toBe(true);
+    expect(out.winner.textClean).toBe(true);
+  });
+
+  it("без textBudget гейт выключен: сканов нет, поведение прежнее", async () => {
+    reviewer.reviewComposition.mockResolvedValue({ pass: true, score: 90, reasons: [] });
+    const out = await healComposition(OPTS);
+    expect(textScan.scanImageUrl).not.toHaveBeenCalled();
+    expect(out.winner.textClean).toBeUndefined();
+    expect(out.textScanned).toBeUndefined();
   });
 });

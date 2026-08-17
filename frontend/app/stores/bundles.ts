@@ -41,6 +41,11 @@ export interface PromptPreset {
   id: string;
   title: string;
   text: string;
+  /**
+   * Разрешён ли запечённый текст на баннерах этой вариации (TASK no-baked-text).
+   * В мастере — только для показа: настройка живёт в «Вариации и референсы».
+   */
+  allowText: boolean;
 }
 
 export interface BrandGroup {
@@ -78,6 +83,12 @@ export interface BundleAssetMeta {
     /** Оценка победителя и порог приёмки (DI2-5). */
     score: number | null;
     threshold: number | null;
+    /**
+     * Текстовый гейт (TASK no-baked-text). null — текст разрешён или ассет
+     * сгенерирован до правки; `clean: false` — надпись осталась, `found` = что
+     * именно прочитал детектор.
+     */
+    textGate: { clean: boolean; found: string; skipped: boolean } | null;
   } | null;
 }
 

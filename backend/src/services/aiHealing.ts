@@ -5,6 +5,8 @@ import { validateAiAsset } from "../lib/aiAssetValidator.js";
 import type { AiTechReport } from "../lib/aiAssetValidator.js";
 import { reviewComposition, QA_REFS_SHOWN } from "../lib/vlmReviewer.js";
 import type { QaProfile } from "../lib/vlmReviewer.js";
+import { scanImageUrl } from "../lib/textScan.js";
+import type { ScanBudget } from "../lib/textScan.js";
 
 /**
  * Auto-healing композиции ai_reference (TASK safe-zone/auto-heal, B1/B2/B3).
@@ -38,6 +40,11 @@ export interface AiRefAttempt {
   tech: AiTechReport | null;
   /** Приёмка пропущена по транспортной причине (vision недоступен). */
   qaSkipped?: boolean;
+  /**
+   * Вердикт текстового детектора по этой попытке (TASK no-baked-text).
+   * Отсутствует — строгий режим выключен или скан не проводился.
+   */
+  textGate?: { clean: boolean; found: string };
 }
 
 /**
@@ -75,9 +82,12 @@ export function buildHealingPrompt(
     gender?: "male" | "female" | null;
     /** Набор предметов кампании (правка 2026-08-15) — из него берутся добавки. */
     propInventory?: string;
+    /** Режим текста вариации (TASK no-baked-text); дефолт — строгий запрет. */
+    allowText?: boolean;
   },
 ): string {
   const keepCenterClear = opts?.keepCenterClear ?? true;
+  const allowText = opts?.allowText ?? false;
   // Лечение умеет ДОБАВЛЯТЬ пропсы (пустые бока по чеку `sides`). Без списка
   // оно дорисовывало что придётся — ровно тот рандом, который убирает
   // единый набор кампании. Пусто — прежнее «того же семейства».
@@ -140,7 +150,19 @@ export function buildHealingPrompt(
     // (2) ретушь чужого дефекта сама ломает кисти, и без напоминания лечение
     // одного замечания приносит другое.
     ANATOMY_RULE +
-    "all key elements stay fully inside the frame; do not add any text, logos or watermarks."
+    // Правка TASK no-baked-text: прежний хвост запрещал ДОБАВЛЯТЬ текст, но не
+    // велел стирать уже нарисованный, а «не меняй ничего» выше по промпту прямо
+    // мешал это сделать. Оговорка про сохранение предмета обязательна: без неё
+    // gpt-image-2 выпиливает вместе с надписью весь носитель — барабан, фишку,
+    // ящик — и композиция разваливается сильнее, чем от самой надписи.
+    (allowText
+      ? "all key elements stay fully inside the frame; do not add any text, logos or watermarks."
+      : "all key elements stay fully inside the frame; never add any text, logos or watermarks. " +
+        "If any issue above mentions text, lettering, words or numbers in the image, ERASE that lettering " +
+        "completely: keep the object that carried it — the reel, chip, crate, medallion, ribbon or banner — " +
+        "in the exact same place, size and shape, and rebuild its surface clean, as bare material, ornament " +
+        "or a pictorial symbol. Never replace the erased words with other words, and never delete the object " +
+        "itself. A standard playing card keeps its natural rank marks and suit pips — those are not lettering.")
   );
 }
 
@@ -152,12 +174,21 @@ export interface HealWinner {
   score: number;
   /** Индекс в attempts, если победитель — вылеченная версия; null — исходник. */
   healingIndex: number | null;
+  /**
+   * Свободен ли победитель от запечённого текста (TASK no-baked-text).
+   * undefined — строгий режим выключен либо детектор был недоступен.
+   */
+  textClean?: boolean;
+  /** Прочитанный на победителе текст; пусто, когда чисто. */
+  textFound?: string;
 }
 
 export interface HealOutcome {
   /** Healing-попытки для metadata.qa.healing (в порядке выполнения). */
   attempts: AiRefAttempt[];
   winner: HealWinner;
+  /** Сколько текстовых сканов потрачено на этапе лечения (контроль расходов). */
+  textScanned?: number;
 }
 
 /**
@@ -166,8 +197,13 @@ export interface HealOutcome {
  * попытка записывается проваленной, победителем остаётся лучший по score.
  */
 export async function healComposition(opts: {
-  /** Забракованный лучший кандидат генерации и его вердикт приёмки. */
-  source: { imageUrl: string; score: number; reasons: string[] };
+  /**
+   * Забракованный лучший кандидат генерации и его вердикт приёмки.
+   * `textClean: false` — источник лечится в том числе из-за запечённого текста
+   * (TASK no-baked-text): тогда любая чистая от букв версия побеждает его
+   * независимо от score.
+   */
+  source: { imageUrl: string; score: number; reasons: string[]; textClean?: boolean };
   targetW: number;
   targetH: number;
   /** Детерминированная база public id (`${variantId}_${assetKey}`). */
@@ -197,18 +233,32 @@ export async function healComposition(opts: {
   fidelity?: "exact" | "variant";
   /** Набор предметов кампании — тот же, что в генерации (правка 2026-08-15). */
   propInventory?: string;
+  /** Режим текста вариации — тот же, что в генерации (TASK no-baked-text). */
+  allowText?: boolean;
+  /**
+   * Бюджет текстовых сканов, общий с этапом генерации. Задан — каждая
+   * вылеченная версия пересканируется: без этого мы приняли бы «вылеченную»
+   * картинку, на которой надпись осталась.
+   */
+  textBudget?: ScanBudget;
 }): Promise<HealOutcome> {
   const max = opts.maxAttempts ?? AI_HEAL_MAX_ATTEMPTS;
   const profile: QaProfile = opts.profile ?? "anchor";
   const keepCenterClear = Boolean(opts.centerClearZone);
+  const allowText = opts.allowText ?? false;
+  // Строгий режим И включённый гейт: без бюджета сканов лечение работает
+  // по-старому (только приёмка), и это корректный режим для legacy-вызовов.
+  const textGateOn = !allowText && Boolean(opts.textBudget);
+  let textScanned = 0;
   const attempts: AiRefAttempt[] = [];
   // Текущий лучший кандидат — его лечим и его же отдаём, если лучше не станет.
-  let best: HealWinner & { reasons: string[] } = {
+  let best: HealWinner & { reasons: string[]; textClean: boolean } = {
     imageUrl: opts.source.imageUrl,
     pass: false,
     score: opts.source.score,
     healingIndex: null,
     reasons: opts.source.reasons,
+    textClean: opts.source.textClean ?? true,
   };
 
   for (let attempt = 1; attempt <= max; attempt++) {
@@ -216,6 +266,7 @@ export async function healComposition(opts: {
       keepCenterClear,
       ...(opts.gender ? { gender: opts.gender } : {}),
       ...(opts.propInventory ? { propInventory: opts.propInventory } : {}),
+      allowText,
     });
     const gen = await runGptImage2Edit({
       prompt,
@@ -290,7 +341,23 @@ export async function healComposition(opts: {
       ...(opts.gender ? { gender: opts.gender } : {}),
       ...(opts.fidelity ? { fidelity: opts.fidelity } : {}),
       ...(opts.propInventory ? { propInventory: opts.propInventory } : {}),
+      allowText,
     });
+
+    // Перескан вылеченной версии (TASK no-baked-text): ретушь могла стереть
+    // одну надпись и оставить другую — или дорисовать новую. Недоступный
+    // детектор трактуется как «чисто» (best-effort, как везде в этом контуре).
+    let textClean = true;
+    let textFound = "";
+    if (textGateOn) {
+      const scan = await scanImageUrl(fitted.url, opts.textBudget, "strict");
+      if (scan) {
+        textScanned += 1;
+        textClean = !scan.hasText || scan.approvedOk;
+        textFound = textClean ? "" : scan.text;
+      }
+    }
+
     const row: AiRefAttempt = {
       imageUrl: fitted.url,
       score: Math.max(0, verdict.score),
@@ -298,26 +365,48 @@ export async function healComposition(opts: {
       reasons: verdict.reasons,
       tech,
       ...(verdict.skipped ? { qaSkipped: true } : {}),
+      ...(textGateOn ? { textGate: { clean: textClean, found: textFound } } : {}),
     };
     attempts.push(row);
 
-    if (verdict.pass) {
+    // Победа — только когда сошлись ОБА контура: приёмка и чистота от текста.
+    // Иначе высокий score вернул бы в CRM ровно ту надпись, ради которой
+    // лечение и запускалось.
+    if (verdict.pass && textClean) {
       return {
         attempts,
-        winner: { imageUrl: fitted.url, pass: true, score: row.score, healingIndex: attempts.length - 1 },
+        winner: {
+          imageUrl: fitted.url,
+          pass: true,
+          score: row.score,
+          healingIndex: attempts.length - 1,
+          ...(textGateOn ? { textClean: true, textFound: "" } : {}),
+        },
+        ...(textGateOn ? { textScanned } : {}),
       };
     }
-    if (row.score > best.score) {
+    // Чистая от текста версия обходит грязную НЕЗАВИСИМО от score: иначе
+    // лечение с хорошей композицией и оставшимся «FS» победило бы вылеченную
+    // чистую. При равной чистоте решает score, как и раньше.
+    const cleaner = textClean && !best.textClean;
+    const better = cleaner || (textClean === best.textClean && row.score > best.score);
+    if (better) {
       best = {
         imageUrl: fitted.url,
         pass: false,
         score: row.score,
         healingIndex: attempts.length - 1,
         reasons: verdict.reasons,
+        textClean,
+        textFound,
       };
     }
   }
 
-  const { reasons: _ignored, ...winner } = best;
-  return { attempts, winner };
+  const { reasons: _ignored, textClean, textFound, ...rest } = best;
+  const winner: HealWinner = {
+    ...rest,
+    ...(textGateOn ? { textClean, textFound: textFound ?? "" } : {}),
+  };
+  return { attempts, winner, ...(textGateOn ? { textScanned } : {}) };
 }

@@ -373,6 +373,22 @@ function formatDateTime(iso: string | null): string {
                 </span>
               </p>
 
+              <!-- Текстовый гейт (TASK no-baked-text): надпись пережила и
+                   генерацию, и лечение. Ассет не падает (Спор 2 R-Plan) —
+                   менеджер видит прочитанный текст и решает сам; это же
+                   готовое ТЗ дизайнеру на ретушь. Показывается независимо от
+                   вердикта приёмки: картинка могла пройти QA с высоким score
+                   и всё равно нести «FS». -->
+              <p
+                v-if="a.status === 'done' && a.meta?.qa?.textGate && !a.meta.qa.textGate.clean"
+                class="asset__text-gate"
+                title="Детектор нашёл запечённый текст. Вариация настроена на баннеры без надписей."
+              >
+                ⚠ Обнаружен текст<template v-if="a.meta.qa.textGate.found">:
+                  «{{ a.meta.qa.textGate.found }}»</template>
+                — требуется ретушь
+              </p>
+
               <p v-if="safePreview && a.meta" class="asset__meta">
                 spec {{ a.meta.specKey }}@v{{ a.meta.specVersion }} ·
                 <template v-if="a.meta.safeZonePct">
@@ -904,6 +920,23 @@ function formatDateTime(iso: string | null): string {
   font-weight: 400;
   color: inherit;
   opacity: 0.85;
+}
+/* Бейдж текстового гейта (TASK no-baked-text). Красный, а не янтарный, как у
+   приёмки: приёмка сообщает «возможно, недостаточно хорошо», а этот — про
+   конкретный однозначный брак, который менеджер обязан заметить. */
+.asset__text-gate {
+  margin: 0;
+  font-size: 10.5px;
+  font-weight: 600;
+  color: #b91c1c;
+  background: #fee2e2;
+  border-radius: var(--radius-sm);
+  padding: 5px 8px;
+  line-height: 1.35;
+}
+:global(.dark) .asset__text-gate {
+  background: rgba(185, 28, 28, 0.18);
+  color: #fca5a5;
 }
 
 .modal {
