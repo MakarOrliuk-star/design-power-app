@@ -1296,7 +1296,17 @@ export async function processEditAssetJob(
 ): Promise<void> {
   const asset = await prisma.bundleAsset.findUnique({
     where: { id: assetId },
-    include: { variant: { select: { id: true, brandName: true } } },
+    include: {
+      variant: {
+        select: {
+          id: true,
+          brandName: true,
+          // Режим сборки формата нужен, чтобы правка не ломала контракт фона
+          // (см. ниже): у ai_reference это вырезанная композиция на белом.
+          bundle: { select: { bundleType: { select: { assets: true } } } },
+        },
+      },
+    },
   });
   if (!asset || asset.bundleId !== bundleId || asset.variantId !== variantId) return;
 
@@ -1314,10 +1324,31 @@ export async function processEditAssetJob(
     return;
   }
 
+  // Контракт фона зависит от режима сборки формата (правка 2026-08-17,
+  // заказчик: «нажимаю Edit — оно меняет фон»).
+  //
+  // Прежний промпт был написан под движковые рендеры и БЕЗУСЛОВНО требовал
+  // «full-bleed: фон на весь канвас». У ai_reference контракт ровно обратный:
+  // это вырезанная композиция на чисто-белом, из которой потом делается
+  // прозрачный ассет. Любая правка через Edit — «подвинь предмет», «поменяй
+  // цвет» — заодно заливала белый фон сплошной картинкой, и ассет переставал
+  // годиться для наложения. Плюс в том же промпте фон становился «сценой»,
+  // чего в этом режиме не должно быть вообще.
+  // Опциональная цепочка: обрыв связи не должен ронять правку. Фолбэк —
+  // прежнее full-bleed поведение, то есть режим движковых рендеров.
+  const typeAssets = (asset.variant?.bundle?.bundleType?.assets as unknown as BundleTypeAsset[]) ?? [];
+  const isAiReference =
+    typeAssets.find((a) => a.key === asset.assetKey)?.composeMode === "ai_reference";
+  const backgroundRule = isAiReference
+    ? "CRITICAL — do not touch the background: it must stay pure solid white (#FFFFFF), completely flat, with no " +
+      "scenery, gradients, glow, bokeh, light rays, patterns or cast shadows. This artwork is cut out from the " +
+      "white later, so filling the background or adding a scene destroys the asset. Keep every element's edges " +
+      "crisp against the white."
+    : "Full-bleed: the background must cover the entire canvas edge to edge, no borders or frames.";
   const prompt =
     `Based on the reference image, keep the same composition, characters, style and layout. ${editPrompt.trim()} ` +
     "Do not add text, letters, logos or watermarks. Keep the protected empty areas empty. " +
-    "Full-bleed: the background must cover the entire canvas edge to edge, no borders or frames.";
+    backgroundRule;
   const run = await runPersonFal(prompt, [sourceUrl], nearestFalAspect(asset.width, asset.height), null);
   if (!run.success || !run.imageUrl) {
     await fail(`edit: ${run.error ?? "unknown"}`);

@@ -121,6 +121,102 @@ function glowStops(hex: string, peak: number): string {
 }
 
 /**
+ * Проверка осмысленности свечения (TASK glow-fade-density, правка 2026-08-17,
+ * заказчик: «почистить от логических ошибок свечения»).
+ *
+ * Механика проблемы: пятно света стоит в ФИКСИРОВАННОЙ точке холста
+ * (`cxPct`/`cyPct` из профиля эталонов) и за объектом не следует. Если герой
+ * ушёл вбок, а пропсы сгруппировались с другой стороны, свет горит в пустоте —
+ * источник света ни к чему не привязан, и кадр читается как ошибка.
+ *
+ * Здесь МЫ НИЧЕГО НЕ ДВИГАЕМ: позиция снята с эталонов пиксельно, и менять её
+ * значило бы отменить ту работу для всех брендов сразу. Задача проверки —
+ * посчитать расхождение и показать его человеку.
+ *
+ * Мера — доля непрозрачных пикселей в ЯДРЕ свечения. Ядро, а не весь эллипс:
+ * градиент гауссов (exp(−4t²)), к краю альфа уходит в ноль, и «свет в пустоте»
+ * заметен именно там, где он яркий.
+ */
+export const GLOW_CORE_RATIO = 0.5;
+export const GLOW_SUBJECT_ALPHA_MIN = 128;
+/** Ниже — свет горит по большей части мимо объекта. */
+export const GLOW_MIN_SUBJECT_COVERAGE = 0.35;
+
+export interface GlowCheck {
+  /** Доля ядра свечения, накрытая непрозрачными пикселями (0–1). */
+  coverage: number;
+  /** Смещение центра масс объекта от центра свечения, в долях холста. */
+  offsetXPct: number;
+  offsetYPct: number;
+  ok: boolean;
+}
+
+/**
+ * Считает покрытие ядра свечения объектом. Вход — ЧИСТЫЙ ВЫРЕЗ (альфа = объект),
+ * до наложения эффектов. null — картинка не читается: проверка best-effort и
+ * ронять ассет не имеет права.
+ */
+export async function checkGlowCoverage(
+  cutoutPng: Buffer,
+  config: GlowConfig = DEFAULT_GLOW,
+): Promise<GlowCheck | null> {
+  try {
+    const { data, info } = await sharp(cutoutPng)
+      .ensureAlpha()
+      .raw()
+      .toBuffer({ resolveWithObject: true });
+    const { width, height } = info;
+    if (width <= 0 || height <= 0) return null;
+
+    const cx = config.cxPct * width;
+    const cy = config.cyPct * height;
+    const rx = Math.max(1, config.rxPct * width * GLOW_CORE_RATIO);
+    const ry = Math.max(1, config.ryPct * height * GLOW_CORE_RATIO);
+
+    let core = 0;
+    let covered = 0;
+    // Центр масс объекта считаем по ВСЕМУ кадру: он отвечает на вопрос «куда
+    // свет должен был бы светить», и без него одно число покрытия не говорит,
+    // насколько именно промахнулись.
+    let mass = 0;
+    let sumX = 0;
+    let sumY = 0;
+
+    for (let y = 0; y < height; y++) {
+      const dy = (y - cy) / ry;
+      for (let x = 0; x < width; x++) {
+        const a = data[(y * width + x) * 4 + 3]!;
+        const opaque = a >= GLOW_SUBJECT_ALPHA_MIN;
+        if (opaque) {
+          mass += 1;
+          sumX += x;
+          sumY += y;
+        }
+        const dx = (x - cx) / rx;
+        if (dx * dx + dy * dy > 1) continue; // вне ядра эллипса
+        core += 1;
+        if (opaque) covered += 1;
+      }
+    }
+    if (core === 0) return null;
+
+    const coverage = covered / core;
+    // Объекта нет вовсе (пустой вырез) — это провал вырезания, не свечения;
+    // смещение в таком случае неопределено, отдаём нули.
+    const offsetXPct = mass > 0 ? (sumX / mass - cx) / width : 0;
+    const offsetYPct = mass > 0 ? (sumY / mass - cy) / height : 0;
+    return {
+      coverage: Math.round(coverage * 1000) / 1000,
+      offsetXPct: Math.round(offsetXPct * 1000) / 1000,
+      offsetYPct: Math.round(offsetYPct * 1000) / 1000,
+      ok: coverage >= GLOW_MIN_SUBJECT_COVERAGE,
+    };
+  } catch {
+    return null;
+  }
+}
+
+/**
  * Слой свечения как отдельный RGBA-буфер размером с холст. SVG-градиент через
  * sharp — приём, уже используемый движком композиции (`renderContactShadow`).
  */

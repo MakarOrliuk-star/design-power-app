@@ -1026,6 +1026,9 @@ describe("processAiReferenceAsset — якорь отдаёт стиль дал�
     expect(style.describeCampaignStyle).toHaveBeenCalledWith(
       "https://cdn/fit.png",
       "VIP Exclusive weekend BONUS",
+      // TASK no-baked-text: режим текста уходит и в съём инвентаря — иначе
+      // буква с якоря попала бы в набор кампании и легализовала себя в push.
+      false,
     );
     expect(result).toEqual({
       ok: true,
@@ -1043,6 +1046,9 @@ describe("processAiReferenceAsset — якорь отдаёт стиль дал�
       refUrls: expect.arrayContaining([expect.stringContaining("http")]),
       variationText: "VIP Exclusive weekend BONUS",
       brandName: "Betnella",
+      // TASK no-baked-text: планировщик — главный канал утечки букв в
+      // push/pop-up, режим обязан доехать и до него.
+      allowText: false,
     });
     const parent = parentDoneCall()! as unknown as {
       data: { metadata: Record<string, unknown> & { qa: Record<string, unknown> } };

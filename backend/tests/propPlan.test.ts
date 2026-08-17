@@ -78,13 +78,65 @@ describe("planCampaignProps", () => {
 
   it("показывает референсы бренда и бриф, отдаёт готовую строку набора", async () => {
     visionMock.mockResolvedValue({ success: true, output: JSON.stringify(PLAN) });
-    const res = await planCampaignProps(opts);
+    const res = await planCampaignProps({ ...opts, allowText: true });
     expect(res.plan).toEqual(PLAN);
     expect(res.text).toContain("golden coin with a ruby");
     const call = visionMock.mock.calls[0]![0] as { imageUrls: string[]; prompt: string };
     expect(call.imageUrls).toHaveLength(PROP_PLAN_REFS_SHOWN);
     expect(call.prompt).toContain("Campaign brief: Lucky Friday reload");
     expect(call.prompt).toContain("Brand: Betnella.");
+  });
+
+  /**
+   * TASK no-baked-text: главный канал утечки текста на push/pop-up. Набор
+   * предметов уходит в промпт зависимого формата приказом «строй кадр из ЭТИХ
+   * объектов», поэтому буква в инвентаре сильнее любого запрета в контракте.
+   */
+  it("строгий режим: предметы-надписи выкашиваются из набора", async () => {
+    visionMock.mockResolvedValue({ success: true, output: JSON.stringify(PLAN) });
+    const res = await planCampaignProps(opts); // allowText по умолчанию false
+    expect(res.plan?.props).toEqual(["golden coin with a ruby", "red poker chip"]);
+    // keyProps чистится согласованно: осиротевшая ссылка сломала бы промпт.
+    expect(res.plan?.keyProps).toEqual([]);
+    expect(res.text).not.toContain("FS");
+  });
+
+  it("строгий режим: пример в промпте без букв, запрет надписей явный", async () => {
+    visionMock.mockResolvedValue({ success: true, output: JSON.stringify(PLAN) });
+    await planCampaignProps(opts);
+    const call = visionMock.mock.calls[0]![0] as { systemPrompt: string };
+    expect(call.systemPrompt).not.toContain("volumetric golden FS letter");
+    expect(call.systemPrompt).toContain("NEVER include lettering objects");
+    // Исключение заказчика — карты.
+    expect(call.systemPrompt).toContain("standard playing card");
+  });
+
+  it("набор состоял почти целиком из надписей → fail-open, а не набор из одного", async () => {
+    visionMock.mockResolvedValue({
+      success: true,
+      output: JSON.stringify({
+        props: ["volumetric golden FS letter", "BONUS sign", "golden coin with a ruby"],
+        keyProps: ["volumetric golden FS letter"],
+      }),
+    });
+    const res = await planCampaignProps(opts);
+    // Один предмет загнал бы все форматы в него же, повторённый десять раз.
+    expect(res.plan).toBeNull();
+    expect(res.text).toBe("");
+    expect(res.error).toContain("надпис");
+  });
+
+  it("игральная карта не считается надписью (исключение заказчика)", async () => {
+    visionMock.mockResolvedValue({
+      success: true,
+      output: JSON.stringify({
+        props: ["ace playing card with gold edges", "red poker chip", "golden crown"],
+        keyProps: ["ace playing card with gold edges"],
+      }),
+    });
+    const res = await planCampaignProps(opts);
+    expect(res.plan?.props).toContain("ace playing card with gold edges");
+    expect(res.plan?.keyProps).toEqual(["ace playing card with gold edges"]);
   });
 
   // Fail-open, как у styleAnchor: набор — улучшение, а не условие генерации.

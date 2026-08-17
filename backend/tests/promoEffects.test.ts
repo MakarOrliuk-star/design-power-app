@@ -3,6 +3,8 @@ import sharp from "sharp";
 import {
   applyBottomFade,
   applyPromoEffects,
+  checkGlowCoverage,
+  GLOW_MIN_SUBJECT_COVERAGE,
   DEFAULT_EFFECTS,
   DEFAULT_FADE,
   DEFAULT_GLOW,
@@ -204,5 +206,77 @@ describe("контраст текста в safe zone (R-I1)", () => {
 
   it("на тёмном фоне рекомендуется белый текст", () => {
     expect(recommendedTextColorFor(0.02)).toBe("#FFFFFF");
+  });
+});
+
+/**
+ * Проверка осмысленности свечения (правка 2026-08-17, заказчик: «почистить
+ * от логических ошибок свечения»).
+ *
+ * Пятно света стоит в ФИКСИРОВАННОЙ точке холста (позиция снята с эталонов
+ * пиксельно) и за объектом не следует. Композицию мы не двигаем — только
+ * измеряем расхождение и показываем человеку.
+ */
+describe("checkGlowCoverage", () => {
+  const W = 120;
+  const H = 60;
+
+  /** Прозрачный холст с непрозрачным блоком в заданном месте. */
+  async function cutout(left: number, top: number, w: number, h: number): Promise<Buffer> {
+    const block = await sharp({
+      create: { width: w, height: h, channels: 4, background: { r: 20, g: 20, b: 20, alpha: 1 } },
+    })
+      .png()
+      .toBuffer();
+    return sharp({
+      create: { width: W, height: H, channels: 4, background: { r: 0, g: 0, b: 0, alpha: 0 } },
+    })
+      .composite([{ input: block, left, top }])
+      .png()
+      .toBuffer();
+  }
+
+  it("объект под пятном света → ok", async () => {
+    // Крупный блок по центру: ядро эллипса накрыто целиком.
+    const res = await checkGlowCoverage(await cutout(20, 5, 80, 50), DEFAULT_GLOW);
+    expect(res).not.toBeNull();
+    expect(res!.coverage).toBeGreaterThan(GLOW_MIN_SUBJECT_COVERAGE);
+    expect(res!.ok).toBe(true);
+  });
+
+  it("объект ушёл в угол → свет горит в пустоте, ok=false", async () => {
+    const res = await checkGlowCoverage(await cutout(0, 0, 14, 10), DEFAULT_GLOW);
+    expect(res!.coverage).toBeLessThan(GLOW_MIN_SUBJECT_COVERAGE);
+    expect(res!.ok).toBe(false);
+    // Смещение центра масс говорит, НАСКОЛЬКО промахнулись: объект слева
+    // сверху от центра свечения — оба знака отрицательные.
+    expect(res!.offsetXPct).toBeLessThan(0);
+    expect(res!.offsetYPct).toBeLessThan(0);
+  });
+
+  it("пустой вырез: смещение неопределено и отдаётся нулями, без броска", async () => {
+    const empty = await sharp({
+      create: { width: W, height: H, channels: 4, background: { r: 0, g: 0, b: 0, alpha: 0 } },
+    })
+      .png()
+      .toBuffer();
+    const res = await checkGlowCoverage(empty, DEFAULT_GLOW);
+    expect(res!.coverage).toBe(0);
+    expect(res!.ok).toBe(false);
+    expect(res!.offsetXPct).toBe(0);
+    expect(res!.offsetYPct).toBe(0);
+  });
+
+  it("best-effort: нечитаемый буфер → null, исключение наружу не идёт", async () => {
+    expect(await checkGlowCoverage(Buffer.from("not an image"), DEFAULT_GLOW)).toBeNull();
+  });
+
+  it("мера считается по ЯДРУ: объект выше световой полосы не засчитывается", async () => {
+    // Свечение — широкая горизонтальная полоса (rxPct 1.0 против ryPct 0.52),
+    // поэтому ядро ограничивает именно ВЫСОТА. Полоса у верхней кромки лежит
+    // вне ядра целиком, хотя по ширине проходит через весь кадр.
+    const res = await checkGlowCoverage(await cutout(0, 0, W, 4), DEFAULT_GLOW);
+    expect(res!.coverage).toBe(0);
+    expect(res!.ok).toBe(false);
   });
 });

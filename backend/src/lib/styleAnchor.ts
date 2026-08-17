@@ -44,16 +44,59 @@ export interface CampaignStyleAnchor {
   rendering: string;
 }
 
-export const STYLE_ANCHOR_SYSTEM_PROMPT = [
-  "You are an art director describing an approved casino promo creative so that other formats of the SAME campaign can be produced in an identical visual style.",
-  "Look at the image and describe only what is reusable across formats — never its layout, framing or aspect ratio.",
-  "Be concrete and visual: name actual colors, the character's look and outfit, the prop family, the light direction and the rendering technique.",
-  'For "hands", state what kind of hands the character has (human hands, gloved cartoon hands, animal paws with claws, hooves) and how many digits one hand has, e.g. "human hands, five digits each" or "furry paws with four clawed toes". Use an empty string if no hand is visible.',
-  'For "propInventory", list the CONCRETE objects that appear in this creative — 6 to 10 of them, comma-separated, each with its material or finish, e.g. "golden coin with a ruby inlay, red poker chip, volumetric golden FS letter, green palm leaf, purple gift box with a gold ribbon". Name individual objects, not groups or piles, and ignore the character itself. This list becomes the prop set of the whole campaign, so be specific and complete.',
-  "Ignore the plain white background — it is a production requirement, not part of the style.",
-  'Respond with ONLY a JSON object, no prose, no markdown fences: {"palette": string, "character": string, "hands": string, "props": string, "propInventory": string, "lighting": string, "rendering": string}.',
-  'Each value is one short English phrase (max ~20 words), except "propInventory", which is the comma-separated list described above. Use an empty string if something is absent from the image.',
-].join("\n");
+/**
+ * Системный промпт съёмщика стиля (TASK no-baked-text, правка 2026-08-17).
+ *
+ * Второй канал утечки текста после планировщика: `propInventory` снимается с
+ * готового email и уходит в push/pop-up как набор кампании. Прежняя редакция
+ * приводила в пример «volumetric golden FS letter», и если на якоре буква
+ * всё-таки осталась, инвентарь её узаконивал — зависимые форматы получали
+ * прямое указание эту букву нарисовать.
+ */
+export function buildStyleAnchorSystemPrompt(allowText = false): string {
+  const inventoryExample = allowText
+    ? "golden coin with a ruby inlay, red poker chip, volumetric golden FS letter, green palm leaf, purple gift box with a gold ribbon"
+    : "golden coin with a ruby inlay, red poker chip, golden crown with red gems, green palm leaf, purple gift box with a gold ribbon";
+  const letteringRule = allowText
+    ? []
+    : [
+        'Never put lettering into "propInventory": no volumetric letters or words (FS, BONUS, WIN, VIP, 777), no signs, ' +
+          "plates, labels or banners carrying an inscription, no logos. If such an object appears in the image, SKIP it " +
+          "entirely — do not describe it and do not substitute a similar worded object. A standard playing card with its " +
+          "rank marks is fine.",
+      ];
+  return [
+    "You are an art director describing an approved casino promo creative so that other formats of the SAME campaign can be produced in an identical visual style.",
+    "Look at the image and describe only what is reusable across formats — never its layout, framing or aspect ratio.",
+    "Be concrete and visual: name actual colors, the character's look and outfit, the prop family, the light direction and the rendering technique.",
+    'For "hands", state what kind of hands the character has (human hands, gloved cartoon hands, animal paws with claws, hooves) and how many digits one hand has, e.g. "human hands, five digits each" or "furry paws with four clawed toes". Use an empty string if no hand is visible.',
+    `For "propInventory", list the CONCRETE objects that appear in this creative — 6 to 10 of them, comma-separated, each with its material or finish, e.g. "${inventoryExample}". Name individual objects, not groups or piles, and ignore the character itself. This list becomes the prop set of the whole campaign, so be specific and complete.`,
+    ...letteringRule,
+    "Ignore the plain white background — it is a production requirement, not part of the style.",
+    'Respond with ONLY a JSON object, no prose, no markdown fences: {"palette": string, "character": string, "hands": string, "props": string, "propInventory": string, "lighting": string, "rendering": string}.',
+    'Each value is one short English phrase (max ~20 words), except "propInventory", which is the comma-separated list described above. Use an empty string if something is absent from the image.',
+  ].join("\n");
+}
+
+/** Обратная совместимость: промпт в строгом режиме (новый дефолт). */
+export const STYLE_ANCHOR_SYSTEM_PROMPT = buildStyleAnchorSystemPrompt();
+
+/**
+ * Отсев позиций-надписей из снятого инвентаря (TASK no-baked-text). Список
+ * плоский, через запятую, поэтому фильтруем по элементам. Логика и регулярка
+ * намеренно совпадают с `propPlan.dropLetteringProps`: оба списка попадают в
+ * одно и то же место промпта, и разные правила давали бы разный результат в
+ * зависимости от того, сработал планировщик или фолбэк на съём с картинки.
+ */
+export function stripLetteringFromInventory(inventory: string): string {
+  const re =
+    /\b(letter|letters|lettering|word|words|text|typography|caption|headline|inscription|logo|signage|sign board|signboard|nameplate|name plate|label)\b|\b(fs|vip|win|bonus|jackpot|scatter|wild|777)\b/i;
+  return inventory
+    .split(",")
+    .map((p) => p.trim())
+    .filter((p) => p && (/\bplaying card\b/i.test(p) || !re.test(p)))
+    .join(", ");
+}
 
 export const STYLE_ANCHOR_PROMPT =
   "Describe the reusable visual style of this approved campaign creative. Answer with the JSON object only.";
@@ -144,18 +187,26 @@ export interface StyleAnchorResult {
 export async function describeCampaignStyle(
   imageUrl: string,
   variationText?: string,
+  /** Режим текста вариации (TASK no-baked-text); дефолт — строгий запрет. */
+  allowText = false,
 ): Promise<StyleAnchorResult> {
   const res = await runVisionQa({
     prompt: buildStyleAnchorPrompt(variationText),
     imageUrls: [imageUrl],
-    systemPrompt: STYLE_ANCHOR_SYSTEM_PROMPT,
+    systemPrompt: buildStyleAnchorSystemPrompt(allowText),
   });
   if (!res.success || !res.output) {
     return { text: "", propInventory: "", anchor: null, error: res.error ?? "vision недоступен" };
   }
-  const anchor = parseStyleAnchor(res.output);
-  if (!anchor) {
+  const parsed = parseStyleAnchor(res.output);
+  if (!parsed) {
     return { text: "", propInventory: "", anchor: null, error: "style-anchor-unparseable" };
   }
+  // Тот же детерминированный отсев, что у планировщика: инвентарь уходит в
+  // зависимые форматы приказом «строй кадр из ЭТИХ объектов», и одна
+  // пропущенная надпись даёт буквы во всех push и pop-up кампании.
+  const anchor = allowText
+    ? parsed
+    : { ...parsed, propInventory: stripLetteringFromInventory(parsed.propInventory) };
   return { text: formatStyleAnchor(anchor), propInventory: anchor.propInventory, anchor };
 }

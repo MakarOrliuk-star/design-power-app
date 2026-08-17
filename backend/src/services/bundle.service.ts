@@ -364,14 +364,57 @@ export async function editAsset(
   bundleId: string,
   assetId: string,
   prompt: string,
-): Promise<{ ok: true } | { ok: false; error: "not_editable" | "queue_unavailable" } | null> {
+): Promise<
+  | { ok: true }
+  | { ok: false; error: "not_editable" | "queue_unavailable" | "dependents_in_flight" }
+  | null
+> {
   const asset = await prisma.bundleAsset.findFirst({
     where: { id: assetId, bundleId },
-    select: { id: true, status: true, imageUrl: true, variantId: true },
+    select: {
+      id: true,
+      status: true,
+      imageUrl: true,
+      variantId: true,
+      assetKey: true,
+      variant: { select: { bundle: { select: { bundleType: { select: { assets: true } } } } } },
+    },
   });
   if (!asset) return null;
   // Only a finished asset with an image can be edited (Result-card button).
   if (asset.status !== "DONE" || !asset.imageUrl) return { ok: false, error: "not_editable" };
+
+  // Правка Edit по ЯКОРЮ, пока зависимые форматы в работе (правка 2026-08-17,
+  // заказчик: «нажимаю Edit — push и pop-up падают с ошибкой про email»).
+  //
+  // Механика была такая: editAsset переводил email в GENERATING, а задачи
+  // push/pop-up, вынутые из очереди уже после этого, звали loadAnchorContext,
+  // видели статус якоря != DONE и падали с «якорный ассет не сгенерирован —
+  // перегенерируйте его». То есть правка email убивала форматы, которые в
+  // этот момент честно генерировались.
+  //
+  // Чинить со стороны зависимых нельзя: ждать чужой правки они не должны, а
+  // взять СТАРУЮ картинку якоря — значит собрать кампанию в двух разных
+  // стилях. Поэтому запрещаем правку до конца прогона — тот же гейт, что
+  // уже стоит у regenerateAsset.
+  // Опциональная цепочка намеренно: правка — действие менеджера, и обрыв
+  // связи в данных должен деградировать до «гейт не отработал», а не до 500
+  // на кнопке Edit.
+  const typeAssets = (asset.variant?.bundle?.bundleType?.assets as unknown as BundleTypeAsset[]) ?? [];
+  const isAnchor = resolveStyleAnchorKey(typeAssets) === asset.assetKey;
+  if (isAnchor) {
+    const dependentKeys = dependentAiReferenceAssets(typeAssets).map((a) => a.key);
+    if (dependentKeys.length > 0) {
+      const busy = await prisma.bundleAsset.count({
+        where: {
+          variantId: asset.variantId,
+          assetKey: { in: dependentKeys },
+          status: { in: ["PENDING", "GENERATING"] },
+        },
+      });
+      if (busy > 0) return { ok: false, error: "dependents_in_flight" };
+    }
+  }
 
   await prisma.bundleAsset.update({
     where: { id: assetId },

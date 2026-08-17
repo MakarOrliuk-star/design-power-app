@@ -727,7 +727,13 @@ describe("processEditAssetJob (D9)", () => {
     width: 1200,
     height: 600,
     imageUrl: "https://cdn/email.png",
-    variant: { id: "v1", brandName: "Betnella(Men)" },
+    variant: {
+      id: "v1",
+      brandName: "Betnella(Men)",
+      // Режим сборки формата (правка 2026-08-17): от него зависит контракт
+      // фона в промпте правки. Здесь движковый рендер — прежний full-bleed.
+      bundle: { bundleType: { assets: [{ key: "email", label: "Email" }] } },
+    },
   };
 
   it("edits img2img from the CURRENT image and preserves the canvas size", async () => {
@@ -747,6 +753,48 @@ describe("processEditAssetJob (D9)", () => {
       data: { status: "DONE", imageUrl: "https://cdn/edited.png", errorMessage: null },
     });
     expect(recompute).toHaveBeenCalledWith("bun1");
+  });
+
+  /**
+   * Правка 2026-08-17 (заказчик: «нажимаю Edit — оно меняет фон»). Промпт
+   * правки безусловно требовал «full-bleed: фон на весь канвас», хотя у
+   * ai_reference контракт обратный — вырезанная композиция на чисто-белом.
+   * Любая правка заливала белое сплошной картинкой, и ассет переставал
+   * годиться для наложения.
+   */
+  it("ai_reference: правка сохраняет белый фон, а не заливает его сценой", async () => {
+    db.bundleAsset.findUnique.mockResolvedValue({
+      ...editRow,
+      variant: {
+        ...editRow.variant,
+        bundle: {
+          bundleType: {
+            assets: [{ key: "email", label: "Email", composeMode: "ai_reference" }],
+          },
+        },
+      },
+    });
+    fal.runPersonFal.mockResolvedValue({ success: true, imageUrl: "https://fal/edited.png" });
+    imageSize.probeImageSize.mockResolvedValue({ width: 1200, height: 600 });
+    cloud.uploadFromUrl.mockResolvedValue({ success: true, secure_url: "https://cdn/edited.png" });
+
+    await processEditAssetJob("bun1", "v1", "a1", "поменяй цвет платья");
+
+    const prompt = fal.runPersonFal.mock.calls[0]![0] as string;
+    expect(prompt).toContain("поменяй цвет платья");
+    expect(prompt).toContain("pure solid white");
+    expect(prompt).toContain("cut out from the white later");
+    expect(prompt).not.toContain("Full-bleed");
+  });
+
+  it("движковый рендер: прежний full-bleed сохраняется", async () => {
+    db.bundleAsset.findUnique.mockResolvedValue(editRow);
+    fal.runPersonFal.mockResolvedValue({ success: true, imageUrl: "https://fal/edited.png" });
+    imageSize.probeImageSize.mockResolvedValue({ width: 1200, height: 600 });
+    cloud.uploadFromUrl.mockResolvedValue({ success: true, secure_url: "https://cdn/edited.png" });
+
+    await processEditAssetJob("bun1", "v1", "a1", "x");
+    expect(fal.runPersonFal.mock.calls[0]![0]).toContain("Full-bleed");
   });
 
   it("re-expands (with bleed) to the canvas when the edit drifts the size", async () => {

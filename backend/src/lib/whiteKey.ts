@@ -75,11 +75,118 @@ export function floodFillBackground(
 }
 
 /**
+ * Сквозные отверстия (TASK no-baked-text, правка 2026-08-17).
+ *
+ * Заказчик: «объект должен быть сквозным, а она заполнила пустоту белым».
+ * Причина ровно в связности выше: заливка идёт ОТ КРАЁВ кадра, поэтому белое
+ * внутри замкнутого контура — дырка бублика, просвет между рукой и корпусом,
+ * отверстие подковы — остаётся непрозрачным. На белой подложке письма это не
+ * видно, а на цветной вылезает белая клякса внутри предмета.
+ *
+ * Снимать связность нельзя — она защищает БЕЛЫЕ ОБЪЕКТЫ (панама на герое из
+ * эталона `push1 ok`, белая карта в центре). Поэтому замкнутые области
+ * делятся на «дырки» и «объекты» по двум признакам:
+ *
+ * 1. ПЛОСКОСТЬ. Просвет фона — это заливка #FFFFFF, отрисованная моделью как
+ *    фон: разброс яркости в ней near-zero. У белого предмета есть светотень,
+ *    градиент и собственный контур — разброс заметный. Это главный признак.
+ * 2. ПЛОЩАДЬ. Очень крупная замкнутая область — почти наверняка не «дырка», а
+ *    композиционная проблема (например, кадр распался на две половины), и
+ *    выбивать её опасно: получим сквозную прореху в середине креатива.
+ *
+ * Порог плоскости намеренно жёсткий: ложно пробитый белый предмет — заметный
+ * брак, а пропущенная дырка всего лишь остаётся как было.
+ */
+export const HOLE_FLATNESS_MAX_SPREAD = 6;
+export const HOLE_MAX_AREA_RATIO = 0.12;
+/** Мельче — это антиалиасинг и мусор, а не отверстие. */
+export const HOLE_MIN_AREA_PX = 24;
+
+export interface EnclosedRegion {
+  pixels: number[];
+  /** Разброс яркости (max-min) — признак «плоская заливка фона». */
+  spread: number;
+  /** Доля площади кадра. */
+  areaRatio: number;
+  /** Прошла ли область оба критерия «это отверстие». */
+  isHole: boolean;
+}
+
+/**
+ * Замкнутые белые области: почти белые пиксели, НЕ связанные с краями кадра
+ * (то есть не попавшие в `bg`). Возвращаются с метриками и вердиктом.
+ */
+export function findEnclosedWhiteRegions(
+  gray: Uint8Array,
+  bg: Uint8Array,
+  width: number,
+  height: number,
+  threshold = BG_LUMA_MIN,
+): EnclosedRegion[] {
+  const n = width * height;
+  const seen = new Uint8Array(n);
+  const regions: EnclosedRegion[] = [];
+  const stack = new Int32Array(n);
+
+  for (let start = 0; start < n; start++) {
+    if (seen[start] === 1 || bg[start] === 1 || gray[start]! < threshold) continue;
+    let top = 0;
+    stack[top++] = start;
+    seen[start] = 1;
+    const pixels: number[] = [];
+    let min = 255;
+    let max = 0;
+
+    while (top > 0) {
+      const i = stack[--top]!;
+      pixels.push(i);
+      const g = gray[i]!;
+      if (g < min) min = g;
+      if (g > max) max = g;
+      const x = i % width;
+      const y = (i - x) / width;
+      const push = (j: number) => {
+        if (seen[j] === 1 || bg[j] === 1 || gray[j]! < threshold) return;
+        seen[j] = 1;
+        stack[top++] = j;
+      };
+      if (x > 0) push(i - 1);
+      if (x < width - 1) push(i + 1);
+      if (y > 0) push(i - width);
+      if (y < height - 1) push(i + width);
+    }
+
+    const spread = max - min;
+    const areaRatio = pixels.length / n;
+    const isHole =
+      pixels.length >= HOLE_MIN_AREA_PX &&
+      spread <= HOLE_FLATNESS_MAX_SPREAD &&
+      areaRatio <= HOLE_MAX_AREA_RATIO;
+    regions.push({ pixels, spread, areaRatio, isHole });
+  }
+  return regions;
+}
+
+/**
  * Вырезание белого фона: RGB сохраняется, меняется только альфа.
  * Фоновые пиксели прозрачны, кромка объектов — полупрозрачна по яркости,
  * всё остальное непрозрачно.
+ *
+ * Замкнутые плоско-белые области выбиваются вместе с фоном (см.
+ * `findEnclosedWhiteRegions`) — иначе предмет с отверстием не сквозной.
  */
-export async function keyWhiteBackground(input: Buffer): Promise<Buffer> {
+export interface WhiteKeyResult {
+  png: Buffer;
+  /** 1 = сквозное отверстие; нужна слиянию с Bria (см. mergeCutoutAlpha). */
+  holeMask: Uint8Array;
+  /** Сколько отверстий пробито — уходит в metadata и логи. */
+  holes: number;
+  /** Замкнутые белые области, НЕ признанные отверстиями (белые предметы). */
+  keptWhiteRegions: number;
+}
+
+/** Вырезание + маска отверстий. `keyWhiteBackground` — обёртка над ней. */
+export async function keyWhiteBackgroundDetailed(input: Buffer): Promise<WhiteKeyResult> {
   const { data, info } = await sharp(input)
     .removeAlpha()
     .raw()
@@ -92,6 +199,24 @@ export async function keyWhiteBackground(input: Buffer): Promise<Buffer> {
     gray[i] = Math.round(luma(data[i * 3]!, data[i * 3 + 1]!, data[i * 3 + 2]!));
   }
   const bg = floodFillBackground(gray, width, height);
+
+  // Отверстия внутри объектов трактуем как фон: дальше по коду они получают и
+  // нулевую альфу, и ту же мягкую кромку, что внешний контур, — без этого по
+  // краю дырки осталась бы белая «пила».
+  const holeMask = new Uint8Array(n);
+  let holes = 0;
+  let keptWhiteRegions = 0;
+  for (const region of findEnclosedWhiteRegions(gray, bg, width, height)) {
+    if (!region.isHole) {
+      if (region.pixels.length >= HOLE_MIN_AREA_PX) keptWhiteRegions += 1;
+      continue;
+    }
+    holes += 1;
+    for (const i of region.pixels) {
+      bg[i] = 1;
+      holeMask[i] = 1;
+    }
+  }
 
   // Расстояние до фона в пределах радиуса мягкой кромки: 0 = сам фон.
   const dist = new Uint8Array(n).fill(255);
@@ -139,9 +264,15 @@ export async function keyWhiteBackground(input: Buffer): Promise<Buffer> {
     out[i * 4 + 3] = 255;
   }
 
-  return sharp(out, { raw: { width, height, channels: 4 } })
+  const png = await sharp(out, { raw: { width, height, channels: 4 } })
     .png({ compressionLevel: 9 })
     .toBuffer();
+  return { png, holeMask, holes, keptWhiteRegions };
+}
+
+/** Обратная совместимость: только PNG, без маски отверстий. */
+export async function keyWhiteBackground(input: Buffer): Promise<Buffer> {
+  return (await keyWhiteBackgroundDetailed(input)).png;
 }
 
 /**
@@ -152,7 +283,19 @@ export async function keyWhiteBackground(input: Buffer): Promise<Buffer> {
  * объекты, которые Bria сочла фоном и стёрла в ноль. Максимум даёт и то, и
  * другое; цвет берётся из вырезки Bria (у неё кромка уже очищена от белого).
  */
-export async function mergeCutoutAlpha(briaPng: Buffer, keyedPng: Buffer): Promise<Buffer> {
+export async function mergeCutoutAlpha(
+  briaPng: Buffer,
+  keyedPng: Buffer,
+  /**
+   * Маска сквозных отверстий из белого кея (правка 2026-08-17). Обязательна
+   * для гибридного режима: Bria сегментирует объект СПЛОШНЫМ силуэтом, её
+   * альфа внутри дырки равна 255, и максимум альф вернул бы белую кляксу
+   * обратно — то есть исправление отверстий не работало бы в дефолтном режиме.
+   * В маске отверстие всегда побеждает: это не «кто лучше видит кромку», а
+   * знание о том, что там фон.
+   */
+  holeMask?: Uint8Array,
+): Promise<Buffer> {
   const bria = await sharp(briaPng).ensureAlpha().raw().toBuffer({ resolveWithObject: true });
   const width = bria.info.width;
   const height = bria.info.height;
@@ -166,6 +309,11 @@ export async function mergeCutoutAlpha(briaPng: Buffer, keyedPng: Buffer): Promi
 
   const n = width * height;
   const out = Buffer.alloc(n * 4);
+  // Маска считалась на размере исходника; при расхождении размеров (Bria
+  // отдала другой канвас) её индексы уже не совпадают — тогда безопаснее её
+  // не применять, чем пробить дырки в случайных местах.
+  const holes = holeMask && holeMask.length === n ? holeMask : null;
+
   for (let i = 0; i < n; i++) {
     const aB = bria.data[i * 4 + 3]!;
     const aK = keyed.data[i * 4 + 3]!;
@@ -174,7 +322,8 @@ export async function mergeCutoutAlpha(briaPng: Buffer, keyedPng: Buffer): Promi
     out[i * 4] = src[i * 4]!;
     out[i * 4 + 1] = src[i * 4 + 1]!;
     out[i * 4 + 2] = src[i * 4 + 2]!;
-    out[i * 4 + 3] = useKeyed ? aK : aB;
+    // Отверстие сильнее обеих альф: Bria его не видит по построению.
+    out[i * 4 + 3] = holes?.[i] === 1 ? 0 : useKeyed ? aK : aB;
   }
   return sharp(out, { raw: { width, height, channels: 4 } })
     .png({ compressionLevel: 9 })

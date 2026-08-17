@@ -73,7 +73,13 @@ const ANATOMY_RULE =
   "If any issue above is about hands, fingers, limbs or anatomy, redraw that hand completely until it is " +
   "correct — this is the one place where you MAY change the drawing beyond a minimal retouch; if a correct " +
   "hand is impossible in this pose, hide it behind a prop or behind the body instead. Never leave fused, " +
-  "extra, missing or backwards-bent fingers, and never break a hand that was already correct; ";
+  "extra, missing or backwards-bent fingers, and never break a hand that was already correct; " +
+  // Усиление 2026-08-17: ретушь по замечанию «четыре пальца» раньше правила
+  // ту же позу и приносила те же четыре пальца. Разрешаем СМЕНИТЬ позу кисти
+  // на простую — это единственная надёжная починка руки.
+  "when you redraw a hand, you MAY change its pose to a simpler one that is hard to get wrong — a fist, a hand " +
+  "gripping a prop, a thumbs-up, or a hand partly hidden behind a prop — rather than repairing an open spread " +
+  "palm finger by finger; keep the arm and the rest of the body where they are; ";
 
 export function buildHealingPrompt(
   reasons: string[],
