@@ -108,6 +108,40 @@ describe("prompt-presets (зеркало админки для CRM_SUPER)", () =
     const res = await request(makeApp()).delete("/api/crm-admin/prompt-presets/ghost");
     expect(res.status).toBe(404);
   });
+
+  // TASK no-baked-text: режим текста живёт на вариации, дефолт — строгий.
+  it("POST без allowText создаёт вариацию в строгом режиме", async () => {
+    db.neuralPromptPreset.create.mockResolvedValue({ id: "p3", title: "VIP", text: "t" });
+    await request(makeApp()).post("/api/crm-admin/prompt-presets").send({ title: "VIP", text: "t" });
+    expect(db.neuralPromptPreset.create).toHaveBeenCalledWith(
+      expect.objectContaining({ data: expect.objectContaining({ allowText: false }) }),
+    );
+  });
+
+  it("PATCH переключает allowText, но только строгим boolean", async () => {
+    db.neuralPromptPreset.update.mockResolvedValue({ id: "p1", allowText: true });
+    const ok = await request(makeApp())
+      .patch("/api/crm-admin/prompt-presets/p1")
+      .send({ allowText: true });
+    expect(ok.status).toBe(200);
+    expect(db.neuralPromptPreset.update).toHaveBeenCalledWith(
+      expect.objectContaining({ data: { allowText: true } }),
+    );
+
+    // Строка "false" truthy — такой пресет молча разрешил бы надписи.
+    const bad = await request(makeApp())
+      .patch("/api/crm-admin/prompt-presets/p1")
+      .send({ allowText: "false" });
+    expect(bad.status).toBe(400);
+  });
+
+  it("PATCH без allowText не трогает режим", async () => {
+    db.neuralPromptPreset.update.mockResolvedValue({ id: "p1" });
+    await request(makeApp()).patch("/api/crm-admin/prompt-presets/p1").send({ title: "Новое" });
+    expect(db.neuralPromptPreset.update).toHaveBeenCalledWith(
+      expect.objectContaining({ data: { title: "Новое" } }),
+    );
+  });
 });
 
 describe("GET /bundle-refs", () => {

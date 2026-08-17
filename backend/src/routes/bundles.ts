@@ -80,7 +80,9 @@ bundlesRouter.get("/meta", async (_req: Request, res: Response) => {
     prisma.neuralPromptPreset.findMany({
       where: { isActive: true },
       orderBy: [{ order: "asc" }, { createdAt: "asc" }],
-      select: { id: true, title: true, text: true },
+      // allowText — только для показа режима в мастере (TASK no-baked-text):
+      // менеджер видит, будет ли текст, но меняет настройку в админке.
+      select: { id: true, title: true, text: true, allowText: true },
     }),
     listBundleBrands(),
   ]);
@@ -225,6 +227,13 @@ interface AssetPreviewMeta {
     /** Оценка победителя и порог приёмки (TASK multiformat-promo, DI2-5). */
     score: number | null;
     threshold: number | null;
+    /**
+     * Текстовый гейт финального ассета (TASK no-baked-text). null — режим
+     * «текст разрешён» либо legacy-ассет, сгенерированный до правки.
+     * `clean: false` — надпись осталась после лечения: ассет отдан менеджеру
+     * с предупреждением, а `found` содержит прочитанный текст (ТЗ на ретушь).
+     */
+    textGate: { clean: boolean; found: string; skipped: boolean } | null;
   } | null;
 }
 
@@ -298,6 +307,7 @@ function projectQaMeta(raw: unknown): AssetPreviewMeta["qa"] {
     chosen && typeof chosen === "object" && typeof (chosen as Record<string, unknown>).score === "number"
       ? ((chosen as Record<string, unknown>).score as number)
       : null;
+  const gate = q.textGate as Record<string, unknown> | null | undefined;
   return {
     passed: q.qaPassed,
     attempts: attempts.length,
@@ -305,6 +315,14 @@ function projectQaMeta(raw: unknown): AssetPreviewMeta["qa"] {
     healing,
     score: chosenScore,
     threshold: typeof q.threshold === "number" ? q.threshold : null,
+    textGate:
+      gate && typeof gate.clean === "boolean"
+        ? {
+            clean: gate.clean,
+            found: typeof gate.found === "string" ? gate.found : "",
+            skipped: gate.skipped === true,
+          }
+        : null,
   };
 }
 

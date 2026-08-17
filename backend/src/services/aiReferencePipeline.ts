@@ -28,6 +28,8 @@ import { describeCampaignStyle } from "../lib/styleAnchor.js";
 import { planCampaignProps } from "../lib/propPlan.js";
 import { healComposition } from "./aiHealing.js";
 import type { AiRefAttempt } from "./aiHealing.js";
+import { scanImageUrl, newScanBudget } from "../lib/textScan.js";
+import type { ScanBudget } from "../lib/textScan.js";
 import { pickGenerationRefs } from "./variationRefs.js";
 import { recomputeBundleStatus, stripGenderName, heroGenderFromBrand } from "./bundle.service.js";
 import type { HeroGender } from "./bundle.service.js";
@@ -261,11 +263,62 @@ export const AI_REF_ANATOMY_CONTRACT =
   "behind a prop or behind the body — a hidden hand is fine, a malformed one ruins the whole creative.";
 
 /**
+ * Правило текста в промпте ГЕНЕРАЦИИ (TASK no-baked-text, 2026-08-17).
+ *
+ * До этой правки правило было захардкожено в обоих контрактах и звучало как
+ * «STRICTLY NO text… the only lettering allowed is FS, SCATTER, BONUS, VIP,
+ * WILD or 777». Заказчик жаловался, что модель «самовольно» пишет FS и
+ * «Free spins», — на деле она исполняла наш собственный белый список, где FS
+ * стоит первым словом. Теперь список живёт только в разрешающем режиме.
+ *
+ * Строгая редакция намеренно не ограничивается отрицаниями: «no text» без
+ * позитивной альтернативы модель отрабатывает плохо, поэтому каждому носителю
+ * надписи (барабан, фишка, ящик) сразу выдаётся замена — орнамент или символ.
+ *
+ * Исключение для игральных карт сформулировано как свойство ОБЪЕКТА, а не как
+ * список разрешённых букв: перечисление «можно A, K, Q, J» модель читает как
+ * лицензию на буквы вообще и переносит их на фишки и барабаны — ровно та
+ * ошибка, что была в прежней редакции.
+ */
+export function textRuleForPrompt(allowText: boolean): string {
+  if (allowText) {
+    return (
+      "STRICTLY NO text, captions, headlines, CTA buttons, logos or watermarks anywhere; the only lettering " +
+      "allowed is short casino words that naturally belong to props (slot reels, chips, medallions), such as " +
+      "FS, SCATTER, BONUS, VIP, WILD or 777."
+    );
+  }
+  return (
+    "ABSOLUTELY NO TEXT: the image must contain no letters, no words, no numbers, no digits, no logos, no " +
+    "brand marks, no watermarks, no captions, no headlines and no CTA buttons — nowhere, at no size, not even " +
+    "tiny, blurred or partially hidden ones. Every surface that would normally carry lettering stays clean: " +
+    "slot reels show PICTORIAL symbols only (fruits, gems, bells, stars, crowns — never the digits 777 and " +
+    "never a written word), casino chips are BLANK with no denomination numbers on them, crates, medallions, " +
+    "coins, ribbons and banners carry ORNAMENT only — patterns, engraving, gems — never an inscription. " +
+    "THE ONLY EXCEPTION is a standard playing card, which may show its natural rank marks and suit pips, " +
+    "because those marks are part of the card object itself; nothing else in the frame may carry a symbol. " +
+    // Референсы — это ГОТОВЫЕ баннеры, и текст на них есть почти всегда. Без
+    // этой оговорки модель считает надписи частью визуального языка бренда,
+    // который ей велено воспроизвести, и переносит их в новый кадр.
+    "The reference banners you are given are finished advertisements and DO contain headlines and promo " +
+    "wording — that wording is NOT part of the style you must reproduce. Copy their palette, lighting, " +
+    "rendering and props, and leave every piece of their text behind."
+  );
+}
+
+/**
  * Композиционный контракт (аналог PERSON_LAYER_CONTRACT): зашит в код, чтобы
  * админский текст вариации отвечал за СМЫСЛ, а форма кадра была стабильной.
- * Правило текста — A-1: только короткие казино-слова на пропсах.
+ *
+ * Правило текста — параметр (TASK no-baked-text): режим задаётся вариацией
+ * (`NeuralPromptPreset.allowText`), дефолт — строгий запрет.
  */
-export const AI_REF_COMPOSITION_CONTRACT =
+export function buildCompositionContract(opts?: { allowText?: boolean }): string {
+  return AI_REF_COMPOSITION_BODY + textRuleForPrompt(opts?.allowText ?? false) + AI_REF_COMPOSITION_TAIL;
+}
+
+/** Тело контракта якоря без правила текста (оно подставляется режимом). */
+const AI_REF_COMPOSITION_BODY =
   // A-2 (2026-08-05, по итогам первого живого прогона): фон — чисто-белый под
   // вырезание removeBg, центр канваса полностью пустой (там наш текст-слой),
   // раскладка «треугольником» + depth-of-field, ключевые объекты не у краёв.
@@ -304,11 +357,17 @@ export const AI_REF_COMPOSITION_CONTRACT =
   "The middle half of the canvas stays untouched white — adding props there instead of stacking them " +
   "on the sides is the single worst mistake you can make in this layout. " +
   "EDGES: the character and all key props stay fully inside the frame with a clear margin from the " +
-  "canvas edges; only minor decorative props may approach the edges. " +
-  "STRICTLY NO text, captions, headlines, CTA buttons, logos or watermarks anywhere; the only lettering " +
-  "allowed is short casino words that naturally belong to props (slot reels, chips, medallions), such as " +
-  "FS, SCATTER, BONUS, VIP, WILD or 777. Professional advertising quality, coherent lighting across " +
-  "all elements.";
+  "canvas edges; only minor decorative props may approach the edges. ";
+
+/** Хвост контракта якоря — идёт СРАЗУ после правила текста. */
+const AI_REF_COMPOSITION_TAIL =
+  " Professional advertising quality, coherent lighting across all elements.";
+
+/**
+ * Обратная совместимость: контракт с дефолтным (строгим) режимом текста.
+ * Тот же приём, что у `AI_REF_SECONDARY_CONTRACT` ниже.
+ */
+export const AI_REF_COMPOSITION_CONTRACT = buildCompositionContract();
 
 /**
  * Сходство персонажа с референсами (правка 2026-08-13, запрос заказчика:
@@ -371,11 +430,13 @@ export function buildAiReferencePrompt(
   variationText: string,
   gender: HeroGender | null = null,
   fidelity: CharacterFidelity = DEFAULT_CHARACTER_FIDELITY,
+  /** Режим текста вариации (TASK no-baked-text); дефолт — строгий запрет. */
+  allowText = false,
 ): string {
   const brief = variationText.trim();
   return [
     brief ? `Campaign brief: ${brief}.` : "",
-    AI_REF_COMPOSITION_CONTRACT,
+    buildCompositionContract({ allowText }),
     characterFidelityInstruction(fidelity),
     AI_REF_ANATOMY_CONTRACT,
     heroGenderInstruction(gender),
@@ -463,22 +524,34 @@ export function buildSecondaryContract(opts?: {
    * старое поведение «подбери свои»: legacy-бандлы и fail-open.
    */
   propInventory?: string;
+  /** Режим текста вариации (TASK no-baked-text); дефолт — строгий запрет. */
+  allowText?: boolean;
 }): string {
   const cap = clampMaxProps(opts?.maxProps);
   const min = clampMinProps(opts?.minProps, cap);
   const wide = opts?.wide ?? false;
+  const allowText = opts?.allowText ?? false;
   const propInventory = opts?.propInventory ?? "";
+  // Крупный объект широкого формата (push). До TASK no-baked-text здесь стояли
+  // «объёмные буквы FS, BONUS, VIP, 777 как полноценный пропс» — это был третий
+  // и самый прямой источник надписей на push: белый список из общего правила
+  // текста тут ещё и подкреплялся требованием сделать буквы КРУПНЫМИ. В строгом
+  // режиме место крупного объекта занимают объёмные предметы без единого знака.
+  const bigPiece = allowText
+    ? "oversized volumetric casino lettering (FS, BONUS, VIP, 777) works as a full-blown prop, not as a caption"
+    : "oversized volumetric objects work as full-blown props — a giant gem, crown, coin, star, gift box, " +
+      "trophy cup or treasure medallion, all of them WITHOUT any letters or numbers on them";
   const scale = wide
     ? "SCALE (wide format): the props are BIG — the largest ones stand as tall as a third of the canvas " +
-      "height, and oversized volumetric casino lettering (FS, BONUS, VIP, 777) works as a full-blown prop, " +
-      "not as a caption. Mix two or three of these large pieces with the smaller ones; a frame built only " +
+      `height, and ${bigPiece}. Mix two or three of these large pieces with the smaller ones; a frame built only ` +
       "from small props reads as empty in this aspect ratio. "
     : "SCALE: keep the props clearly smaller than the character, mixing a few medium ones near the hero " +
       "with smaller ones further out. "
   const depth = wide
-    ? "DEPTH: a few large decorative pieces — foliage, fabric, ribbons, oversized lettering — may sit BEHIND " +
-      "the hero and run off the canvas edges, framing the character and giving the shot depth. Keep them " +
-      "softer and lower in contrast than the hero so they stay background. "
+    ? "DEPTH: a few large decorative pieces — foliage, fabric, ribbons" +
+      (allowText ? ", oversized lettering" : ", oversized gems and ornaments") +
+      " — may sit BEHIND the hero and run off the canvas edges, framing the character and giving the shot " +
+      "depth. Keep them softer and lower in contrast than the hero so they stay background. "
     : "";
   // Набор предметов кампании (правка 2026-08-15, заказчик: «предметы не должны
   // быть рандомными — общая композиция промо по референсам и промпту»).
@@ -565,9 +638,8 @@ export function buildSecondaryContract(opts?: {
     "EDGES: the character and the prop in their hands stay fully inside the frame. Small floating props, on the contrary, may " +
     "run past the canvas edges and be partly cropped — that is how the reference layouts breathe; just never crop them so " +
     "much that they become unreadable. " +
-    "STRICTLY NO text, captions, headlines, CTA buttons, logos or watermarks anywhere; the only lettering allowed is short " +
-    "casino words that naturally belong to props (slot reels, chips, medallions), such as FS, SCATTER, BONUS, VIP, WILD or 777. " +
-    "Professional advertising quality, coherent lighting across all elements."
+    textRuleForPrompt(allowText) +
+    " Professional advertising quality, coherent lighting across all elements."
   );
 }
 
@@ -617,6 +689,8 @@ export function buildSecondaryPrompt(opts: {
   fidelity?: CharacterFidelity;
   /** Набор предметов кампании с якоря; пусто — модель подбирает сама. */
   propInventory?: string;
+  /** Режим текста вариации (TASK no-baked-text); дефолт — строгий запрет. */
+  allowText?: boolean;
 }): string {
   const brief = opts.variationText.trim();
   // Широкий формат определяем по геометрии, а не по ключу ассета: ключи
@@ -626,6 +700,7 @@ export function buildSecondaryPrompt(opts: {
     ...(opts.minProps !== undefined ? { minProps: opts.minProps } : {}),
     wide: opts.targetW / opts.targetH >= 1.6,
     propInventory: opts.propInventory ?? "",
+    allowText: opts.allowText ?? false,
   });
   const contract = opts.hasAnchor
     ? base
@@ -653,6 +728,81 @@ export function buildSecondaryPrompt(opts: {
 // Тип попытки (генерации и лечения) живёт в aiHealing.ts; ре-экспорт
 // сохраняет прежний импорт для тестов и соседних модулей.
 export type { AiRefAttempt } from "./aiHealing.js";
+
+/** Вердикт текстового гейта по одному кандидату (TASK no-baked-text). */
+export interface TextGateVerdict {
+  clean: boolean;
+  /** Что прочитал детектор («FS», «Free spins»); пусто, когда чисто. */
+  found: string;
+  /** true — детектор недоступен: вердикта нет, кандидат пропущен как есть. */
+  skipped: boolean;
+}
+
+/** Кандидат текстового гейта: уже сгенерированная и сохранённая картинка. */
+export interface TextGateCandidate {
+  index: number;
+  imageUrl: string;
+}
+
+export interface TextGateOutcome {
+  /** Индекс выбранного кандидата в `attempts`. */
+  index: number;
+  verdict: TextGateVerdict;
+  /** Сколько картинок реально просканировано (контроль расходов). */
+  scanned: number;
+}
+
+/**
+ * Ленивый выбор кандидата без запечённого текста (TASK no-baked-text, Спор 1
+ * R-Plan).
+ *
+ * Кандидаты приходят в порядке предпочтения (принятые приёмкой и с бо́льшим
+ * score — первыми). Сканируем по одному и возвращаем ПЕРВОГО чистого: в норме
+ * это один дешёвый vision-вызов, а уже сгенерированная чистая картинка всегда
+ * дешевле, чем вызов gpt-image-2/edit ради ретуши.
+ *
+ * Детектор недоступен (нет ключа, бюджет исчерпан, транспорт лёг) →
+ * `skipped: true` и кандидат считается пригодным: сбой провайдера не имеет
+ * права ронять генерацию — это тот же принцип best-effort, на котором стоит
+ * весь textScan и приёмка.
+ */
+export async function pickTextCleanCandidate(
+  candidates: TextGateCandidate[],
+  budget: ScanBudget,
+): Promise<TextGateOutcome> {
+  const first = candidates[0];
+  // Вызывающий гарантирует непустой список; пустой — программная ошибка,
+  // но ронять из-за неё генерацию нельзя.
+  if (!first) return { index: -1, verdict: { clean: true, found: "", skipped: true }, scanned: 0 };
+
+  let scanned = 0;
+  let firstVerdict: TextGateVerdict | null = null;
+
+  for (const candidate of candidates) {
+    const scan = await scanImageUrl(candidate.imageUrl, budget, "strict");
+    if (!scan) {
+      // Транспорт/бюджет: дальше сканировать бессмысленно — та же причина
+      // повторится на каждом следующем кандидате.
+      const verdict: TextGateVerdict = { clean: true, found: "", skipped: true };
+      return { index: firstVerdict ? first.index : candidate.index, verdict: firstVerdict ?? verdict, scanned };
+    }
+    scanned += 1;
+    // approvedOk — ручной whitelist «пометить ок» из админки: если человек уже
+    // посмотрел эти байты и признал их нормальными, вердикт модели не спорит.
+    const clean = !scan.hasText || scan.approvedOk;
+    const verdict: TextGateVerdict = { clean, found: clean ? "" : scan.text, skipped: false };
+    if (clean) return { index: candidate.index, verdict, scanned };
+    firstVerdict ??= verdict;
+  }
+
+  // Чистых нет: возвращаем лучшего по приёмке с его замечанием — оно уйдёт
+  // в лечение готовым ТЗ («сотри надпись FS»).
+  return {
+    index: first.index,
+    verdict: firstVerdict ?? { clean: true, found: "", skipped: true },
+    scanned,
+  };
+}
 
 interface ChosenAttempt {
   index: number;
@@ -840,7 +990,9 @@ export async function processAiReferenceAsset(opts: {
     select: {
       neuralPrompt: true,
       presetId: true,
-      preset: { select: { title: true, text: true } },
+      // allowText — режим текста кампании (TASK no-baked-text). Живёт на
+      // вариации, а не на бандле: заказчик выбрал именно этот уровень.
+      preset: { select: { title: true, text: true, allowText: true } },
     },
   });
   if (!bundle) return { ok: false }; // bundle удалён — no-op
@@ -877,6 +1029,11 @@ export async function processAiReferenceAsset(opts: {
   // Бриф: текст бандла (мастер заполняет его из вариации, но может уточнить);
   // пустой — сам текст вариации.
   const variationText = bundle.neuralPrompt.trim() || bundle.preset.text;
+  // Режим текста кампании (TASK no-baked-text). Один и тот же флаг обязан уйти
+  // в промпт генерации, в чек-лист приёмки, в детектор и в промпт лечения —
+  // расхождение любых двух даёт петлю «сгенерировали → забраковали → вылечили
+  // обратно».
+  const allowText = bundle.preset.allowText;
 
   let genUrls: string[];
   let prompt: string;
@@ -893,7 +1050,7 @@ export async function processAiReferenceAsset(opts: {
     } catch (err) {
       console.warn(`⚠ ai-ref layout-guide#${assetId}: ${err instanceof Error ? err.message : err}`);
     }
-    prompt = buildAiReferencePrompt(variationText, heroGender, fidelity) + guideInstruction;
+    prompt = buildAiReferencePrompt(variationText, heroGender, fidelity, allowText) + guideInstruction;
   } else {
     // DI2-3: первым слотом идёт якорная композиция кампании, дальше —
     // референсы своего формата. Схема-раскладки у зависимых нет (DI2-4),
@@ -928,6 +1085,7 @@ export async function processAiReferenceAsset(opts: {
       gender: heroGender,
       fidelity,
       propInventory,
+      allowText,
     }) + propsGuideInstruction;
   }
   const aspect = nearestFalAspect(targetW, targetH);
@@ -1037,6 +1195,7 @@ export async function processAiReferenceAsset(opts: {
       gender: heroGender,
       fidelity,
       ...(propInventory ? { propInventory } : {}),
+      allowText,
     });
     const attemptRow: AiRefAttempt = {
       imageUrl: fitted.url,
@@ -1079,13 +1238,73 @@ export async function processAiReferenceAsset(opts: {
   // Победитель лечения (или исходник, если лучше не стало) — финальная база.
   // Порядок предпочтения: принятая приёмкой → забракованная приёмкой →
   // забракованная техникой (её лечим ниже, DI-R10 + правка 2026-08-13).
-  const finalPick: ChosenAttempt =
+  let finalPick: ChosenAttempt =
     chosen ??
     bestCandidate ?? {
       index: techFallback!.index,
       imageUrl: techFallback!.imageUrl,
       pass: false,
     };
+
+  // ── Текстовый гейт (TASK no-baked-text) ───────────────────────────────────
+  // Третий эшелон после промпта и приёмки. Нужен именно отдельным детектором:
+  // приёмщик оценивает композицию целиком и одну мелкую надпись легко
+  // «прощает» ради высокого score, а этот вопрос бинарный.
+  //
+  // Гейт может ПЕРЕВЫБРАТЬ победителя: если лучший кандидат с текстом, а
+  // второй чистый — берём второй. Кандидаты, не прошедшие техвалидацию, в
+  // список не попадают: продвинуть такой значило бы обойти проверку чистой
+  // зоны ради чистоты от букв.
+  let textGateMeta: {
+    allowText: boolean;
+    clean: boolean;
+    found: string;
+    skipped: boolean;
+    scanned: number;
+  } | null = null;
+  let textBudget: ScanBudget | null = null;
+  if (!allowText) {
+    textBudget = newScanBudget();
+    const ranked = attempts
+      .map((a, index) => ({ index, imageUrl: a.imageUrl, score: a.score, pass: a.pass, ok: a.tech?.passed === true }))
+      .filter((c): c is { index: number; imageUrl: string; score: number; pass: boolean; ok: boolean } =>
+        Boolean(c.imageUrl) && c.ok,
+      )
+      // Принятые приёмкой вперёд, внутри группы — по убыванию score.
+      .sort((a, b) => Number(b.pass) - Number(a.pass) || b.score - a.score);
+
+    if (ranked.length > 0) {
+      const gate = await pickTextCleanCandidate(
+        ranked.map(({ index, imageUrl }) => ({ index, imageUrl })),
+        textBudget,
+      );
+      textGateMeta = {
+        allowText,
+        clean: gate.verdict.clean,
+        found: gate.verdict.found,
+        skipped: gate.verdict.skipped,
+        scanned: gate.scanned,
+      };
+      const picked = attempts[gate.index];
+      if (picked?.imageUrl) {
+        finalPick = { index: gate.index, imageUrl: picked.imageUrl, pass: picked.pass };
+      }
+      if (!gate.verdict.clean) {
+        console.warn(
+          `⚠ ai-ref#${assetId} (${assetKey}): запечённый текст «${gate.verdict.found}» ` +
+            `на всех ${gate.scanned} кандидатах — уходим в лечение`,
+        );
+      }
+    }
+  }
+
+  // Текст найден на всех кандидатах — лечим, даже если приёмка была пройдена:
+  // для этого правила высокий score не индульгенция.
+  const textDirty = Boolean(textGateMeta && !textGateMeta.clean);
+  const textReason = textDirty
+    ? `на изображении есть запечённый текст «${textGateMeta!.found}» — сотри надпись полностью`
+    : null;
+
   let finalUrl = finalPick.imageUrl;
   let qaPassed = finalPick.pass;
   let healingMeta: {
@@ -1094,20 +1313,23 @@ export async function processAiReferenceAsset(opts: {
     chosenAttempt: number | null;
   } | null = null;
 
-  if (!chosen) {
-    // Источник лечения: забракованный приёмкой кандидат либо — если приёмки
-    // не достиг никто — наименее испорченный кадр по техвалидации.
-    const source = bestCandidate
-      ? {
-          imageUrl: bestCandidate.imageUrl,
-          score: attempts[bestCandidate.index]!.score,
-          reasons: attempts[bestCandidate.index]!.reasons,
-        }
-      : {
-          imageUrl: techFallback!.imageUrl,
-          score: 0,
-          reasons: techFallback!.reasons,
-        };
+  if (!finalPick.pass || textDirty) {
+    // Источник лечения — тот самый кадр, что выбран финальным: забракованный
+    // приёмкой кандидат, наименее испорченный по техвалидации, либо принятый
+    // приёмкой, но с запечённым текстом (TASK no-baked-text).
+    //
+    // Замечание про текст идёт ПЕРВЫМ: buildHealingPrompt берёт максимум 10
+    // замечаний, и это должно остаться в списке при любом их количестве.
+    const sourceRow = attempts[finalPick.index];
+    const source = {
+      imageUrl: finalPick.imageUrl,
+      score: sourceRow?.score ?? 0,
+      reasons: [...(textReason ? [textReason] : []), ...(sourceRow?.reasons ?? techFallback?.reasons ?? [])],
+      // Без этого признака лечение считало бы исходник чистым, и правило
+      // «чистая версия побеждает независимо от score» не сработало бы: ретушь
+      // с меньшим score, но без надписи, проиграла бы исходнику с «FS».
+      textClean: !textDirty,
+    };
     const heal = await healComposition({
       source,
       targetW,
@@ -1130,6 +1352,8 @@ export async function processAiReferenceAsset(opts: {
       gender: heroGender,
       fidelity,
       ...(propInventory ? { propInventory } : {}),
+      allowText,
+      ...(textBudget ? { textBudget } : {}),
     });
     finalUrl = heal.winner.imageUrl;
     qaPassed = heal.winner.pass;
@@ -1138,6 +1362,16 @@ export async function processAiReferenceAsset(opts: {
       used: heal.winner.healingIndex !== null,
       chosenAttempt: heal.winner.healingIndex,
     };
+    // Итог гейта пересчитываем по победителю лечения: в metadata должно
+    // лежать состояние ФИНАЛЬНОГО ассета, а не забракованного исходника.
+    if (textGateMeta) {
+      textGateMeta = {
+        ...textGateMeta,
+        clean: heal.winner.textClean ?? textGateMeta.clean,
+        found: heal.winner.textClean ? "" : (heal.winner.textFound ?? textGateMeta.found),
+        scanned: textGateMeta.scanned + (heal.textScanned ?? 0),
+      };
+    }
   }
 
   // Стиль-якорь (DI2-3): снимается ТОЛЬКО с якорного ассета и только когда
@@ -1177,6 +1411,10 @@ export async function processAiReferenceAsset(opts: {
     // регенерации зависимых форматов (DI2-3/DI2-9).
     baseUrl: finalUrl,
     ...(healingMeta ? { healing: healingMeta } : {}),
+    // Итог текстового гейта по ФИНАЛЬНОМУ ассету (TASK no-baked-text).
+    // `clean: false` — ассет всё равно отдаётся человеку (Спор 2 R-Plan), но
+    // с прочитанным текстом: это готовое ТЗ дизайнеру на ретушь.
+    ...(textGateMeta ? { textGate: textGateMeta } : {}),
   };
   const baseMeta = {
     specKey: "ai_reference",

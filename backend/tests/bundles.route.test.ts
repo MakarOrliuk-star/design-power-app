@@ -262,7 +262,34 @@ describe("GET /api/bundles/:id (Result screen)", () => {
       healing: null,
       score: 68,
       threshold: 80,
+      // Legacy-ассет без гейта (TASK no-baked-text): проекция отдаёт null,
+      // и CRM не рисует предупреждение о тексте.
+      textGate: null,
     });
+  });
+
+  // TASK no-baked-text: детектор нашёл надпись, лечение её не убрало —
+  // ассет всё равно доходит до менеджера, но с прочитанным текстом.
+  it("textGate с найденным текстом доезжает до CRM как предупреждение", async () => {
+    db.bundle.findUnique.mockResolvedValue(
+      bundleWithAsset({
+        specKey: "ai_reference",
+        specVersion: 1,
+        safeZonePct: null,
+        qa: {
+          qaPassed: true,
+          threshold: 80,
+          chosenAttempt: 0,
+          attempts: [{ score: 91, pass: true, reasons: [] }],
+          textGate: { allowText: false, clean: false, found: "FS", skipped: false, scanned: 3 },
+        },
+      }),
+    );
+    const res = await request(makeApp()).get("/api/bundles/bun1");
+    const meta = res.body.bundle.variants[0].assets[0].meta;
+    // Приёмка пройдена с высоким score — и это не отменяет вердикт по тексту.
+    expect(meta.qa.passed).toBe(true);
+    expect(meta.qa.textGate).toEqual({ clean: false, found: "FS", skipped: false });
   });
 });
 

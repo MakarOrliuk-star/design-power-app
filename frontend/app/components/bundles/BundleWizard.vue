@@ -95,6 +95,16 @@ const presetError = computed(
 );
 const canSubmit = computed(() => !store.launching && store.metaReady);
 
+/**
+ * Режим текста выбранной вариации (TASK no-baked-text) — только показ.
+ * Менеджеру нужно понимать, будет ли на баннере текст, ДО запуска генерации,
+ * но менять режим он должен там же, где тот живёт, — в «Вариации и референсы».
+ * Второй точки правки быть не должно: настройка общая на всю кампанию.
+ */
+const selectedPreset = computed(() =>
+  store.presets.find((p) => p.id === selectedPresetId.value) ?? null,
+);
+
 function toggleBrand(key: string) {
   if (brandBlocked(key)) return;
   const next = new Set(selectedBrands.value);
@@ -255,6 +265,14 @@ const ASSET_ICONS: Record<string, string> = { email: "✉️", popup: "🪟", pu
         <small v-if="presetError" class="field__err">Выберите вариацию — композиция собирается из её референсов</small>
         <small v-else class="field__hint">
           Одна генерация = одна композиция email 1200×600 на бренд из 5–15 референсов этой вариации.
+        </small>
+        <!-- Режим текста (TASK no-baked-text): показ, не редактирование. -->
+        <small v-if="selectedPreset" class="field__hint field__hint--mode">
+          Текст на баннере:
+          <b :class="selectedPreset.allowText ? 'mode--on' : 'mode--off'">
+            {{ selectedPreset.allowText ? "разрешён" : "запрещён" }}
+          </b>
+          — меняется в «Вариации и референсы».
         </small>
       </div>
 
@@ -476,6 +494,16 @@ const ASSET_ICONS: Record<string, string> = { email: "✉️", popup: "🪟", pu
 .field__hint {
   font-size: 11px;
   color: var(--color-grey);
+}
+/* Индикатор режима текста (TASK no-baked-text) — только чтение. */
+.field__hint--mode {
+  margin-top: 2px;
+}
+.mode--on {
+  color: #b45309;
+}
+.mode--off {
+  color: var(--color-text);
 }
 .field__counter {
   font-size: 11px;

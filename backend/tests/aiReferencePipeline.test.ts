@@ -44,6 +44,12 @@ const style = vi.hoisted(() => ({ describeCampaignStyle: vi.fn() }));
 // вызова и то, что его список уходит зависимым форматам.
 const propPlan = vi.hoisted(() => ({ planCampaignProps: vi.fn() }));
 const healing = vi.hoisted(() => ({ healComposition: vi.fn() }));
+// Текстовый детектор (TASK no-baked-text) — мокается целиком: свои тесты у
+// него в textScan.test.ts, здесь важна только встройка в выбор победителя.
+const textScan = vi.hoisted(() => ({
+  scanImageUrl: vi.fn(),
+  newScanBudget: vi.fn(() => ({ deadline: Date.now() + 120_000 })),
+}));
 
 vi.mock("../src/lib/prisma.js", () => ({ prisma: db }));
 vi.mock("../src/lib/fal.js", () => fal);
@@ -54,6 +60,7 @@ vi.mock("../src/lib/aiAssetValidator.js", () => validator);
 vi.mock("../src/lib/vlmReviewer.js", () => reviewer);
 vi.mock("../src/lib/styleAnchor.js", () => style);
 vi.mock("../src/lib/propPlan.js", () => propPlan);
+vi.mock("../src/lib/textScan.js", () => textScan);
 vi.mock("../src/services/aiHealing.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../src/services/aiHealing.js")>();
   return { ...actual, healComposition: healing.healComposition };
@@ -155,6 +162,15 @@ beforeEach(() => {
     plan: { props: ["golden coin with a ruby", "red poker chip"], keyProps: ["golden coin with a ruby"] },
   });
   healing.healComposition.mockReset();
+  textScan.scanImageUrl.mockReset();
+  // Дефолт — кадр без текста: гейт не вмешивается в выбор победителя.
+  textScan.scanImageUrl.mockResolvedValue({
+    md5: "m1",
+    hasText: false,
+    text: "",
+    confidence: 1,
+    approvedOk: false,
+  });
   style.describeCampaignStyle.mockResolvedValue({
     text: "Campaign style to reproduce — Palette: neon purple.",
     propInventory: "golden coin with a ruby, red poker chip",
@@ -172,7 +188,8 @@ beforeEach(() => {
   db.bundle.findUnique.mockResolvedValue({
     neuralPrompt: "VIP Exclusive weekend BONUS",
     presetId: "p1",
-    preset: { title: "VIP Exclusive", text: "VIP Exclusive campaign" },
+    // allowText — режим текста вариации (TASK no-baked-text); дефолт строгий.
+    preset: { title: "VIP Exclusive", text: "VIP Exclusive campaign", allowText: false },
   });
   db.variationReference.findMany.mockResolvedValue(refRows(6));
   db.bundleAsset.update.mockResolvedValue({});
@@ -220,11 +237,31 @@ describe("хелперы производных ключей (legacy, стары
 });
 
 describe("buildAiReferencePrompt (A-1)", () => {
-  it("промпт = бриф + композиционный контракт без текста", () => {
+  // TASK no-baked-text: дефолт сменился на строгий запрет. Прежний белый
+  // список («FS, SCATTER, BONUS, VIP») и был причиной надписей на баннерах —
+  // теперь он живёт только в режиме allowText=true.
+  it("промпт = бриф + композиционный контракт, по умолчанию текст запрещён", () => {
     const p = buildAiReferencePrompt("VIP weekend");
     expect(p).toContain("Campaign brief: VIP weekend.");
+    expect(p).toContain("ABSOLUTELY NO TEXT");
+    expect(p).toContain("chips are BLANK");
+    expect(p).not.toContain("FS, SCATTER, BONUS, VIP");
+  });
+
+  it("allowText=true возвращает прежний белый список казино-слов", () => {
+    const p = buildAiReferencePrompt("VIP weekend", null, "variant", true);
     expect(p).toContain("STRICTLY NO text");
     expect(p).toContain("FS, SCATTER, BONUS, VIP");
+    expect(p).not.toContain("ABSOLUTELY NO TEXT");
+  });
+
+  it("строгий режим отдельно оговаривает карты и текст на самих референсах", () => {
+    const p = buildAiReferencePrompt("VIP weekend");
+    // Исключение заказчика: ранги и масти игральных карт — часть объекта.
+    expect(p).toContain("standard playing card");
+    // Референсы — готовые баннеры с надписями; без этой оговорки модель
+    // считает их текст частью воспроизводимого стиля.
+    expect(p).toContain("leave every piece of their text behind");
   });
 
   it("контракт A-2/A-6: белый фон, copy space по центру, три секции + depth of field", () => {
@@ -251,7 +288,7 @@ describe("processAiReferenceAsset — один ассет (TASK safe-zone/auto-h
     expect(fal.runGptImage2Edit).toHaveBeenCalledTimes(1);
     expect(fal.runPersonFal).not.toHaveBeenCalled();
     const [args] = fal.runGptImage2Edit.mock.calls[0]!;
-    expect(args.prompt).toContain("STRICTLY NO text");
+    expect(args.prompt).toContain("ABSOLUTELY NO TEXT");
     expect(args.prompt).toContain("LAYOUT GUIDE");
     expect(args.imageUrls).toHaveLength(7);
     expect(args.width).toBe(1200);
@@ -321,6 +358,10 @@ describe("processAiReferenceAsset — один ассет (TASK safe-zone/auto-h
       imageUrl: "https://cdn/try2.png",
       score: 55,
       reasons: ["текст на баннере"],
+      // TASK no-baked-text: детектор нашёл кадр чистым, лечим только по
+      // замечаниям приёмки. Признак нужен лечению, чтобы понимать, может ли
+      // чистая версия побеждать по чистоте, а не только по score.
+      textClean: true,
     });
     expect(healArgs.publicIdBase).toBe("v1_email");
     expect(healArgs.brandName).toBe("Betnella");
@@ -479,7 +520,7 @@ describe("formatGeometryHint / buildSecondaryPrompt (DI2-3/DI2-4)", () => {
     expect(p).toContain("APPROVED anchor creative");
     expect(p).toContain("Do NOT copy its layout");
     expect(p).toContain("NO reserved copy space");
-    expect(p).toContain("STRICTLY NO text");
+    expect(p).toContain("ABSOLUTELY NO TEXT");
     // Требований якорного контракта тут быть не должно.
     expect(p).not.toContain("COPY SPACE");
     expect(p).not.toContain("THREE sections");
@@ -534,7 +575,11 @@ describe("formatGeometryHint / buildSecondaryPrompt (DI2-3/DI2-4)", () => {
       });
     const push = make(1024, 512); // 2:1
     expect(push).toContain("SCALE (wide format)");
-    expect(push).toContain("oversized volumetric casino lettering");
+    // TASK no-baked-text: крупным объектом широкого формата раньше были
+    // «объёмные буквы FS/BONUS/777» — самый прямой источник надписей на push.
+    // В строгом режиме место крупного объекта занимают предметы без знаков.
+    expect(push).toContain("oversized volumetric objects");
+    expect(push).not.toContain("oversized volumetric casino lettering");
     expect(push).toContain("may sit BEHIND");
 
     const popup = make(800, 600); // 4:3
@@ -1150,5 +1195,112 @@ describe("loadAnchorContext (DI2-9)", () => {
     expect(await loadAnchorContext("v1", "email")).toBeNull();
     db.bundleAsset.findUnique.mockResolvedValue(null);
     expect(await loadAnchorContext("v1", "email")).toBeNull();
+  });
+});
+
+/**
+ * Текстовый гейт (TASK no-baked-text) — третий эшелон после промпта и
+ * приёмки. Проверяем ровно то, ради чего он строился: ленивое сканирование,
+ * перевыбор победителя, форс-лечение поверх пройденной приёмки и
+ * best-effort при недоступном детекторе.
+ */
+describe("текстовый гейт (TASK no-baked-text)", () => {
+  /** Скан по URL: чистый ответ либо найденная надпись. */
+  const scan = (hasText: boolean, text = "") => ({
+    md5: "m", hasText, text, confidence: 0.9, approvedOk: false,
+  });
+
+  it("чистый победитель — один скан, лечение не запускается", async () => {
+    await processAiReferenceAsset(OPTS);
+    expect(textScan.scanImageUrl).toHaveBeenCalledTimes(1);
+    expect(healing.healComposition).not.toHaveBeenCalled();
+    const done = parentDoneCall();
+    expect(done?.data.metadata.qa.textGate).toMatchObject({ clean: true, scanned: 1 });
+  });
+
+  it("грязный лучший + чистый следующий → гейт перевыбирает победителя", async () => {
+    // Все попытки валят приёмку (цикл генерации останавливается только на
+    // прошедшей), поэтому кандидатов у гейта трое. Лучший по score — с текстом.
+    reviewer.reviewComposition
+      .mockResolvedValueOnce({ pass: false, score: 70, reasons: ["композиция"] })
+      .mockResolvedValue({ pass: false, score: 50, reasons: ["композиция"] });
+    fit.fitAndStoreAsset
+      .mockResolvedValueOnce({ ok: true, url: "https://cdn/try1.png", publicId: "f1" })
+      .mockResolvedValue({ ok: true, url: "https://cdn/try2.png", publicId: "f2" });
+    textScan.scanImageUrl
+      .mockResolvedValueOnce(scan(true, "FS")) // лучший по score — грязный
+      .mockResolvedValue(scan(false)); // следующий — чистый
+    healing.healComposition.mockResolvedValue({
+      attempts: [],
+      winner: { imageUrl: "https://cdn/try2.png", pass: false, score: 50, healingIndex: null, textClean: true, textFound: "" },
+      textScanned: 0,
+    });
+
+    await processAiReferenceAsset(OPTS);
+
+    // Сканировали ровно двоих: на первом чистом останавливаемся, третий
+    // кандидат не стоил вызова.
+    expect(textScan.scanImageUrl).toHaveBeenCalledTimes(2);
+    const [args] = healing.healComposition.mock.calls[0]!;
+    // В лечение уходит ЧИСТЫЙ кандидат с меньшим score, а не лучший с «FS».
+    expect(args.source.imageUrl).toBe("https://cdn/try2.png");
+    // И замечания про текст в нём нет — стирать нечего.
+    expect(args.source.reasons.join(" ")).not.toContain("«FS»");
+    expect(args.allowText).toBe(false);
+    expect(args.textBudget).toBeDefined();
+  });
+
+  it("приёмка пройдена, но текст найден → всё равно лечим", async () => {
+    reviewer.reviewComposition.mockResolvedValue({ pass: true, score: 96, reasons: [] });
+    textScan.scanImageUrl.mockResolvedValue(scan(true, "Free spins"));
+    healing.healComposition.mockResolvedValue({
+      attempts: [{ imageUrl: "https://cdn/healed.png", score: 88, pass: true, reasons: [], tech: null }],
+      winner: { imageUrl: "https://cdn/healed.png", pass: true, score: 88, healingIndex: 0, textClean: true, textFound: "" },
+      textScanned: 1,
+    });
+    await processAiReferenceAsset(OPTS);
+    // Высокий score не индульгенция: для этого правила вердикт бинарный.
+    expect(healing.healComposition).toHaveBeenCalledTimes(1);
+    const done = parentDoneCall();
+    // В metadata лежит состояние ФИНАЛЬНОГО ассета, а не исходника.
+    expect(done?.data.metadata.qa.textGate).toMatchObject({ clean: true, found: "" });
+  });
+
+  it("текст пережил лечение → ассет DONE с предупреждением, не FAILED", async () => {
+    reviewer.reviewComposition.mockResolvedValue({ pass: true, score: 90, reasons: [] });
+    textScan.scanImageUrl.mockResolvedValue(scan(true, "BONUS"));
+    healing.healComposition.mockResolvedValue({
+      attempts: [{ imageUrl: "https://cdn/healed.png", score: 70, pass: false, reasons: [], tech: null }],
+      winner: { imageUrl: "https://cdn/healed.png", pass: false, score: 70, healingIndex: 0, textClean: false, textFound: "BONUS" },
+      textScanned: 2,
+    });
+    await processAiReferenceAsset(OPTS);
+    const done = parentDoneCall();
+    // Спор 2 R-Plan: отдаём лучшее с прочитанным текстом — это ТЗ на ретушь.
+    expect(done).toBeDefined();
+    expect(done?.data.metadata.qa.textGate).toMatchObject({ clean: false, found: "BONUS" });
+  });
+
+  it("детектор недоступен → генерация не падает, гейт помечен skipped", async () => {
+    textScan.scanImageUrl.mockResolvedValue(null);
+    await processAiReferenceAsset(OPTS);
+    expect(healing.healComposition).not.toHaveBeenCalled();
+    const done = parentDoneCall();
+    expect(done?.data.metadata.qa.textGate).toMatchObject({ clean: true, skipped: true });
+  });
+
+  it("allowText=true — гейт не включается вовсе, сканов нет", async () => {
+    db.bundle.findUnique.mockResolvedValue({
+      neuralPrompt: "VIP Exclusive weekend BONUS",
+      presetId: "p1",
+      preset: { title: "VIP Exclusive", text: "VIP Exclusive campaign", allowText: true },
+    });
+    await processAiReferenceAsset(OPTS);
+    expect(textScan.scanImageUrl).not.toHaveBeenCalled();
+    const done = parentDoneCall();
+    expect(done?.data.metadata.qa.textGate).toBeUndefined();
+    // И промпт уезжает в разрешающей редакции.
+    const [args] = fal.runGptImage2Edit.mock.calls[0]!;
+    expect(args.prompt).toContain("FS, SCATTER, BONUS, VIP");
   });
 });
