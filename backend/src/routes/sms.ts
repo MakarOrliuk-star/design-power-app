@@ -6,7 +6,7 @@ import { SMS_QUEUE, getBullConnection } from "../queues/index.js";
 import { env } from "../env.js";
 
 const DEFAULT_ALLOWED_COUNTRIES = [
-  "albania", "australia", "austria", "belgium", "bosnia and herzegovina",
+  "albania", "australia", "austria", "belgium", "bosnia & herzegovina",
   "brazil", "bulgaria", "canada", "croatia", "czech republic", "denmark",
   "estonia", "finland", "france", "germany", "greece", "hungary", "ireland",
   "italy", "luxembourg", "montenegro", "netherlands", "new zealand",
