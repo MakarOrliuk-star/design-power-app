@@ -38,10 +38,12 @@ export interface BundleTypeAsset {
   // центральное свечение под объектами и фейд нижней кромки. Поле не задано =
   // оба включены; глобальный откат без деплоя — env AI_REF_EFFECTS=off.
   effects?: { glow?: boolean; fade?: boolean };
-  // Лимит мелких предметов зависимого формата (DI3-9/DI3-14, задание 3):
-  // уходит и в промпт генерации, и в чек-лист приёмщика. У якорного формата
-  // игнорируется — плотность email не трогаем (DI3-10). Не задано → 8.
+  // Коридор предметов зависимого формата (DI3-9/DI3-14, задание 3): уходит и
+  // в промпт генерации, и в чек-лист приёмщика, и в лечение. У якорного
+  // формата игнорируется — плотность email не трогаем (DI3-10).
+  // Не задано → 8…14. Низ выведен в админку 2026-08-15, пол — 8.
   maxProps?: number;
+  minProps?: number;
 }
 
 // ------------------------------------------------------------------
@@ -151,6 +153,13 @@ export interface BundleBrandGroup {
   key: string; // base name, e.g. "Betnella"
   displayName: string;
   variants: Array<{ name: string; displayName: string }>;
+  /**
+   * Сходство персонажа с референсами (правка 2026-08-13) — настройка ГРУППЫ:
+   * галка в «Вариациях и референсах» ставится на бренд целиком и пишется во
+   * все его тон-варианты, поэтому здесь достаточно одного значения. true =
+   * "exact" (маскот один в один), false = "variant" (дефолт).
+   */
+  exactCharacter: boolean;
 }
 
 /** Active brands grouped by base name for the wizard picker (one toggle each). */
@@ -158,17 +167,21 @@ export async function listBundleBrands(): Promise<BundleBrandGroup[]> {
   const brands = await prisma.brand.findMany({
     where: { isActive: true },
     orderBy: { name: "asc" },
-    select: { name: true },
+    select: { name: true, characterFidelity: true },
   });
   const groups = new Map<string, BundleBrandGroup>();
-  for (const { name } of brands) {
+  for (const { name, characterFidelity } of brands) {
     const base = stripGenderName(name);
     let group = groups.get(base);
     if (!group) {
-      group = { key: base, displayName: base, variants: [] };
+      group = { key: base, displayName: base, variants: [], exactCharacter: false };
       groups.set(base, group);
     }
     group.variants.push({ name, displayName: variantDisplayName(name) });
+    // Группа считается «один в один», если так помечен хотя бы один вариант:
+    // запись идёт по всей группе, и рассинхрон возможен только у данных,
+    // проставленных мимо UI.
+    if (characterFidelity === "exact") group.exactCharacter = true;
   }
   return [...groups.values()];
 }
@@ -351,14 +364,57 @@ export async function editAsset(
   bundleId: string,
   assetId: string,
   prompt: string,
-): Promise<{ ok: true } | { ok: false; error: "not_editable" | "queue_unavailable" } | null> {
+): Promise<
+  | { ok: true }
+  | { ok: false; error: "not_editable" | "queue_unavailable" | "dependents_in_flight" }
+  | null
+> {
   const asset = await prisma.bundleAsset.findFirst({
     where: { id: assetId, bundleId },
-    select: { id: true, status: true, imageUrl: true, variantId: true },
+    select: {
+      id: true,
+      status: true,
+      imageUrl: true,
+      variantId: true,
+      assetKey: true,
+      variant: { select: { bundle: { select: { bundleType: { select: { assets: true } } } } } },
+    },
   });
   if (!asset) return null;
   // Only a finished asset with an image can be edited (Result-card button).
   if (asset.status !== "DONE" || !asset.imageUrl) return { ok: false, error: "not_editable" };
+
+  // Правка Edit по ЯКОРЮ, пока зависимые форматы в работе (правка 2026-08-17,
+  // заказчик: «нажимаю Edit — push и pop-up падают с ошибкой про email»).
+  //
+  // Механика была такая: editAsset переводил email в GENERATING, а задачи
+  // push/pop-up, вынутые из очереди уже после этого, звали loadAnchorContext,
+  // видели статус якоря != DONE и падали с «якорный ассет не сгенерирован —
+  // перегенерируйте его». То есть правка email убивала форматы, которые в
+  // этот момент честно генерировались.
+  //
+  // Чинить со стороны зависимых нельзя: ждать чужой правки они не должны, а
+  // взять СТАРУЮ картинку якоря — значит собрать кампанию в двух разных
+  // стилях. Поэтому запрещаем правку до конца прогона — тот же гейт, что
+  // уже стоит у regenerateAsset.
+  // Опциональная цепочка намеренно: правка — действие менеджера, и обрыв
+  // связи в данных должен деградировать до «гейт не отработал», а не до 500
+  // на кнопке Edit.
+  const typeAssets = (asset.variant?.bundle?.bundleType?.assets as unknown as BundleTypeAsset[]) ?? [];
+  const isAnchor = resolveStyleAnchorKey(typeAssets) === asset.assetKey;
+  if (isAnchor) {
+    const dependentKeys = dependentAiReferenceAssets(typeAssets).map((a) => a.key);
+    if (dependentKeys.length > 0) {
+      const busy = await prisma.bundleAsset.count({
+        where: {
+          variantId: asset.variantId,
+          assetKey: { in: dependentKeys },
+          status: { in: ["PENDING", "GENERATING"] },
+        },
+      });
+      if (busy > 0) return { ok: false, error: "dependents_in_flight" };
+    }
+  }
 
   await prisma.bundleAsset.update({
     where: { id: assetId },

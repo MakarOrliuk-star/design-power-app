@@ -50,6 +50,27 @@ function regenerateWithCascade(assetKey: string, assetId: string) {
   void store.regenerateAsset(assetId);
 }
 
+/**
+ * Сообщения по коду ошибки бэкенда (правка 2026-08-17). Раньше всё, кроме
+ * недоступной очереди, показывалось как «Действие не выполнено, попробуйте
+ * ещё раз» — то есть менеджеру предлагали повторить действие, которое по
+ * состоянию бандла заведомо не пройдёт (например, Regenerate email, пока
+ * push и pop-up ещё генерируются). Текст должен говорить, ЧТО сделать.
+ */
+const ACTION_ERRORS: Record<string, string> = {
+  queue_unavailable: "Очередь генерации недоступна — попробуйте позже.",
+  in_flight:
+    "Формат уже в работе — дождитесь окончания текущей генерации этого бренда и повторите.",
+  dependents_in_flight:
+    "Push и pop-up этого бренда ещё генерируются. Дождитесь их окончания — правка email сейчас сбила бы им единый стиль кампании.",
+  not_editable: "Правку можно применить только к готовому изображению.",
+  not_found: "Ассет не найден — обновите страницу.",
+};
+const actionErrorText = computed(
+  () =>
+    ACTION_ERRORS[store.actionError ?? ""] ?? "Действие не выполнено, попробуйте ещё раз.",
+);
+
 // ---- Style-profile «казино-дизайнера» (DV-E1) — админский override ----
 // Стиль сцены (hue плашки, материал, токены, плотность, выбор декора) — данные,
 // не координаты. Сервер зажимает всё в коридоры спеки; применяется при
@@ -221,9 +242,7 @@ function formatDateTime(iso: string | null): string {
       <button class="btn btn--ghost" type="button" @click="openEdit">✎ Edit</button>
     </header>
 
-    <p v-if="store.actionError" class="result__error">
-      {{ store.actionError === "queue_unavailable" ? "Очередь генерации недоступна — попробуйте позже." : "Действие не выполнено, попробуйте ещё раз." }}
-    </p>
+    <p v-if="store.actionError" class="result__error">{{ actionErrorText }}</p>
 
     <div class="result__sectionrow">
       <h3 class="result__section">Generated bundles by brand</h3>
@@ -371,6 +390,34 @@ function formatDateTime(iso: string | null): string {
                 <span v-if="a.meta.qa.reasons.length" class="asset__qa-reasons">
                   {{ a.meta.qa.reasons.join(" · ") }}
                 </span>
+              </p>
+
+              <!-- Текстовый гейт (TASK no-baked-text): надпись пережила и
+                   генерацию, и лечение. Ассет не падает (Спор 2 R-Plan) —
+                   менеджер видит прочитанный текст и решает сам; это же
+                   готовое ТЗ дизайнеру на ретушь. Показывается независимо от
+                   вердикта приёмки: картинка могла пройти QA с высоким score
+                   и всё равно нести «FS». -->
+              <p
+                v-if="a.status === 'done' && a.meta?.qa?.textGate && !a.meta.qa.textGate.clean"
+                class="asset__text-gate"
+                title="Детектор нашёл запечённый текст. Вариация настроена на баннеры без надписей."
+              >
+                ⚠ Обнаружен текст<template v-if="a.meta.qa.textGate.found">:
+                  «{{ a.meta.qa.textGate.found }}»</template>
+                — требуется ретушь
+              </p>
+
+              <!-- Свечение мимо объекта (правка 2026-08-17). Информационный
+                   бейдж, а не брак: позиция пятна снята с эталонов и общая для
+                   всех брендов, так что расхождение — повод посмотреть кадр
+                   глазами, а не автоматически его отклонять. -->
+              <p
+                v-if="a.status === 'done' && a.meta?.glowCheck && !a.meta.glowCheck.ok"
+                class="asset__glow"
+                title="Пятно свечения стоит в фиксированной точке холста и за композицией не следует."
+              >
+                ◐ Свечение частично мимо объекта ({{ Math.round(a.meta.glowCheck.coverage * 100) }}% ядра)
               </p>
 
               <p v-if="safePreview && a.meta" class="asset__meta">
@@ -904,6 +951,39 @@ function formatDateTime(iso: string | null): string {
   font-weight: 400;
   color: inherit;
   opacity: 0.85;
+}
+/* Бейдж текстового гейта (TASK no-baked-text). Красный, а не янтарный, как у
+   приёмки: приёмка сообщает «возможно, недостаточно хорошо», а этот — про
+   конкретный однозначный брак, который менеджер обязан заметить. */
+.asset__text-gate {
+  margin: 0;
+  font-size: 10.5px;
+  font-weight: 600;
+  color: #b91c1c;
+  background: #fee2e2;
+  border-radius: var(--radius-sm);
+  padding: 5px 8px;
+  line-height: 1.35;
+}
+:global(.dark) .asset__text-gate {
+  background: rgba(185, 28, 28, 0.18);
+  color: #fca5a5;
+}
+/* Свечение мимо объекта — нейтральный информационный тон: это наблюдение,
+   а не брак, и оно не должно перебивать бейджи приёмки и текста. */
+.asset__glow {
+  margin: 0;
+  font-size: 10.5px;
+  font-weight: 600;
+  color: #1d4ed8;
+  background: #dbeafe;
+  border-radius: var(--radius-sm);
+  padding: 5px 8px;
+  line-height: 1.35;
+}
+:global(.dark) .asset__glow {
+  background: rgba(29, 78, 216, 0.18);
+  color: #93c5fd;
 }
 
 .modal {

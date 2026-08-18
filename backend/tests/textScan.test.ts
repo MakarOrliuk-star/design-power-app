@@ -14,7 +14,9 @@ import {
   parseVerdict,
   sniffMime,
   scanImageBuffer,
+  scanImageUrl,
   newScanBudget,
+  STRICT_TEXT_SCAN_SYSTEM_PROMPT,
   TEXT_SCAN_ATTEMPTS,
   TEXT_SCAN_MAX_TEXT_LEN,
 } from "../src/lib/textScan.js";
@@ -124,5 +126,61 @@ describe("scanImageBuffer", () => {
     fetchMock.mockResolvedValue(falOk("I cannot help with that"));
     expect(await scanImageBuffer(BUFFER)).toBeNull();
     expect(db.upsert).not.toHaveBeenCalled();
+  });
+});
+
+/**
+ * Строгий профиль (TASK no-baked-text): отдельный системный промпт и, что
+ * важнее, отдельный ключ кэша. Смешение профилей — самый неприятный класс
+ * бага в этой связке: он не падает, а тихо выключает проверку.
+ */
+describe("строгий профиль (TASK no-baked-text)", () => {
+  it("кэш профилей не смешивается: strict читает и пишет свой ключ", async () => {
+    await scanImageBuffer(BUFFER, undefined, "strict");
+    expect(db.findUnique).toHaveBeenCalledWith({ where: { md5: `strict:${MD5}` } });
+
+    // Мягкий профиль по-прежнему на голом md5 — существующий кэш и whitelist
+    // «пометить ок» продолжают работать без миграции.
+    db.findUnique.mockClear();
+    await scanImageBuffer(BUFFER);
+    expect(db.findUnique).toHaveBeenCalledWith({ where: { md5: MD5 } });
+  });
+
+  it("вердикт мягкого профиля не подменяет строгий", async () => {
+    // В кэше «чисто» под ключом мягкого профиля.
+    db.findUnique.mockImplementation(async ({ where }: { where: { md5: string } }) =>
+      where.md5 === MD5 ? { md5: MD5, hasText: false, text: "", confidence: 1, approvedOk: false } : null,
+    );
+    fetchMock.mockResolvedValue(
+      falOk('{"has_marketing_text": true, "found_text": "FS", "confidence": 0.9}'),
+    );
+    const strict = await scanImageBuffer(BUFFER, undefined, "strict");
+    // Строгий профиль обязан сходить в модель, а не взять чужой вердикт.
+    expect(fetchMock).toHaveBeenCalled();
+    expect(strict?.hasText).toBe(true);
+    expect(strict?.text).toBe("FS");
+  });
+
+  it("в строгом режиме модель получает свой системный промпт", async () => {
+    fetchMock.mockResolvedValue(falOk('{"has_marketing_text": false, "found_text": "", "confidence": 1}'));
+    await scanImageBuffer(BUFFER, undefined, "strict");
+    const body = JSON.parse(fetchMock.mock.calls[0]![1].body as string) as { system_prompt: string };
+    expect(body.system_prompt).toBe(STRICT_TEXT_SCAN_SYSTEM_PROMPT);
+    // Исключение заказчика: карты не считаются надписью.
+    expect(body.system_prompt).toContain("standard playing card");
+  });
+
+  it("scanImageUrl: скачивает байты и делегирует в scanImageBuffer", async () => {
+    fetchMock
+      .mockResolvedValueOnce({ ok: true, arrayBuffer: async () => BUFFER.buffer.slice(BUFFER.byteOffset, BUFFER.byteOffset + BUFFER.byteLength) })
+      .mockResolvedValueOnce(falOk('{"has_marketing_text": true, "found_text": "777", "confidence": 0.8}'));
+    const res = await scanImageUrl("https://cdn/a.png", undefined, "strict");
+    expect(res?.hasText).toBe(true);
+    expect(res?.text).toBe("777");
+  });
+
+  it("scanImageUrl best-effort: недоступная картинка → null, без броска", async () => {
+    fetchMock.mockResolvedValue({ ok: false, status: 404 });
+    expect(await scanImageUrl("https://cdn/missing.png", undefined, "strict")).toBeNull();
   });
 });

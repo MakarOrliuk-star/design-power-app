@@ -18,7 +18,14 @@ const db = vi.hoisted(() => ({
     delete: vi.fn(),
   },
   bundleType: { findFirst: vi.fn(), findMany: vi.fn() },
-  bundleAsset: { findMany: vi.fn(), updateMany: vi.fn(), findFirst: vi.fn(), update: vi.fn() },
+  bundleAsset: {
+    findMany: vi.fn(),
+    updateMany: vi.fn(),
+    findFirst: vi.fn(),
+    update: vi.fn(),
+    // count — гейт зависимых форматов у editAsset/regenerateAsset.
+    count: vi.fn(),
+  },
   neuralPromptPreset: { findMany: vi.fn() },
 }));
 const sendMock = vi.hoisted(() => vi.fn());
@@ -216,6 +223,9 @@ describe("GET /api/bundles/:id (Result screen)", () => {
       validator: { passed: true, attempts: 1 },
       // Приёмка ai_reference: у движковых рендеров её нет (TASK ai-reference).
       qa: null,
+      // Проверка свечения — только у ai_reference: движковый рендер собирает
+      // свет сам и в этом контуре не участвует.
+      glowCheck: null,
     });
     // The raw engine payload (seed, layer bboxes, check list) stays server-side.
     expect(asset.meta.seed).toBeUndefined();
@@ -262,7 +272,55 @@ describe("GET /api/bundles/:id (Result screen)", () => {
       healing: null,
       score: 68,
       threshold: 80,
+      // Legacy-ассет без гейта (TASK no-baked-text): проекция отдаёт null,
+      // и CRM не рисует предупреждение о тексте.
+      textGate: null,
     });
+  });
+
+  // TASK no-baked-text: детектор нашёл надпись, лечение её не убрало —
+  // ассет всё равно доходит до менеджера, но с прочитанным текстом.
+  it("textGate с найденным текстом доезжает до CRM как предупреждение", async () => {
+    db.bundle.findUnique.mockResolvedValue(
+      bundleWithAsset({
+        specKey: "ai_reference",
+        specVersion: 1,
+        safeZonePct: null,
+        qa: {
+          qaPassed: true,
+          threshold: 80,
+          chosenAttempt: 0,
+          attempts: [{ score: 91, pass: true, reasons: [] }],
+          textGate: { allowText: false, clean: false, found: "FS", skipped: false, scanned: 3 },
+        },
+      }),
+    );
+    const res = await request(makeApp()).get("/api/bundles/bun1");
+    const meta = res.body.bundle.variants[0].assets[0].meta;
+    // Приёмка пройдена с высоким score — и это не отменяет вердикт по тексту.
+    expect(meta.qa.passed).toBe(true);
+    expect(meta.qa.textGate).toEqual({ clean: false, found: "FS", skipped: false });
+  });
+
+  // Правка 2026-08-17: свечение стоит в фиксированной точке холста, поэтому
+  // на «широких» композициях горит мимо объекта. Информируем, не блокируем.
+  it("glowCheck доезжает до CRM, а legacy-ассет отдаёт null", async () => {
+    db.bundle.findUnique.mockResolvedValue(
+      bundleWithAsset({
+        specKey: "ai_reference",
+        specVersion: 1,
+        safeZonePct: null,
+        effects: { applied: true, glowCheck: { ok: false, coverage: 0.12, offsetXPct: -0.3 } },
+      }),
+    );
+    let meta = (await request(makeApp()).get("/api/bundles/bun1")).body.bundle.variants[0].assets[0].meta;
+    expect(meta.glowCheck).toEqual({ ok: false, coverage: 0.12 });
+
+    db.bundle.findUnique.mockResolvedValue(
+      bundleWithAsset({ specKey: "ai_reference", specVersion: 1, safeZonePct: null }),
+    );
+    meta = (await request(makeApp()).get("/api/bundles/bun1")).body.bundle.variants[0].assets[0].meta;
+    expect(meta.glowCheck).toBeNull();
   });
 });
 
@@ -317,6 +375,8 @@ describe("GET /api/bundles/meta", () => {
           { name: "Betnella(Men)", displayName: "Betnella (Men)" },
           { name: "Betnella(Women)", displayName: "Betnella (Women)" },
         ],
+        // Сходство персонажа (правка 2026-08-13): дефолт — вариативный.
+        exactCharacter: false,
       },
     ]);
   });
@@ -329,6 +389,8 @@ describe("POST /api/bundles/:id/assets/:assetId/edit (D9)", () => {
       status: "DONE",
       imageUrl: "https://cdn/email.png",
       variantId: "v1",
+      assetKey: "email",
+      variant: { bundle: { bundleType: { assets: [{ key: "email", label: "Email" }] } } },
     });
     db.bundleAsset.update.mockResolvedValue({});
     db.bundle.update.mockResolvedValue({});
@@ -338,6 +400,35 @@ describe("POST /api/bundles/:id/assets/:assetId/edit (D9)", () => {
       .send({ prompt: "warmer background" });
     expect(res.status).toBe(202);
     expect(res.body).toEqual({ ok: true });
+  });
+
+  // Правка 2026-08-17: код ошибки обязан доехать до фронта телом ответа —
+  // по нему менеджер получает конкретное объяснение вместо «попробуйте ещё раз».
+  it("409 + код dependents_in_flight, когда push/pop-up ещё генерируются", async () => {
+    db.bundleAsset.findFirst.mockResolvedValue({
+      id: "a1",
+      status: "DONE",
+      imageUrl: "https://cdn/email.png",
+      variantId: "v1",
+      assetKey: "email",
+      variant: {
+        bundle: {
+          bundleType: {
+            assets: [
+              { key: "email", label: "Email", composeMode: "ai_reference" },
+              { key: "push", label: "Push", composeMode: "ai_reference" },
+            ],
+          },
+        },
+      },
+    });
+    db.bundleAsset.count.mockResolvedValue(1);
+
+    const res = await request(makeApp())
+      .post("/api/bundles/bun1/assets/a1/edit")
+      .send({ prompt: "x" });
+    expect(res.status).toBe(409);
+    expect(res.body).toEqual({ error: "dependents_in_flight" });
   });
 
   it("409s an asset that cannot be edited and 400s an empty prompt", async () => {

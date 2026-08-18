@@ -6,11 +6,22 @@ import { prisma } from "../lib/prisma.js";
 import { itemPipelineReady } from "../env.js";
 import {
   createTournamentBatches,
-  nextDesNumber,
-  sanitizeName,
   MAX_TOURNAMENT_BRANDS,
   MAX_TOURNAMENT_COUNT,
 } from "../services/tournament.service.js";
+import {
+  nextDesNumber,
+  packFolderOf,
+  sanitizeName,
+  splitBrandGender,
+  toPngUrl,
+  trailingIndexOf,
+  uniqueEntryPath,
+} from "../lib/packShared.js";
+
+// The ZIP path helpers now live in lib/packShared.ts (shared with Welcome
+// packs); re-exported here so existing importers and tests keep working.
+export { packFolderOf, splitBrandGender, toPngUrl, trailingIndexOf, uniqueEntryPath };
 
 // Tournaments page API (Phase 3). Mounted behind loadUser + requireAuth +
 // requireZone("DESIGNER") — see index.ts.
@@ -264,57 +275,6 @@ tournamentRouter.get("/packs", async (req: Request, res: Response) => {
 });
 
 // ---- ZIP export (DES-1XXXXX.zip; a NEW DES number on every download) ----
-
-/** Force a PNG delivery URL (spec: files in the ZIP are .png). */
-export function toPngUrl(url: string): string {
-  if (/\.png(\?|$)/i.test(url)) return url;
-  // Cloudinary: an f_png transformation converts on the fly.
-  if (url.includes("/upload/")) return url.replace("/upload/", "/upload/f_png/");
-  return url;
-}
-
-/** "Bonuskong_Tournament_1_2" -> its pack folder "Bonuskong_Tournament_1". */
-export function packFolderOf(fileName: string): string {
-  return fileName.replace(/_\d+$/, "");
-}
-
-/** Per-brand image index: trailing number of the fixed file name ("…_2" -> "2"). */
-export function trailingIndexOf(fileName: string): string {
-  const m = /_(\d+)$/.exec(fileName);
-  return m ? m[1]! : "1";
-}
-
-/**
- * "Spinogambino(Men)" -> { base: "Spinogambino", gender: "men" }. The (Men)/
- * (Women) pair shares ONE brand folder in the ZIP; the gender moves to the
- * file-name suffix instead. Mirrors the UI's stripGender rule.
- */
-export function splitBrandGender(name: string): { base: string; gender: "" | "men" | "women" } {
-  const m = /\s*\((men|women)\)\s*$/i.exec(name);
-  if (!m) return { base: name.trim(), gender: "" };
-  return {
-    base: name.slice(0, m.index).trim(),
-    gender: m[1]!.toLowerCase() as "men" | "women",
-  };
-}
-
-/** Collision-free archive path: appends "-2", "-3"... before the extension. */
-export function uniqueEntryPath(used: Set<string>, path: string): string {
-  if (!used.has(path)) {
-    used.add(path);
-    return path;
-  }
-  const m = /^(.*)(\.[a-z0-9]+)$/i.exec(path);
-  const stem = m ? m[1]! : path;
-  const ext = m ? m[2]! : "";
-  for (let n = 2; ; n++) {
-    const candidate = `${stem}-${n}${ext}`;
-    if (!used.has(candidate)) {
-      used.add(candidate);
-      return candidate;
-    }
-  }
-}
 
 const exportSchema = z.object({
   batchId: z.string().min(1).optional(),

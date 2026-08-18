@@ -5,7 +5,16 @@ import {
   processAiReferenceAsset,
   parentOfDerivedKey,
   loadAnchorContext,
+  // Хвост правки ai_reference (2026-08-17): отредактированная база проходит
+  // тот же вырез + эффекты, что и генерация, — иначе ассет остаётся белым
+  // прямоугольником без свечения и фейда.
+  cutoutComposition,
+  applyEffectsToAsset,
+  AI_REF_SUFFIX_TRANSPARENT,
+  AI_REF_SUFFIX_FINAL,
+  AI_REF_SAFE_ZONE,
 } from "../services/aiReferencePipeline.js";
+import { resolveEffectsConfig } from "../lib/promoEffects.js";
 import { getOrCreateNormalizedLayer, fetchBuffer } from "../services/layerCache.js";
 import { getActiveLayoutSpec, SPEC_KEY_BY_ASSET } from "../services/layoutSpec.js";
 import type { LayoutSpecRow } from "../services/layoutSpec.js";
@@ -1005,6 +1014,7 @@ export async function processRenderAssetJob(
       // TASK glow-fade-density: плотность предметов и галки эффектов —
       // данные типа бандла, правятся в /admin без деплоя (DI3-14/DI3-15).
       ...(config.maxProps !== undefined ? { maxProps: config.maxProps } : {}),
+      ...(config.minProps !== undefined ? { minProps: config.minProps } : {}),
       ...(config.effects ? { effects: config.effects } : {}),
     });
 
@@ -1063,6 +1073,7 @@ export async function processRenderAssetJob(
       formatLabel: parentConfig.label,
       anchor: parentAnchor,
       ...(parentConfig.maxProps !== undefined ? { maxProps: parentConfig.maxProps } : {}),
+      ...(parentConfig.minProps !== undefined ? { minProps: parentConfig.minProps } : {}),
       ...(parentConfig.effects ? { effects: parentConfig.effects } : {}),
     });
     if (parentIsAnchor) {
@@ -1294,7 +1305,17 @@ export async function processEditAssetJob(
 ): Promise<void> {
   const asset = await prisma.bundleAsset.findUnique({
     where: { id: assetId },
-    include: { variant: { select: { id: true, brandName: true } } },
+    include: {
+      variant: {
+        select: {
+          id: true,
+          brandName: true,
+          // Режим сборки формата нужен, чтобы правка не ломала контракт фона
+          // (см. ниже): у ai_reference это вырезанная композиция на белом.
+          bundle: { select: { bundleType: { select: { assets: true } } } },
+        },
+      },
+    },
   });
   if (!asset || asset.bundleId !== bundleId || asset.variantId !== variantId) return;
 
@@ -1306,16 +1327,76 @@ export async function processEditAssetJob(
     await recomputeBundleStatus(bundleId);
   };
 
-  const sourceUrl = asset.imageUrl;
+  // Опциональная цепочка: обрыв связи не должен ронять правку. Фолбэк —
+  // прежнее поведение, то есть режим движковых рендеров.
+  const typeAssets = (asset.variant?.bundle?.bundleType?.assets as unknown as BundleTypeAsset[]) ?? [];
+  const config = typeAssets.find((a) => a.key === asset.assetKey);
+  const isAiReference = config?.composeMode === "ai_reference";
+  const meta = (asset.metadata ?? null) as AiRefAssetMeta | null;
+
+  /**
+   * ИСТОЧНИК правки (правка 2026-08-17, заказчик: «через Edit не соблюдается
+   * safe zone, фейд пропадает и пропадает пятно по центру»).
+   *
+   * У ai_reference `imageUrl` — это `_final`, то есть картинка, на которую УЖЕ
+   * наложены свечение и фейд. Редактировать её нельзя по двум причинам: модель
+   * не воспроизводит наши композитные слои (отсюда «фейд пропал» и «нет пятна
+   * по центру»), а если бы воспроизвела — следующее наложение легло бы
+   * свечением на свечение. Правим ту же белую базу, с которой работает
+   * генерация: `metadata.qa.baseUrl` — кадр ДО removeBg и до эффектов.
+   */
+  const baseUrl = isAiReference ? (meta?.qa?.baseUrl ?? null) : null;
+  const sourceUrl = baseUrl ?? asset.imageUrl;
   if (!sourceUrl) {
     await fail("edit: no source image");
     return;
   }
+  if (isAiReference && !baseUrl) {
+    // Legacy-ассет без базы: правим что есть, но предупреждаем — эффекты
+    // лягут поверх уже отрисованных, и это будет видно.
+    console.warn(
+      `⚠ bundle-edit#${assetId}: у ассета нет metadata.qa.baseUrl — правка идёт по финальной картинке`,
+    );
+  }
 
-  const prompt =
-    `Based on the reference image, keep the same composition, characters, style and layout. ${editPrompt.trim()} ` +
-    "Do not add text, letters, logos or watermarks. Keep the protected empty areas empty. " +
-    "Full-bleed: the background must cover the entire canvas edge to edge, no borders or frames.";
+  // Контракт фона зависит от режима сборки формата. Прежний промпт был
+  // написан под движковые рендеры и БЕЗУСЛОВНО требовал «full-bleed: фон на
+  // весь канвас». У ai_reference контракт ровно обратный: это вырезанная
+  // композиция на чисто-белом. Любая правка — «подвинь предмет», «поменяй
+  // цвет» — заодно заливала белый фон сплошной картинкой.
+  const backgroundRule = isAiReference
+    ? "CRITICAL — do not touch the background: it must stay pure solid white (#FFFFFF), completely flat, with no " +
+      "scenery, gradients, glow, bokeh, light rays, patterns or cast shadows. This artwork is cut out from the " +
+      "white later, so filling the background or adding a scene destroys the asset. Keep every element's edges " +
+      "crisp against the white."
+    : "Full-bleed: the background must cover the entire canvas edge to edge, no borders or frames.";
+
+  /**
+   * Safe zone. Прежнее «Keep the protected empty areas empty» не работало,
+   * потому что не говорило ГДЕ эта зона: в генерации её держит развёрнутый
+   * блок COPY SPACE плюс картинка-схема, а правка не получала ни того, ни
+   * другого — модель заполняла центр и правка ломала макет письма.
+   *
+   * Зона есть только у якорного формата: на push/pop-up текст не
+   * накладывается, и требование пустой середины выгрызло бы центр баннера.
+   */
+  const anchorKey = isAiReference ? resolveStyleAnchorKey(typeAssets) : null;
+  const copySpaceRule =
+    anchorKey === asset.assetKey
+      ? "CRITICAL — the reserved COPY SPACE must stay empty: the middle half of the canvas (from the left quarter " +
+        "to the right quarter), top to bottom, is pure white negative space where a headline and a CTA button will " +
+        "be placed later. No plate, panel, frame, prop, character part, coin, gem or sparkle may enter it at any " +
+        "height. If your edit would move something into that band, keep it on its side instead."
+      : "";
+
+  const prompt = [
+    `Based on the reference image, keep the same composition, characters, style and layout. ${editPrompt.trim()}`,
+    "Do not add text, letters, logos or watermarks.",
+    copySpaceRule,
+    backgroundRule,
+  ]
+    .filter(Boolean)
+    .join(" ");
   const run = await runPersonFal(prompt, [sourceUrl], nearestFalAspect(asset.width, asset.height), null);
   if (!run.success || !run.imageUrl) {
     await fail(`edit: ${run.error ?? "unknown"}`);
@@ -1335,9 +1416,124 @@ export async function processEditAssetJob(
     return;
   }
 
+  // Движковый рендер: правка самодостаточна, пост-обработки у него нет.
+  if (!isAiReference) {
+    await prisma.bundleAsset.update({
+      where: { id: assetId },
+      data: { status: "DONE", imageUrl: fitted.url, errorMessage: null },
+    });
+    await recomputeBundleStatus(bundleId);
+    return;
+  }
+
+  // ai_reference: отредактированная база обязана пройти ТОТ ЖЕ хвост, что и
+  // генерация, — вырезание фона и наложение эффектов. Без него ассет
+  // оставался белым прямоугольником без свечения и фейда.
+  await finalizeEditedAiRefAsset({
+    bundleId,
+    assetId,
+    assetKey: asset.assetKey,
+    variantId,
+    baseUrl: fitted.url,
+    folder: `bundles/${bundleId}`,
+    meta,
+    config,
+    isAnchor: anchorKey === asset.assetKey,
+  });
+}
+
+/** Метаданные ai_reference, которые нужны правке (узкая проекция). */
+interface AiRefAssetMeta {
+  qa?: { baseUrl?: string | null } | null;
+  effects?: { glowHex?: string | null } | null;
+  [key: string]: unknown;
+}
+
+/**
+ * Хвост правки ai_reference: вырезание + эффекты + запись (правка 2026-08-17).
+ *
+ * Повторяет финал генерации, но с двумя отличиями:
+ *  - цвет свечения НЕ выбирается заново, а берётся с самого ассета: правка
+ *    «поменяй цвет платья» не должна менять цвет свечения всей кампании;
+ *  - `qa.baseUrl` обновляется на отредактированную базу, иначе последующая
+ *    регенерация push/pop-up унаследовала бы стиль ДОправочной композиции.
+ *
+ * Fail-open на эффектах: если наложение не удалось, ассет остаётся вырезом —
+ * это хуже, чем задумано, но лучше, чем FAILED на готовой правке.
+ */
+async function finalizeEditedAiRefAsset(opts: {
+  bundleId: string;
+  assetId: string;
+  assetKey: string;
+  variantId: string;
+  baseUrl: string;
+  folder: string;
+  meta: AiRefAssetMeta | null;
+  config: BundleTypeAsset | undefined;
+  isAnchor: boolean;
+}): Promise<void> {
+  const { bundleId, assetId, assetKey, variantId, baseUrl, folder, meta, config, isAnchor } = opts;
+  const logTag = `bundle-edit#${assetId}`;
+
+  const cut = await cutoutComposition(baseUrl, logTag);
+  if (!cut.cutout) {
+    await prisma.bundleAsset.update({
+      where: { id: assetId },
+      data: { status: "FAILED", errorMessage: `edit ${cut.error ?? "cutout: не удалось вырезать фон"}` },
+    });
+    await recomputeBundleStatus(bundleId);
+    return;
+  }
+
+  const trUp = await withRetry(
+    () => uploadBuffer(cut.cutout!, `${variantId}_${assetKey}${AI_REF_SUFFIX_TRANSPARENT}`, folder),
+    `${logTag}-transparent`,
+  );
+  if (!trUp.success || !trUp.secure_url) {
+    await prisma.bundleAsset.update({
+      where: { id: assetId },
+      data: { status: "FAILED", errorMessage: `edit transparent upload: ${trUp.error ?? "unknown"}` },
+    });
+    await recomputeBundleStatus(bundleId);
+    return;
+  }
+
+  const effects = await applyEffectsToAsset({
+    transparentUrl: trUp.secure_url,
+    colorSourceUrl: baseUrl,
+    refUrls: [],
+    config: resolveEffectsConfig(config?.effects ?? null),
+    // Цвет свечения кампании фиксируем: правка одного ассета не повод
+    // перевыбирать его и разъезжаться с остальными форматами.
+    inheritedGlowHex: meta?.effects?.glowHex ?? null,
+    publicId: `${variantId}_${assetKey}${AI_REF_SUFFIX_FINAL}`,
+    folder,
+    logTag: `${logTag}-effects`,
+    safeZone: isAnchor ? AI_REF_SAFE_ZONE : null,
+  });
+
   await prisma.bundleAsset.update({
     where: { id: assetId },
-    data: { status: "DONE", imageUrl: fitted.url, errorMessage: null },
+    data: {
+      status: "DONE",
+      imageUrl: effects.imageUrl,
+      errorMessage: null,
+      metadata: {
+        ...(meta ?? {}),
+        transparent: true,
+        holesKnockedOut: cut.holes,
+        edited: true,
+        ...(effects.textColor ? { recommendedTextColor: effects.textColor } : {}),
+        effects: effects.meta,
+        // База для зависимых форматов — теперь отредактированная.
+        qa: { ...(meta?.qa ?? {}), baseUrl },
+      } as unknown as Prisma.InputJsonValue,
+    },
   });
   await recomputeBundleStatus(bundleId);
+
+  console.log(
+    `✏️ ${logTag}: правка ${assetKey} → cutout=${cut.source} holes=${cut.holes} ` +
+      `effects=${effects.meta.applied}`,
+  );
 }

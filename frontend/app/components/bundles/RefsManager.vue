@@ -20,6 +20,12 @@ interface Preset {
   text: string;
   order: number;
   isActive: boolean;
+  /**
+   * Разрешён ли запечённый текст на баннерах (TASK no-baked-text). Настройка
+   * общая на все форматы кампании: email-якорь задаёт стиль push/pop-up, и
+   * разные режимы у якоря и зависимых форматов конфликтовали бы.
+   */
+  allowText: boolean;
 }
 interface RefRow {
   id: string;
@@ -50,9 +56,16 @@ const GEN_REFS = 14;
 const presets = ref<Preset[]>([]);
 const presetsLoading = ref(false);
 const selectedPresetId = ref<string | null>(null);
-const presetForm = ref<{ id: string | null; title: string; text: string } | null>(null);
+const presetForm = ref<{
+  id: string | null;
+  title: string;
+  text: string;
+  allowText: boolean;
+} | null>(null);
 const presetBusy = ref(false);
 const error = ref("");
+/** Показывается после сохранения: настройка не переписывает готовые бандлы. */
+const presetNotice = ref("");
 
 async function fetchPresets() {
   presetsLoading.value = true;
@@ -69,7 +82,12 @@ async function fetchPresets() {
 }
 
 function openPresetForm(p: Preset | null) {
-  presetForm.value = p ? { id: p.id, title: p.title, text: p.text } : { id: null, title: "", text: "" };
+  // Новая вариация открывается в строгом режиме — так же, как приезжают все
+  // существующие после миграции (TASK no-baked-text).
+  presetForm.value = p
+    ? { id: p.id, title: p.title, text: p.text, allowText: p.allowText }
+    : { id: null, title: "", text: "", allowText: false };
+  presetNotice.value = "";
 }
 
 async function savePreset() {
@@ -77,20 +95,26 @@ async function savePreset() {
   if (!form || !form.title.trim() || !form.text.trim()) return;
   presetBusy.value = true;
   error.value = "";
+  // Режим текста меняется до сброса формы — сообщение показываем только когда
+  // менеджер реально его переключил.
+  const textModeChanged = form.id
+    ? presets.value.find((p) => p.id === form.id)?.allowText !== form.allowText
+    : false;
   try {
+    const body = { title: form.title.trim(), text: form.text.trim(), allowText: form.allowText };
     if (form.id) {
-      await api(`/api/crm-admin/prompt-presets/${form.id}`, {
-        method: "PATCH",
-        body: { title: form.title.trim(), text: form.text.trim() },
-      });
+      await api(`/api/crm-admin/prompt-presets/${form.id}`, { method: "PATCH", body });
     } else {
       const res = await api<{ preset: Preset }>("/api/crm-admin/prompt-presets", {
         method: "POST",
-        body: { title: form.title.trim(), text: form.text.trim() },
+        body,
       });
       selectedPresetId.value = res.preset.id;
     }
     presetForm.value = null;
+    presetNotice.value = textModeChanged
+      ? "Режим текста изменён — настройка применится к новым генерациям, готовые бандлы не меняются."
+      : "";
     await fetchPresets();
   } catch {
     error.value = "Не удалось сохранить вариацию";
@@ -225,7 +249,36 @@ async function fetchRefs() {
 
 // Смена бренда сбрасывает тон на «Общие» — иначе с бренда с разделением
 // можно унести чужой ключ варианта на бренд, где его нет.
+// Сходство персонажа с референсами (правка 2026-08-13). Настройка бренда
+// целиком: пишется во все его тон-варианты, поэтому чекбокс один на бренд.
+const fidelityBusy = ref(false);
+const fidelityMsg = ref("");
+
+const exactCharacter = computed(
+  () => store.brands.find((b) => b.key === selectedBrand.value)?.exactCharacter ?? false,
+);
+
+async function toggleExactCharacter(e: Event) {
+  const brandKey = selectedBrand.value;
+  if (!brandKey || fidelityBusy.value) return;
+  const exact = (e.target as HTMLInputElement).checked;
+  fidelityBusy.value = true;
+  fidelityMsg.value = "";
+  try {
+    await api("/api/crm-admin/brand-fidelity", { method: "PATCH", body: { brandKey, exact } });
+    // Локально — чтобы галка не «отскакивала» до следующей загрузки справочника.
+    const group = store.brands.find((b) => b.key === brandKey);
+    if (group) group.exactCharacter = exact;
+    fidelityMsg.value = exact ? "Персонаж: один в один ✓" : "Персонаж: вариативный ✓";
+  } catch {
+    fidelityMsg.value = "Не удалось сохранить";
+  } finally {
+    fidelityBusy.value = false;
+  }
+}
+
 watch(selectedBrand, (brand) => {
+  fidelityMsg.value = "";
   selectedTone.value = brand;
 });
 watch([selectedPresetId, selectedTone, selectedFormat], () => {
@@ -345,7 +398,12 @@ onMounted(() => {
             :class="{ 'plist__item--on': selectedPresetId === p.id, 'plist__item--off': !p.isActive }"
           >
             <button class="plist__main" type="button" @click="selectedPresetId = p.id">
-              <b>{{ p.title }}</b>
+              <b>
+                {{ p.title }}
+                <!-- Бейдж только у ИСКЛЮЧЕНИЯ: строгий режим — норма, и его
+                     отсутствие не должно занимать место в списке. -->
+                <span v-if="p.allowText" class="plist__badge" title="На баннерах этой вариации разрешён текст">Aa</span>
+              </b>
               <small>{{ p.text }}</small>
             </button>
             <span class="plist__tools">
@@ -356,10 +414,22 @@ onMounted(() => {
           <li v-if="!presets.length" class="panel__note">Вариаций пока нет — создайте первую.</li>
         </ul>
 
+        <p v-if="presetNotice" class="pform__notice">{{ presetNotice }}</p>
+
         <div v-if="presetForm" class="pform">
           <b>{{ presetForm.id ? "Редактировать вариацию" : "Новая вариация" }}</b>
           <input v-model="presetForm.title" type="text" maxlength="120" placeholder="Название (например, VIP Exclusive)" />
           <textarea v-model="presetForm.text" rows="4" maxlength="1500" placeholder="Текст промпта — смысл композиции" />
+          <label class="pform__check">
+            <input v-model="presetForm.allowText" type="checkbox" />
+            <span>
+              Разрешить текст на баннере
+              <small>
+                По умолчанию выключено: нейросеть не рисует надписи, буквы и цифры.
+                Ранги и масти на игральных картах разрешены всегда.
+              </small>
+            </span>
+          </label>
           <div class="pform__actions">
             <button class="btn btn--sm btn--primary" type="button" :disabled="presetBusy || !presetForm.title.trim() || !presetForm.text.trim()" @click="savePreset">Сохранить</button>
             <button class="btn btn--sm" type="button" @click="presetForm = null">Отмена</button>
@@ -377,6 +447,20 @@ onMounted(() => {
               {{ b.displayName }}{{ brandTotal(b.key) ? ` — ${brandTotal(b.key)}` : "" }}
             </option>
           </select>
+          <label
+            v-if="selectedBrand"
+            class="fidelity"
+            title="Один в один — маскот бренда копируется с референсов без изменений (фиксированный персонаж). Снято — персонаж узнаваем по стилю и дизайну, но черты, поза и детали свои. Настройка действует на бренд целиком и на все три формата."
+          >
+            <input
+              type="checkbox"
+              :checked="exactCharacter"
+              :disabled="fidelityBusy"
+              @change="toggleExactCharacter"
+            />
+            Персонаж один в один
+          </label>
+          <span v-if="fidelityMsg" class="fidelity__msg">{{ fidelityMsg }}</span>
           <span v-if="tripleReady" class="count" :class="`count--${countState}`">{{ countLabel }}</span>
           <label v-if="tripleReady" class="btn btn--sm btn--primary upload" :class="{ 'upload--busy': uploadBusy }">
             <input type="file" accept="image/png,image/jpeg,image/webp" multiple :disabled="uploadBusy || refs.length >= MAX_REFS" @change="onFilesPicked" />
@@ -654,6 +738,20 @@ onMounted(() => {
   gap: 2px;
   flex: 0 0 auto;
 }
+/* Бейдж режима текста (TASK no-baked-text): рисуется только у вариаций,
+   где текст РАЗРЕШЁН, — строгий режим норма и метки не требует. */
+.plist__badge {
+  display: inline-block;
+  margin-left: 6px;
+  padding: 0 5px;
+  border-radius: 4px;
+  font-size: 10px;
+  font-weight: 700;
+  line-height: 15px;
+  vertical-align: middle;
+  color: #b45309;
+  background: #fef3c7;
+}
 
 .pform {
   display: flex;
@@ -664,6 +762,32 @@ onMounted(() => {
   padding: 10px;
   font-size: 12.5px;
   color: var(--color-text);
+}
+.pform__check {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  cursor: pointer;
+}
+.pform__check input {
+  margin-top: 2px;
+  width: auto;
+  flex: 0 0 auto;
+}
+.pform__check small {
+  display: block;
+  margin-top: 2px;
+  font-size: 11px;
+  line-height: 1.35;
+  color: var(--color-grey);
+}
+.pform__notice {
+  margin: 0;
+  font-size: 11.5px;
+  color: #b45309;
+  background: #fef3c7;
+  border-radius: var(--radius-sm);
+  padding: 6px 9px;
 }
 .pform input,
 .pform textarea {
@@ -685,6 +809,18 @@ onMounted(() => {
   gap: 8px;
 }
 
+.fidelity {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 13px;
+  cursor: pointer;
+  white-space: nowrap;
+}
+.fidelity__msg {
+  font-size: 12px;
+  opacity: 0.7;
+}
 .brandsel {
   border: 1px solid var(--color-border);
   border-radius: var(--radius-sm);

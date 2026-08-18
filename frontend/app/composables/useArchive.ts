@@ -24,12 +24,16 @@ export const PERIODS: { key: Period; label: string }[] = [
 ];
 
 /**
- * Archive tabs = the shared gallery ones + "Tournament Pack" (задача 4): a
- * read-only flat view of tournament results (backend tab=tournament). Kept
- * here (not in TABS) so the Result page — which appends its own tournament
- * tab — is unaffected.
+ * Archive tabs = the shared gallery ones + the two pack tabs (задача 4 /
+ * TASK welcome-packs): read-only flat views of pack results (backend
+ * tab=tournament, tab=welcome). Kept here (not in TABS) so the Result page —
+ * which appends its own pack tabs — is unaffected.
  */
-export const ARCHIVE_TABS: typeof TABS = [...TABS, { key: "tournament", label: "Tournament Pack" }];
+export const ARCHIVE_TABS: typeof TABS = [
+  ...TABS,
+  { key: "tournament", label: "Tournament Pack" },
+  { key: "welcome", label: "Welcome Pack" },
+];
 
 interface GalleryResponse {
   images: GalleryImage[];

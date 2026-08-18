@@ -7,7 +7,11 @@ import sharp from "sharp";
 import { z } from "zod";
 import { prisma } from "../lib/prisma.js";
 import { uploadBuffer, deleteAsset, withRetry } from "../lib/cloudinary.js";
-import { listBundleBrands, listAiReferenceFormats } from "../services/bundle.service.js";
+import {
+  listBundleBrands,
+  listAiReferenceFormats,
+  stripGenderName,
+} from "../services/bundle.service.js";
 import {
   MAX_REFS_PER_PAIR,
   MIN_REFS_FOR_GENERATION,
@@ -48,6 +52,9 @@ const promptPresetSchema = z.object({
   text: z.string().min(1).max(1500),
   order: z.number().int().min(0).max(10_000).optional(),
   isActive: z.boolean().optional(),
+  // Режим текста на баннере (TASK no-baked-text). Строго boolean: строка
+  // "false" из формы truthy, и такой пресет молча разрешил бы надписи.
+  allowText: z.boolean().optional(),
 });
 
 crmAdminRouter.get("/prompt-presets", async (_req: Request, res: Response) => {
@@ -69,6 +76,7 @@ crmAdminRouter.post("/prompt-presets", async (req: Request, res: Response) => {
       text: parsed.data.text,
       order: parsed.data.order ?? 0,
       isActive: parsed.data.isActive ?? true,
+      allowText: parsed.data.allowText ?? false,
     },
   });
   res.status(201).json({ preset: created });
@@ -90,6 +98,7 @@ crmAdminRouter.patch("/prompt-presets/:id", async (req: Request, res: Response) 
   if (parsed.data.text !== undefined) data.text = parsed.data.text;
   if (parsed.data.order !== undefined) data.order = parsed.data.order;
   if (parsed.data.isActive !== undefined) data.isActive = parsed.data.isActive;
+  if (parsed.data.allowText !== undefined) data.allowText = parsed.data.allowText;
   try {
     const updated = await prisma.neuralPromptPreset.update({ where: { id }, data });
     res.json({ preset: updated });
@@ -164,6 +173,45 @@ crmAdminRouter.get("/ref-formats", async (_req: Request, res: Response) => {
     formats: await listAiReferenceFormats(),
     limits: { min: MIN_REFS_FOR_GENERATION, max: MAX_REFS_PER_PAIR },
   });
+});
+
+/**
+ * Сходство персонажа с референсами (правка 2026-08-13, запрос заказчика:
+ * «у части брендов персонаж один в один, у части немного вариативный»).
+ *
+ * Галка живёт рядом с референсами, а не в /admin: её ставит тот же человек,
+ * который эти референсы и загружает. Настройка пишется во ВСЕ тон-варианты
+ * бренда — «Betnella(Men)» и «Betnella(Women)» это один маскот, разводить их
+ * по этому признаку смысла нет.
+ */
+const brandFidelitySchema = z.object({
+  brandKey: z.string().min(1).max(120),
+  exact: z.boolean(),
+});
+
+crmAdminRouter.patch("/brand-fidelity", async (req: Request, res: Response) => {
+  const parsed = brandFidelitySchema.safeParse(req.body);
+  if (!parsed.success) {
+    res.status(400).json({ error: "invalid_body", details: parsed.error.flatten().fieldErrors });
+    return;
+  }
+  const { brandKey, exact } = parsed.data;
+  // Совпадение по базовому имени: сравнивать в БД нечем (суффикс тона —
+  // часть строки), поэтому фильтруем уже прочитанные активные бренды.
+  const brands = await prisma.brand.findMany({
+    where: { isActive: true },
+    select: { id: true, name: true },
+  });
+  const ids = brands.filter((b) => stripGenderName(b.name) === brandKey).map((b) => b.id);
+  if (ids.length === 0) {
+    res.status(404).json({ error: "brand_not_found" });
+    return;
+  }
+  await prisma.brand.updateMany({
+    where: { id: { in: ids } },
+    data: { characterFidelity: exact ? "exact" : "variant" },
+  });
+  res.json({ ok: true, brandKey, exact, updated: ids.length });
 });
 
 crmAdminRouter.get("/bundle-refs", async (req: Request, res: Response) => {

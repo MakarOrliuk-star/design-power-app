@@ -12,7 +12,7 @@ export const DEFAULT_PERSON_SYSTEM_PROMPT = `You are an image edit prompt writer
  * case-insensitive on the key (brand for PERSON, style for ITEM).
  */
 export async function getPrompt(
-  type: "PERSON" | "ITEM" | "TOURNAMENT",
+  type: "PERSON" | "ITEM" | "TOURNAMENT" | "WELCOME",
   key: string,
 ): Promise<string> {
   const row = await prisma.promptTemplate.findFirst({

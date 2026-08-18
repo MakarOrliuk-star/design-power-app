@@ -478,9 +478,12 @@ const bundleTypeAssetSchema = z.object({
   effects: z
     .object({ glow: z.boolean().optional(), fade: z.boolean().optional() })
     .optional(),
-  // Лимит предметов зависимого формата (DI3-9/DI3-14). Границы подняты
+  // Коридор предметов зависимого формата (DI3-9/DI3-14). Границы подняты
   // 2026-08-13 после живого прогона: коридор 4–8 давал пустые кадры.
+  // Низ настраивается с 2026-08-15 (заказчик: «предметы должны быть настроены
+  // с админки, то есть минимум 8»); 8 — жёсткий пол, ниже кадр пустеет.
   maxProps: z.number().int().min(8).max(24).optional(),
+  minProps: z.number().int().min(8).max(24).optional(),
 });
 
 const bundleTypeSchema = z.object({
@@ -697,6 +700,10 @@ const promptPresetSchema = z.object({
   text: z.string().min(1).max(1500),
   order: z.number().int().min(0).max(10_000).optional(),
   isActive: z.boolean().optional(),
+  // Дубль контракта из crmAdmin.ts — CRUD вариаций живёт в двух роутерах.
+  // Поля обязаны совпадать: разъехавшись, они дали бы вариацию, у которой
+  // режим текста зависит от того, из какой админки её сохранили.
+  allowText: z.boolean().optional(),
 });
 
 adminRouter.get("/prompt-presets", async (_req: Request, res: Response) => {
@@ -718,6 +725,7 @@ adminRouter.post("/prompt-presets", async (req: Request, res: Response) => {
       text: parsed.data.text,
       order: parsed.data.order ?? 0,
       isActive: parsed.data.isActive ?? true,
+      allowText: parsed.data.allowText ?? false,
     },
   });
   res.status(201).json({ preset: created });
@@ -739,6 +747,7 @@ adminRouter.patch("/prompt-presets/:id", async (req: Request, res: Response) => 
   if (parsed.data.text !== undefined) data.text = parsed.data.text;
   if (parsed.data.order !== undefined) data.order = parsed.data.order;
   if (parsed.data.isActive !== undefined) data.isActive = parsed.data.isActive;
+  if (parsed.data.allowText !== undefined) data.allowText = parsed.data.allowText;
   try {
     const updated = await prisma.neuralPromptPreset.update({ where: { id }, data });
     res.json({ preset: updated });

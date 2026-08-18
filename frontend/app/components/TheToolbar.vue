@@ -17,13 +17,16 @@ const isHome = computed(() => route.path === "/");
 const isResult = computed(() => route.path.startsWith("/result"));
 const isArchive = computed(() => route.path.startsWith("/archive"));
 const isTournaments = computed(() => route.path.startsWith("/tournaments"));
+const isWelcome = computed(() => route.path.startsWith("/welcome-packs"));
 
-// Unified progress. Everywhere except /tournaments: ALWAYS 3 status slots —
+// Unified progress. Everywhere except the pack pages: ALWAYS 3 status slots —
 // one per content group (Person / Item / Background) — each reflecting the
 // current (running) or last generation of that group. Background has no
 // pipeline yet, so it stays idle. On /tournaments the same card shows the 4
 // category pills instead ("0 of 3 Tournament (0%)" per the mock), one per
-// tournament batch category, each with its own cancel ×.
+// tournament batch category, each with its own cancel ×. On /welcome-packs the
+// pills are built from the LIVE categories — they are created by hand there, so
+// a fixed slot list like TOUR_SLOTS is impossible.
 type ProgressKind = "person" | "item" | "background";
 const PROGRESS_KINDS: ProgressKind[] = ["person", "item", "background"];
 
@@ -45,6 +48,7 @@ function latestBatch(kind: ProgressKind): ActiveBatch | null {
 }
 
 interface ProgressSlot {
+  id: string; // v-for key (unique per pill)
   kind: string; // icon selector
   label: string;
   pct: number;
@@ -54,7 +58,12 @@ interface ProgressSlot {
   batchId: string;
 }
 
-function slotOf(kind: string, b: ActiveBatch | null, name?: string): ProgressSlot {
+/**
+ * `kind` selects the icon, `id` keys the v-for. They differ only for Welcome,
+ * where every pill shares one icon but must stay a distinct DOM node — reusing
+ * `kind` as the key would collapse all the categories into one.
+ */
+function slotOf(kind: string, b: ActiveBatch | null, name?: string, id?: string): ProgressSlot {
   const status = b?.status ?? null;
   const total = status?.total ?? 0;
   const completed = status?.completed ?? 0;
@@ -68,20 +77,53 @@ function slotOf(kind: string, b: ActiveBatch | null, name?: string): ProgressSlo
       : name
         ? `${completed} of ${total} ${name} (${pct}%)`
         : `${completed} of ${total} images completed (${pct}%)`;
-  return { kind, label, pct, running, done: b !== null && isComplete, canCancel: running, batchId: b?.id ?? "" };
+  return {
+    id: id ?? kind,
+    kind,
+    label,
+    pct,
+    running,
+    done: b !== null && isComplete,
+    canCancel: running,
+    batchId: b?.id ?? "",
+  };
 }
 
-const progressGroups = computed<ProgressSlot[]>(() =>
-  isTournaments.value
-    ? TOUR_SLOTS.map((s) =>
-        slotOf(
-          s.key,
-          newest(gen.batches.filter((b) => b.kind === "tournament" && b.label === s.key)),
-          s.label,
-        ),
-      )
-    : PROGRESS_KINDS.map((kind) => slotOf(kind, latestBatch(kind))),
+// Welcome pills: one per category that currently exists, labelled by its title.
+// A run launched before a category was renamed still matches — batches carry the
+// frozen category KEY, which is what `label` holds.
+const welcome = useWelcomeStore();
+const welcomeSlots = computed(() =>
+  welcome.categories.map((c) => ({ key: c.key, label: c.name })),
 );
+
+const progressGroups = computed<ProgressSlot[]>(() => {
+  if (isTournaments.value) {
+    return TOUR_SLOTS.map((s) =>
+      slotOf(
+        s.key,
+        newest(gen.batches.filter((b) => b.kind === "tournament" && b.label === s.key)),
+        s.label,
+      ),
+    );
+  }
+  if (isWelcome.value) {
+    // Before the first category exists there is nothing to show a pill for —
+    // fall back to the standard three slots so the card is never empty.
+    if (!welcomeSlots.value.length) {
+      return PROGRESS_KINDS.map((kind) => slotOf(kind, latestBatch(kind)));
+    }
+    return welcomeSlots.value.map((s) =>
+      slotOf(
+        "welcome",
+        newest(gen.batches.filter((b) => b.kind === "welcome" && b.label === s.key)),
+        s.label,
+        s.key,
+      ),
+    );
+  }
+  return PROGRESS_KINDS.map((kind) => slotOf(kind, latestBatch(kind)));
+});
 
 // Logged-in user (from the session / auth store).
 const auth = useAuthStore();
@@ -103,6 +145,7 @@ const userInitials = computed(() => {
 // Create a New Style / Library — visible to SUPER_DESIGNER/ADMIN/MANAGER only.
 const superDesigner = useSuperDesignerStore();
 const tournamentPack = useTournamentPackEditorStore();
+const welcomePack = useWelcomePackEditorStore();
 const userMenuOpen = ref(false);
 const userCardEl = ref<HTMLElement | null>(null);
 
@@ -123,6 +166,11 @@ function openEditStyle() {
 function openTournamentPack() {
   userMenuOpen.value = false;
   tournamentPack.open();
+}
+// «Edit Welcome packs» (TASK welcome-packs): same menu, same role gate.
+function openWelcomePack() {
+  userMenuOpen.value = false;
+  welcomePack.open();
 }
 function goLibrary() {
   userMenuOpen.value = false;
@@ -167,7 +215,7 @@ onBeforeUnmount(() => document.removeEventListener("click", onDocClick));
     <div class="card card--progress">
       <div
         v-for="g in progressGroups"
-        :key="g.kind"
+        :key="g.id"
         :class="['job', { 'job--idle': !g.running && !g.done }]"
       >
         <span class="ic ic--group" aria-hidden="true">
@@ -200,6 +248,13 @@ onBeforeUnmount(() => document.removeEventListener("click", onDocClick));
             <path d="M8 3.5v3M16 3.5v3" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" />
             <path d="M4.2 9.5h15.6" stroke="#fff" stroke-width="1.4" />
             <path d="M9.4 12.6l1.3 3.8h.2l1.2-3.8m1.6 3.8v-3.8m1.5 3.8v-3.8h1.2c.6 0 1 .4 1 1s-.4 1-1 1h-1.2" stroke="#fff" stroke-width="1.2" stroke-linecap="round" stroke-linejoin="round" />
+          </svg>
+          <!-- Welcome packs: an opened envelope with a spark (all its pills
+               share this icon; the category name is in the label). -->
+          <svg v-else-if="g.kind === 'welcome'" viewBox="0 0 24 24" width="20" height="20" fill="none">
+            <rect x="3.2" y="6" width="17.6" height="13" rx="3.2" fill="currentColor" />
+            <path d="M4.6 8.4l6.5 4.4c.55.37 1.25.37 1.8 0l6.5-4.4" stroke="#fff" stroke-width="1.5" stroke-linecap="round" />
+            <path d="M18.6 2.6l.55 1.5 1.5.55-1.5.55-.55 1.5-.55-1.5-1.5-.55 1.5-.55z" fill="currentColor" />
           </svg>
           <svg v-else viewBox="0 0 24 24" width="20" height="20" fill="none">
             <rect x="3.5" y="5.5" width="17" height="15" rx="4" fill="currentColor" />
@@ -301,6 +356,39 @@ onBeforeUnmount(() => document.removeEventListener("click", onDocClick));
           />
         </svg>
       </button>
+      <!-- Welcome packs (TASK welcome-packs): an envelope with a spark, drawn in
+           the same outline / gradient-fill idiom as its neighbours. -->
+      <button
+        class="tool"
+        :class="{ 'tool--on': isWelcome }"
+        type="button"
+        aria-label="Welcome packs"
+        title="Welcome packs"
+        @click="navigateTo('/welcome-packs')"
+      >
+        <svg viewBox="0 0 24 24" width="20" height="20" fill="none">
+          <rect
+            x="3.2"
+            y="5.8"
+            width="17.6"
+            height="13.4"
+            rx="3.4"
+            :fill="isWelcome ? 'url(#navGrad)' : 'none'"
+            :stroke="isWelcome ? 'none' : 'currentColor'"
+            stroke-width="1.7"
+          />
+          <path
+            d="M4.8 8.6l6.3 4.3c.55.37 1.25.37 1.8 0l6.3-4.3"
+            :stroke="isWelcome ? '#fff' : 'currentColor'"
+            stroke-width="1.7"
+            stroke-linecap="round"
+          />
+          <path
+            d="M18.7 2.4l.6 1.6 1.6.6-1.6.6-.6 1.6-.6-1.6-1.6-.6 1.6-.6z"
+            :fill="isWelcome ? 'url(#navGrad)' : 'currentColor'"
+          />
+        </svg>
+      </button>
       <button
         class="tool"
         :class="{ 'tool--on': isResult }"
@@ -377,6 +465,9 @@ onBeforeUnmount(() => document.removeEventListener("click", onDocClick));
         </button>
         <button class="user-menu__item" type="button" @click="openTournamentPack">
           Edit Tournament pack
+        </button>
+        <button class="user-menu__item" type="button" @click="openWelcomePack">
+          Edit Welcome packs
         </button>
         <button class="user-menu__item" type="button" @click="goLibrary">Library</button>
       </div>

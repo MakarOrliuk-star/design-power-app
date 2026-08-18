@@ -39,6 +39,62 @@ NOT marketing text (must NOT trigger):
 Reply with ONLY this JSON, no markdown fences:
 {"has_marketing_text": true|false, "found_text": "<the promo text you can read, else empty>", "confidence": <0..1>}`;
 
+/**
+ * Строгий профиль (TASK no-baked-text, 2026-08-17) — третий эшелон защиты в
+ * пайплайне генерации бандлов, после промпта и приёмки.
+ *
+ * Существующий промпт выше сюда не годится ПРИНЦИПИАЛЬНО: он написан под ZIP-ы
+ * дизайнеров и специально НЕ реагирует на одиночные слова и декоративные глифы
+ * («FS» на барабане для него норма) — то есть настроен ровно наоборот тому, что
+ * нужно здесь. Поэтому профиль, а не правка старого промпта: у мягкого свои
+ * потребители (Smartico), ломать их нельзя.
+ *
+ * Исключение для игральных карт — решение заказчика: ранги и масти это часть
+ * самого объекта «карта», а не надпись на баннере.
+ */
+export const STRICT_TEXT_SCAN_SYSTEM_PROMPT = `You are a strict QA checker for casino promo images that must contain NO text at all.
+
+Report ANY readable glyph rendered in the image: letters, words, numbers, digits,
+logos, brand marks, watermarks, captions, headlines, CTA buttons — at any size,
+including tiny, blurred, cropped or partially hidden ones, and including single
+casino words such as FS, FREE SPINS, SCATTER, BONUS, VIP, WILD, JACKPOT, the
+digits 777 on a slot reel, or a denomination number on a chip.
+
+THE ONLY EXCEPTION — do NOT report these:
+- the natural rank marks (A, K, Q, J, 10) and suit pips on a standard playing card:
+  those marks are part of the card object itself.
+
+Everything else that can be read as a character is a hit, even if it looks
+decorative or organically placed on a prop.
+
+Reply with ONLY this JSON, no markdown fences:
+{"has_marketing_text": true|false, "found_text": "<every glyph or word you can read, else empty>", "confidence": <0..1>}`;
+
+/**
+ * Профиль детекции. У профилей РАЗНЫЕ системные промпты и, что важнее, разные
+ * ключи кэша (см. `scanCacheKey`).
+ */
+export type TextScanProfile = "marketing" | "strict";
+
+/**
+ * Ключ кэша. Профили обязаны жить под разными ключами: вердикт мягкого профиля
+ * («чисто») иначе вернулся бы строгому из кэша и молча выключил бы всю
+ * проверку — самый неприятный класс бага, потому что он не падает.
+ *
+ * "marketing" сохраняет ГОЛЫЙ md5: существующий кэш и whitelist «пометить ок»
+ * продолжают работать без миграции. Строгий профиль получает префикс — это
+ * позволило обойтись без `@@unique([md5, profile])`, которого Prisma не даст
+ * применить на Railway без `--accept-data-loss` (см. комментарий у
+ * VariationReference в schema.prisma).
+ */
+export function scanCacheKey(md5: string, profile: TextScanProfile): string {
+  return profile === "strict" ? `strict:${md5}` : md5;
+}
+
+function systemPromptFor(profile: TextScanProfile): string {
+  return profile === "strict" ? STRICT_TEXT_SCAN_SYSTEM_PROMPT : TEXT_SCAN_SYSTEM_PROMPT;
+}
+
 const USER_PROMPT = "Check this image and reply with the JSON verdict only.";
 
 export interface TextScanVerdict {
@@ -90,11 +146,14 @@ export function sniffMime(buffer: Buffer): string {
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
-async function callFalVision(buffer: Buffer): Promise<TextScanVerdict | null> {
+async function callFalVision(
+  buffer: Buffer,
+  profile: TextScanProfile = "marketing",
+): Promise<TextScanVerdict | null> {
   const dataUri = `data:${sniffMime(buffer)};base64,${buffer.toString("base64")}`;
   const payload = JSON.stringify({
     model: TEXT_SCAN_MODEL,
-    system_prompt: TEXT_SCAN_SYSTEM_PROMPT,
+    system_prompt: systemPromptFor(profile),
     prompt: USER_PROMPT,
     image_url: dataUri,
   });
@@ -132,14 +191,16 @@ async function callFalVision(buffer: Buffer): Promise<TextScanVerdict | null> {
 export async function scanImageBuffer(
   buffer: Buffer,
   budget?: ScanBudget,
+  profile: TextScanProfile = "marketing",
 ): Promise<TextScanResult | null> {
   try {
     const md5 = createHash("md5").update(buffer).digest("hex");
+    const key = scanCacheKey(md5, profile);
 
-    const cached = await prisma.imageTextScan.findUnique({ where: { md5 } });
+    const cached = await prisma.imageTextScan.findUnique({ where: { md5: key } });
     if (cached) {
       return {
-        md5,
+        md5: key,
         hasText: cached.hasText,
         text: cached.text,
         confidence: cached.confidence,
@@ -150,17 +211,42 @@ export async function scanImageBuffer(
     if (!env.FAL_KEY) return null;
     if (budget && Date.now() > budget.deadline) return null; // pack budget spent
 
-    const verdict = await callFalVision(buffer);
+    const verdict = await callFalVision(buffer, profile);
     if (!verdict) return null; // failures are not cached — next run retries
 
     await prisma.imageTextScan.upsert({
-      where: { md5 },
-      create: { md5, hasText: verdict.hasText, text: verdict.text, confidence: verdict.confidence },
+      where: { md5: key },
+      create: { md5: key, hasText: verdict.hasText, text: verdict.text, confidence: verdict.confidence },
       update: { hasText: verdict.hasText, text: verdict.text, confidence: verdict.confidence },
     });
-    return { md5, ...verdict, approvedOk: false };
+    return { md5: key, ...verdict, approvedOk: false };
   } catch (e) {
     console.warn("⚠️ textScan: scan failed:", e);
+    return null;
+  }
+}
+
+/**
+ * То же по URL — форма, в которой картинки существуют в пайплайне бандлов
+ * (Cloudinary secure_url, байтов на руках нет). Скачивание не ретраится: сам
+ * скан best-effort, а неудачу вызывающий трактует как «не проверено».
+ */
+export async function scanImageUrl(
+  imageUrl: string,
+  budget?: ScanBudget,
+  profile: TextScanProfile = "marketing",
+): Promise<TextScanResult | null> {
+  try {
+    if (budget && Date.now() > budget.deadline) return null;
+    const res = await fetch(imageUrl, { signal: AbortSignal.timeout(TEXT_SCAN_TIMEOUT_MS) });
+    if (!res.ok) {
+      console.warn(`⚠️ textScan: fetch ${res.status} for ${imageUrl.slice(0, 120)}`);
+      return null;
+    }
+    const buffer = Buffer.from(await res.arrayBuffer());
+    return await scanImageBuffer(buffer, budget, profile);
+  } catch (e) {
+    console.warn("⚠️ textScan: fetch failed:", e);
     return null;
   }
 }

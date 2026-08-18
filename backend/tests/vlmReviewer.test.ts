@@ -146,7 +146,7 @@ describe("профили чек-листа (DI2-4)", () => {
   // TASK glow-fade-density, задание 3 (DI3-12): перегруз ловит приёмщик и
   // отправляет попытку в авто-ретрай, а не показывает её человеку.
   it("зависимый профиль считает предметы по числу из конфига", () => {
-    const secondary = buildQaSystemPrompt("secondary", 10);
+    const secondary = buildQaSystemPrompt("secondary", { maxProps: 10 });
     expect(secondary).toContain("PROP DENSITY");
     expect(secondary).toContain("between 8 and 10 props");
     expect(secondary).toContain("more than 10");
@@ -157,8 +157,15 @@ describe("профили чек-листа (DI2-4)", () => {
     expect(buildQaSystemPrompt("secondary")).toContain("between 8 and 14 props");
   });
 
+  it("размытие пропсов — приём, а не артефакт; пустые бока — брак", () => {
+    const secondary = buildQaSystemPrompt("secondary");
+    expect(secondary).toContain("FOCUS VARIETY");
+    expect(secondary).toContain("left and right thirds of the canvas are visibly empty");
+    expect(secondary).toContain("only a blurry HERO is a defect");
+  });
+
   it("пункт про плотность отсутствует в якорном профиле (DI3-10)", () => {
-    expect(buildQaSystemPrompt("anchor", 5)).not.toContain("PROP DENSITY");
+    expect(buildQaSystemPrompt("anchor", { maxProps: 5 })).not.toContain("PROP DENSITY");
   });
 
   // Правка 2026-08-13: пункт про «проще якоря» снят — заказчик просил больше
@@ -169,10 +176,87 @@ describe("профили чек-листа (DI2-4)", () => {
     expect(secondary).not.toContain("simpler and airier");
   });
 
+  // Правка 2026-08-15 (заказчик: «чтобы на руке не было 4 пальца, хотя должно
+  // быть 5»): пункт артефактов формулировал брак оценочно и приёмщик его
+  // пропускал — теперь пальцы велено ПОСЧИТАТЬ, а эталон берётся с референсов.
+  // Правка 2026-08-15 (заказчик: «предметы не должны быть рандомными — общая
+  // композиция промо»): у зависимого формата инвентарь кампании фиксирован,
+  // и приёмщик сверяет кадр с ним, а не с «семейством вообще».
+  // Правка 2026-08-15: до неё приёмка считала предметы и мерила резкость, но
+  // про раскладку не спрашивала ничего — ровный ковёр проходил её без замечаний.
+  it("приёмщик судит композицию предметов, а не только их число", () => {
+    const secondary = buildQaSystemPrompt("secondary");
+    expect(secondary).toContain("PROP COMPOSITION");
+    expect(secondary).toContain("composed by a designer, not scattered");
+    expect(secondary).toContain("evenly spaced like stickers");
+    // Группы — приём, а не перекос: пункт про формат переформулирован.
+    expect(secondary).toContain("groups are correct, but everything piled on one side");
+    expect(secondary).not.toContain("rather than clustered on one side");
+    // Коридор из админки уходит в чек-лист целиком, обе границы.
+    expect(buildQaSystemPrompt("secondary", { minProps: 10, maxProps: 16 })).toContain(
+      "between 10 and 16 props",
+    );
+    // Композиция — требование зависимых форматов: email заказчик утвердил.
+    expect(buildQaSystemPrompt("anchor")).not.toContain("PROP COMPOSITION");
+  });
+
+  it("набор предметов кампании становится критерием приёмки", () => {
+    const set = "golden coin with a ruby, red poker chip, purple gift box";
+    const withSet = buildQaSystemPrompt("secondary", { maxProps: 10, propInventory: set });
+    expect(withSet).toContain("CAMPAIGN PROP SET");
+    expect(withSet).toContain(set);
+    expect(withSet).toContain("repeats at different sizes and angles are fine");
+    // Раскладка по-прежнему своя — судим инвентарь, а не компоновку.
+    expect(withSet).toContain("judge the inventory, never the layout");
+    // Прежняя формулировка «другие объекты — это правильно» снимается: она
+    // прямо противоречила бы требованию единого набора.
+    expect(withSet).not.toContain("DIFFERENT OBJECTS are also CORRECT");
+  });
+
+  it("без набора (legacy-бандл) остаётся прежняя свобода выбора предметов", () => {
+    const noSet = buildQaSystemPrompt("secondary", { maxProps: 10 });
+    expect(noSet).toContain("DIFFERENT OBJECTS are also CORRECT");
+    expect(noSet).not.toContain("CAMPAIGN PROP SET");
+    // Набор — только у зависимых форматов: якорь его и задаёт.
+    expect(buildQaSystemPrompt("anchor", { propInventory: "золото" })).not.toContain(
+      "CAMPAIGN PROP SET",
+    );
+  });
+
+  it("руки проверяются в обоих профилях: счёт пальцев и сверка с референсами", () => {
+    for (const p of [buildQaSystemPrompt("anchor"), buildQaSystemPrompt("secondary", { maxProps: 10 })]) {
+      expect(p).toContain("HANDS & DIGITS");
+      expect(p).toContain("COUNT the digits");
+      expect(p).toContain("exactly five digits: four fingers and one thumb");
+      // Лапы/копыта — норма бренда, эталон задают референсы, а не пятерня.
+      expect(p).toContain("animal paws with claws, hooves");
+      expect(p).toContain("SAME number of digits as the references");
+      // Спрятанная кисть — не брак: иначе нормальный кадр уходит в ретрай.
+      expect(p).toContain("hidden behind a prop, behind the body or outside the crop is NOT a defect");
+    }
+  });
+
   it("пол героя проверяется в обоих профилях и только при тон-варианте", () => {
-    expect(buildQaSystemPrompt("anchor", undefined, "male")).toContain("must be a MAN");
-    expect(buildQaSystemPrompt("secondary", 10, "female")).toContain("must be a WOMAN");
+    expect(buildQaSystemPrompt("anchor", { gender: "male" })).toContain("must be a MAN");
+    expect(buildQaSystemPrompt("secondary", { maxProps: 10, gender: "female" })).toContain("must be a WOMAN");
     expect(buildQaSystemPrompt("anchor")).not.toContain("HERO GENDER");
+  });
+
+  // Правка 2026-08-13: приёмщик судит персонажа по режиму бренда — иначе
+  // вариативный герой браковался, а точная копия проходила там, где нужна
+  // вариативность.
+  it("режим сходства персонажа меняет пункт STYLE в обоих профилях", () => {
+    const exact = buildQaSystemPrompt("anchor", { fidelity: "exact" });
+    expect(exact).toContain("mascot is fixed");
+    expect(exact).toContain("A redesigned or restyled character is a FAIL");
+
+    const variant = buildQaSystemPrompt("anchor", { fidelity: "variant" });
+    expect(variant).toContain("allows a variation of its character");
+    expect(variant).toContain("must never be reported as a defect");
+
+    // Дефолт — вариативный (решение заказчика 2026-08-13).
+    expect(buildQaSystemPrompt("anchor")).toContain("allows a variation");
+    expect(buildQaSystemPrompt("secondary", { maxProps: 10, fidelity: "exact" })).toContain("mascot is fixed");
   });
 
   it("якорный профиль требует богатых боковых групп, не трогая центр", () => {

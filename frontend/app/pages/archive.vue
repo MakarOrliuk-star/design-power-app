@@ -57,18 +57,22 @@ function onCopySelected() {
   markCopied("selected");
 }
 
-// ---- Tournament Pack tab (задача 4): read-only просмотр ----
-// No selection/copy/export on this tab; a click opens the shared fullscreen
+// ---- Pack tabs (задача 4 + TASK welcome-packs): read-only просмотр ----
+// No selection/copy/export on these tabs; a click opens the shared fullscreen
 // slider (ImageViewer — the same ←/→/Esc behavior as on Result). The caption
 // is the fixed ZIP file name. Switching tabs empties `images`, which closes
 // the viewer by itself (its active id disappears from the list).
-const isTournament = computed(() => activeTab.value === "tournament");
+const isTournament = computed(() => activeTab.value === "tournament" || activeTab.value === "welcome");
+/** The row's fixed ZIP file name, whichever pack it came from. */
+function packFileName(i: { tourFileName?: string | null; welFileName?: string | null }): string | null {
+  return i.tourFileName ?? i.welFileName ?? null;
+}
 const viewerId = ref<string | null>(null);
 const viewerItems = computed(() =>
   images.value.map((i) => ({
     id: i.id,
     url: i.generatedImageUrl,
-    caption: i.tourFileName ?? stripGender(i.brandName),
+    caption: packFileName(i) ?? stripGender(i.brandName),
   })),
 );
 </script>
@@ -231,7 +235,7 @@ const viewerItems = computed(() =>
             :key="img.id"
             :class="['card', { 'card--selected': isSelected(img.id) }]"
           >
-            <span class="card__label">{{ isTournament ? (img.tourFileName ?? stripGender(img.brandName)) : stripGender(img.brandName) }}</span>
+            <span class="card__label">{{ isTournament ? (packFileName(img) ?? stripGender(img.brandName)) : stripGender(img.brandName) }}</span>
 
             <div v-if="!isTournament" class="card__tools">
               <button

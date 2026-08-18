@@ -16,7 +16,7 @@ const db = vi.hoisted(() => ({
     findMany: vi.fn(),
   },
   variationReference: { findMany: vi.fn(), groupBy: vi.fn() },
-  brand: { findMany: vi.fn() },
+  brand: { findMany: vi.fn(), findUnique: vi.fn() },
 }));
 const fal = vi.hoisted(() => ({
   runPersonFal: vi.fn(),
@@ -32,14 +32,24 @@ const cloud = vi.hoisted(() => ({
   withRetry: vi.fn((fn: () => unknown) => fn()),
 }));
 const cache = vi.hoisted(() => ({ fetchBuffer: vi.fn() }));
-const validator = vi.hoisted(() => ({ validateAiAsset: vi.fn() }));
+const validator = vi.hoisted(() => ({ validateAiAsset: vi.fn(), SIDE_FILL_MIN_RATIO: 0.12 }));
 const reviewer = vi.hoisted(() => ({
   reviewComposition: vi.fn(),
   QA_REFS_SHOWN: 3,
   qaThreshold: vi.fn(() => 80),
 }));
 const style = vi.hoisted(() => ({ describeCampaignStyle: vi.fn() }));
+// Планировщик набора предметов кампании (правка 2026-08-15) — как и стиль-
+// якорь, мокается целиком: он живёт на своих тестах, здесь важен только факт
+// вызова и то, что его список уходит зависимым форматам.
+const propPlan = vi.hoisted(() => ({ planCampaignProps: vi.fn() }));
 const healing = vi.hoisted(() => ({ healComposition: vi.fn() }));
+// Текстовый детектор (TASK no-baked-text) — мокается целиком: свои тесты у
+// него в textScan.test.ts, здесь важна только встройка в выбор победителя.
+const textScan = vi.hoisted(() => ({
+  scanImageUrl: vi.fn(),
+  newScanBudget: vi.fn(() => ({ deadline: Date.now() + 120_000 })),
+}));
 
 vi.mock("../src/lib/prisma.js", () => ({ prisma: db }));
 vi.mock("../src/lib/fal.js", () => fal);
@@ -49,6 +59,8 @@ vi.mock("../src/services/layerCache.js", () => cache);
 vi.mock("../src/lib/aiAssetValidator.js", () => validator);
 vi.mock("../src/lib/vlmReviewer.js", () => reviewer);
 vi.mock("../src/lib/styleAnchor.js", () => style);
+vi.mock("../src/lib/propPlan.js", () => propPlan);
+vi.mock("../src/lib/textScan.js", () => textScan);
 vi.mock("../src/services/aiHealing.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../src/services/aiHealing.js")>();
   return { ...actual, healComposition: healing.healComposition };
@@ -144,16 +156,40 @@ beforeEach(() => {
   validator.validateAiAsset.mockReset();
   reviewer.reviewComposition.mockReset();
   style.describeCampaignStyle.mockReset();
+  propPlan.planCampaignProps.mockReset();
+  propPlan.planCampaignProps.mockResolvedValue({
+    text: "golden coin with a ruby, red poker chip. KEY objects of the campaign: golden coin with a ruby.",
+    plan: { props: ["golden coin with a ruby", "red poker chip"], keyProps: ["golden coin with a ruby"] },
+  });
   healing.healComposition.mockReset();
+  textScan.scanImageUrl.mockReset();
+  // Дефолт — кадр без текста: гейт не вмешивается в выбор победителя.
+  textScan.scanImageUrl.mockResolvedValue({
+    md5: "m1",
+    hasText: false,
+    text: "",
+    confidence: 1,
+    approvedOk: false,
+  });
   style.describeCampaignStyle.mockResolvedValue({
     text: "Campaign style to reproduce — Palette: neon purple.",
-    anchor: { palette: "neon purple", character: "", props: "", lighting: "", rendering: "" },
+    propInventory: "golden coin with a ruby, red poker chip",
+    anchor: {
+      palette: "neon purple",
+      character: "",
+      hands: "",
+      props: "",
+      propInventory: "golden coin with a ruby, red poker chip",
+      lighting: "",
+      rendering: "",
+    },
   });
 
   db.bundle.findUnique.mockResolvedValue({
     neuralPrompt: "VIP Exclusive weekend BONUS",
     presetId: "p1",
-    preset: { title: "VIP Exclusive", text: "VIP Exclusive campaign" },
+    // allowText — режим текста вариации (TASK no-baked-text); дефолт строгий.
+    preset: { title: "VIP Exclusive", text: "VIP Exclusive campaign", allowText: false },
   });
   db.variationReference.findMany.mockResolvedValue(refRows(6));
   db.bundleAsset.update.mockResolvedValue({});
@@ -161,6 +197,8 @@ beforeEach(() => {
   db.bundleAsset.deleteMany.mockResolvedValue({});
   db.bundleAsset.findMany.mockResolvedValue([{ status: "DONE" }]); // recompute
   db.bundle.update.mockResolvedValue({});
+  // Сходство персонажа — настройка бренда; дефолт «вариативный» (null).
+  db.brand.findUnique.mockResolvedValue({ characterFidelity: null });
 
   fal.runPersonFal.mockResolvedValue({ success: true, imageUrl: "https://fal/gen.png" });
   fal.runGptImage2Edit.mockResolvedValue({ success: true, imageUrl: "https://fal/gen.png" });
@@ -170,8 +208,17 @@ beforeEach(() => {
   reviewer.reviewComposition.mockResolvedValue({ pass: true, score: 90, reasons: [] });
   fal.runBriaRemoveBg.mockResolvedValue({ success: true, imageUrl: "https://fal/nobg.png" });
   cloud.uploadFromUrl.mockResolvedValue({ success: true, secure_url: "https://cdn/stored.png" });
-  // uploadBuffer заливает картинку С ЭФФЕКТАМИ — она и попадает в imageUrl.
-  cloud.uploadBuffer.mockResolvedValue({ success: true, secure_url: "https://cdn/final.png" });
+  // Через uploadBuffer идут ОБА артефакта (правка 2026-08-14: чистый вырез
+  // тоже собирается у нас, а не забирается по URL у Bria): `_transparent` —
+  // источник, `_final` — он же с эффектами и он попадает в imageUrl.
+  cloud.uploadBuffer.mockImplementation((_buf: unknown, publicId: string) =>
+    Promise.resolve({
+      success: true,
+      secure_url: publicId.endsWith("_transparent")
+        ? "https://cdn/stored.png"
+        : "https://cdn/final.png",
+    }),
+  );
   fal.runVisionQa.mockResolvedValue({
     success: true,
     output: '{"hex": "#7FD4E0", "reason": "бирюза зонтика"}',
@@ -190,11 +237,31 @@ describe("хелперы производных ключей (legacy, стары
 });
 
 describe("buildAiReferencePrompt (A-1)", () => {
-  it("промпт = бриф + композиционный контракт без текста", () => {
+  // TASK no-baked-text: дефолт сменился на строгий запрет. Прежний белый
+  // список («FS, SCATTER, BONUS, VIP») и был причиной надписей на баннерах —
+  // теперь он живёт только в режиме allowText=true.
+  it("промпт = бриф + композиционный контракт, по умолчанию текст запрещён", () => {
     const p = buildAiReferencePrompt("VIP weekend");
     expect(p).toContain("Campaign brief: VIP weekend.");
+    expect(p).toContain("ABSOLUTELY NO TEXT");
+    expect(p).toContain("chips are BLANK");
+    expect(p).not.toContain("FS, SCATTER, BONUS, VIP");
+  });
+
+  it("allowText=true возвращает прежний белый список казино-слов", () => {
+    const p = buildAiReferencePrompt("VIP weekend", null, "variant", true);
     expect(p).toContain("STRICTLY NO text");
     expect(p).toContain("FS, SCATTER, BONUS, VIP");
+    expect(p).not.toContain("ABSOLUTELY NO TEXT");
+  });
+
+  it("строгий режим отдельно оговаривает карты и текст на самих референсах", () => {
+    const p = buildAiReferencePrompt("VIP weekend");
+    // Исключение заказчика: ранги и масти игральных карт — часть объекта.
+    expect(p).toContain("standard playing card");
+    // Референсы — готовые баннеры с надписями; без этой оговорки модель
+    // считает их текст частью воспроизводимого стиля.
+    expect(p).toContain("leave every piece of their text behind");
   });
 
   it("контракт A-2/A-6: белый фон, copy space по центру, три секции + depth of field", () => {
@@ -221,7 +288,7 @@ describe("processAiReferenceAsset — один ассет (TASK safe-zone/auto-h
     expect(fal.runGptImage2Edit).toHaveBeenCalledTimes(1);
     expect(fal.runPersonFal).not.toHaveBeenCalled();
     const [args] = fal.runGptImage2Edit.mock.calls[0]!;
-    expect(args.prompt).toContain("STRICTLY NO text");
+    expect(args.prompt).toContain("ABSOLUTELY NO TEXT");
     expect(args.prompt).toContain("LAYOUT GUIDE");
     expect(args.imageUrls).toHaveLength(7);
     expect(args.width).toBe(1200);
@@ -229,8 +296,8 @@ describe("processAiReferenceAsset — один ассет (TASK safe-zone/auto-h
 
     // Финал: removeBg от базы, аплоад с детерминированным public id.
     expect(fal.runBriaRemoveBg).toHaveBeenCalledWith("https://cdn/fit.png");
-    expect(cloud.uploadFromUrl).toHaveBeenCalledWith(
-      "https://fal/nobg.png",
+    expect(cloud.uploadBuffer).toHaveBeenCalledWith(
+      expect.any(Buffer),
       "v1_email_transparent",
       "bundles/bun1",
     );
@@ -291,6 +358,10 @@ describe("processAiReferenceAsset — один ассет (TASK safe-zone/auto-h
       imageUrl: "https://cdn/try2.png",
       score: 55,
       reasons: ["текст на баннере"],
+      // TASK no-baked-text: детектор нашёл кадр чистым, лечим только по
+      // замечаниям приёмки. Признак нужен лечению, чтобы понимать, может ли
+      // чистая версия побеждать по чистоте, а не только по score.
+      textClean: true,
     });
     expect(healArgs.publicIdBase).toBe("v1_email");
     expect(healArgs.brandName).toBe("Betnella");
@@ -371,25 +442,50 @@ describe("processAiReferenceAsset — один ассет (TASK safe-zone/auto-h
     expect(failCall.data.errorMessage).toContain("не выбрана вариация");
   });
 
-  it("сбой removeBg валит ассет: прозрачная версия — единственный результат", async () => {
+  // Правка 2026-08-14: фон композиции белый по контракту, поэтому кей по
+  // связному белому — полноценная замена Bria, а не деградация.
+  it("сбой removeBg НЕ валит ассет — вырезает кей по белому фону", async () => {
     fal.runBriaRemoveBg.mockResolvedValue({ success: false, error: "HTTP 500" });
-    await processAiReferenceAsset(OPTS);
-    expect(parentDoneCall()).toBeUndefined();
-    const failCall = db.bundleAsset.update.mock.calls[0]![0] as {
-      data: { status: string; errorMessage: string };
-    };
-    expect(failCall.data.status).toBe("FAILED");
+    const result = await processAiReferenceAsset(OPTS);
+    expect(result.ok).toBe(true);
+    const parent = parentDoneCall()!;
+    expect(parent.data.status).toBe("DONE");
+    expect(parent.data.metadata.transparent).toBe(true);
+  });
+
+  it("ассет падает, только если и кадр не скачался, и Bria недоступна", async () => {
+    fal.runBriaRemoveBg.mockResolvedValue({ success: false, error: "HTTP 500" });
+    // Кадр отдаётся техвалидации, но перед вырезанием скачать его не удаётся.
+    cache.fetchBuffer.mockResolvedValueOnce(pngBuffer).mockResolvedValue(null);
+    const result = await processAiReferenceAsset(OPTS);
+    expect(result.ok).toBe(false);
+    const failCall = db.bundleAsset.update.mock.calls.find(
+      (c) => (c[0] as { data: { status?: string } }).data.status === "FAILED",
+    )![0] as { data: { errorMessage: string } };
     expect(failCall.data.errorMessage).toContain("removeBg");
   });
 
-  it("сбой аплоада прозрачной версии → FAILED", async () => {
-    cloud.uploadFromUrl.mockResolvedValue({ success: false, error: "cloudinary down" });
-    await processAiReferenceAsset(OPTS);
-    expect(parentDoneCall()).toBeUndefined();
-    const failCall = db.bundleAsset.update.mock.calls[0]![0] as {
-      data: { status: string; errorMessage: string };
-    };
-    expect(failCall.data.status).toBe("FAILED");
+  it("режим bria (env-откат) не зовёт кей и работает как раньше", async () => {
+    vi.stubEnv("AI_REF_CUTOUT", "bria");
+    const result = await processAiReferenceAsset(OPTS);
+    expect(result.ok).toBe(true);
+    expect(fal.runBriaRemoveBg).toHaveBeenCalledTimes(1);
+    vi.unstubAllEnvs();
+  });
+
+  it("сбой заливки прозрачной версии → FAILED", async () => {
+    cloud.uploadBuffer.mockImplementation((_b: unknown, publicId: string) =>
+      Promise.resolve(
+        publicId.endsWith("_transparent")
+          ? { success: false, error: "HTTP 500" }
+          : { success: true, secure_url: "https://cdn/final.png" },
+      ),
+    );
+    const result = await processAiReferenceAsset(OPTS);
+    expect(result.ok).toBe(false);
+    const failCall = db.bundleAsset.update.mock.calls.find(
+      (c) => (c[0] as { data: { status?: string } }).data.status === "FAILED",
+    )![0] as { data: { errorMessage: string } };
     expect(failCall.data.errorMessage).toContain("transparent upload");
   });
 });
@@ -424,7 +520,7 @@ describe("formatGeometryHint / buildSecondaryPrompt (DI2-3/DI2-4)", () => {
     expect(p).toContain("APPROVED anchor creative");
     expect(p).toContain("Do NOT copy its layout");
     expect(p).toContain("NO reserved copy space");
-    expect(p).toContain("STRICTLY NO text");
+    expect(p).toContain("ABSOLUTELY NO TEXT");
     // Требований якорного контракта тут быть не должно.
     expect(p).not.toContain("COPY SPACE");
     expect(p).not.toContain("THREE sections");
@@ -449,11 +545,65 @@ describe("formatGeometryHint / buildSecondaryPrompt (DI2-3/DI2-4)", () => {
     expect(p).toContain("no treasure chests");
     expect(p).toContain("must feel abundant, not empty");
     // Стилистику предметов не меняем — только количество и калибр (DI3-11).
-    expect(p).toContain("same prop family as the reference banners");
+    expect(p).toContain("same visual family as the brand's reference banners");
+    // Правка 2026-08-13: набор предметов свой, а не копия якоря; мелкие
+    // пропсы можно резать краем — так построены эталоны дизайнера.
+    expect(p).toContain("do NOT reproduce the anchor creative's set of objects");
+    expect(p).toContain("the way a designer would");
+    expect(p).toContain("may run past the canvas edges and be partly cropped");
     expect(p).toContain("APPROVED anchor creative");
+    // Правка 2026-08-15: требование равномерности («spread roughly evenly»,
+    // «into all four corners») и порождало «просто расставленные» предметы.
+    expect(p).not.toContain("reaching into all four corners");
+    expect(p).not.toContain("spread roughly evenly");
     // Прежние формулировки, порождавшие перегруз, ушли.
     expect(p).not.toContain("anchor prop group");
     expect(p).not.toContain("fill the canvas with a clear focal hierarchy");
+  });
+
+  // Правка 2026-08-13 по эталонам `push1/push2 ok`: у широкого формата
+  // предметы КРУПНЫЕ и часть уходит за героя — у почти квадратного pop-up нет.
+  it("широкий формат (push) просит крупные предметы и глубину, pop-up — нет", () => {
+    const make = (targetW: number, targetH: number) =>
+      buildSecondaryPrompt({
+        variationText: "",
+        styleText: "",
+        hasAnchor: true,
+        formatLabel: "F",
+        targetW,
+        targetH,
+      });
+    const push = make(1024, 512); // 2:1
+    expect(push).toContain("SCALE (wide format)");
+    // TASK no-baked-text: крупным объектом широкого формата раньше были
+    // «объёмные буквы FS/BONUS/777» — самый прямой источник надписей на push.
+    // В строгом режиме место крупного объекта занимают предметы без знаков.
+    expect(push).toContain("oversized volumetric objects");
+    expect(push).not.toContain("oversized volumetric casino lettering");
+    expect(push).toContain("may sit BEHIND");
+
+    const popup = make(800, 600); // 4:3
+    expect(popup).toContain("clearly smaller than the character");
+    expect(popup).not.toContain("SCALE (wide format)");
+    expect(popup).not.toContain("may sit BEHIND");
+  });
+
+  it("предметы требуют разных планов резкости — «как у дизайнера»", () => {
+    const p = buildSecondaryPrompt({
+      variationText: "",
+      styleText: "",
+      hasAnchor: true,
+      formatLabel: "Push",
+      targetW: 1024,
+      targetH: 512,
+    });
+    expect(p).toContain("FOCUS");
+    expect(p).toContain("OUT OF FOCUS");
+    expect(p).toContain("motion blur");
+    expect(p).toContain("the hero is always the sharpest");
+    // Предметы на земле остаются запрещены, а «за героем» — уже нет.
+    expect(p).toContain("no props standing on the ground");
+    expect(p).not.toContain("stacked behind");
   });
 
   it("лимит предметов нормализуется: мусор и выход за границы → безопасное число", () => {
@@ -484,6 +634,111 @@ describe("formatGeometryHint / buildSecondaryPrompt (DI2-3/DI2-4)", () => {
     expect(anchor).toContain("THREE sections");
     // Правила зависимых форматов в якорь не протекли.
     expect(anchor).not.toContain("no slot machines");
+  });
+
+  // Правка 2026-08-15 (заказчик: «предметы будто просто проставлены, не похоже
+  // на единую композицию»): прежний контракт буквально просил равномерность,
+  // теперь требует иерархию, группы, направление и рваный ритм.
+  it("предметы требуют композиции дизайнера, а не равномерной россыпи", () => {
+    const p = buildSecondaryPrompt({
+      variationText: "VIP",
+      styleText: "",
+      hasAnchor: true,
+      formatLabel: "Push",
+      targetW: 1024,
+      targetH: 512,
+    });
+    expect(p).toContain("PROP COMPOSITION");
+    // Логика раскладки берётся с референсов формата — не выдумывается нами.
+    expect(p).toContain("look at how the props are ARRANGED in the reference banners");
+    expect(p).toContain("HIERARCHY");
+    expect(p).toContain("GROUPS");
+    expect(p).toContain("FLOW");
+    expect(p).toContain("RHYTHM");
+    expect(p).toContain("never make all props the same size");
+    expect(p).toContain("rather than an even sprinkle");
+    // Перекрытие внутри группы теперь разрешено: прежнее «stay separated»
+    // прямо запрещало то, из чего состоит группа.
+    expect(p).toContain("Props may overlap each other inside a group");
+    expect(p).not.toContain("The props FLOAT and stay separated");
+  });
+
+  // Правка 2026-08-15: низ коридора настраивается в админке, пол — 8.
+  it("коридор предметов берётся из админки и не опускается ниже восьми", () => {
+    const build = (minProps?: number, maxProps?: number) =>
+      buildSecondaryPrompt({
+        variationText: "",
+        styleText: "",
+        hasAnchor: true,
+        formatLabel: "Push",
+        targetW: 1024,
+        targetH: 512,
+        ...(minProps !== undefined ? { minProps } : {}),
+        ...(maxProps !== undefined ? { maxProps } : {}),
+      });
+    expect(build(10, 16)).toContain("between 10 and 16 props");
+    expect(build(10, 16)).toContain("fewer than 10 floating props is wrong, more than 16 is wrong too");
+    // Пол: ниже восьми кадр пустеет — это уже проверено живым прогоном.
+    expect(build(3)).toContain("between 8 and 14 props");
+    // Перевёрнутый коридор чиним в пользу низа, а не роняем генерацию.
+    expect(build(20, 12)).toContain("between 12 and 12 props");
+    expect(build()).toContain("between 8 and 14 props");
+  });
+
+  // Правка 2026-08-15 (заказчик: «предметы не должны быть рандомными — должна
+  // быть общая композиция промо по референсам и промпту»): набор предметов
+  // фиксируется утверждённым email, зависимые форматы собирают кадр из него.
+  it("набор предметов кампании заменяет свободный выбор объектов", () => {
+    const set = "golden coin with a ruby, red poker chip, purple gift box";
+    const build = (propInventory?: string) =>
+      buildSecondaryPrompt({
+        variationText: "Lucky Friday",
+        styleText: "",
+        hasAnchor: true,
+        formatLabel: "Push",
+        targetW: 1024,
+        targetH: 512,
+        ...(propInventory !== undefined ? { propInventory } : {}),
+      });
+
+    const withSet = build(set);
+    expect(withSet).toContain(`The campaign prop set is: ${set}`);
+    expect(withSet).toContain("NOT yours to invent");
+    // 6–10 объектов в списке против 8–14 в кадре — повтор обязан быть разрешён,
+    // иначе модель доберёт разницу выдуманными предметами.
+    expect(withSet).toContain("repeat some of them at different sizes");
+    expect(withSet).toContain("AT MOST TWO extra objects");
+    // Сборку кадра не трогаем (решение 2026-08-13): меняется инвентарь, не раскладка.
+    expect(withSet).toContain("the ARRANGEMENT, not the inventory");
+    expect(withSet).not.toContain("yours to choose");
+
+    // Fail-open: описание якоря не снялось или бандл старый — прежнее поведение.
+    const noSet = build();
+    expect(noSet).toContain("the specific objects and their arrangement are yours to choose");
+    expect(noSet).not.toContain("campaign prop set");
+  });
+
+  // Правка 2026-08-15 (заказчик: «чтобы на руке не было 4 пальца, хотя должно
+  // быть 5»): блок анатомии общий для якоря и зависимых форматов — герой
+  // кампании один, и число пальцев обязано совпадать во всех трёх.
+  it("анатомия рук требуется во всех форматах: счёт пальцев + структура с референсов", () => {
+    const push = buildSecondaryPrompt({
+      variationText: "VIP",
+      styleText: "",
+      hasAnchor: true,
+      formatLabel: "Push",
+      targetW: 1024,
+      targetH: 512,
+    });
+    for (const p of [buildAiReferencePrompt("VIP weekend"), push]) {
+      expect(p).toContain("CHARACTER ANATOMY");
+      expect(p).toContain("exactly FIVE digits");
+      // Лапы и копыта — норма бренда: структура берётся с референсов.
+      expect(p).toContain("animal paws with claws, hooves or fins");
+      expect(p).toContain("SAME number of digits the references show");
+      // Спрятать кисть можно, увести за кадр — нет (это ломало бы EDGES).
+      expect(p).toContain("hidden behind a prop or behind the body");
+    }
   });
 
   it("пол героя из тон-варианта попадает в промпт обоих форматов", () => {
@@ -530,6 +785,7 @@ describe("processAiReferenceAsset — зависимый формат (DI2-3)", 
     anchor: {
       imageUrl: "https://cdn/email-base.png",
       styleText: "Campaign style to reproduce — Palette: neon purple.",
+      propInventory: "golden coin with a ruby, red poker chip",
     },
   };
 
@@ -544,8 +800,19 @@ describe("processAiReferenceAsset — зависимый формат (DI2-3)", 
     );
     const [args] = fal.runGptImage2Edit.mock.calls[0]!;
     expect(args.imageUrls[0]).toBe("https://cdn/email-base.png");
-    expect(args.imageUrls).toHaveLength(7); // якорь + 6 референсов формата
+    // Якорь + 6 референсов формата + схема предметов последней (правка
+    // 2026-08-14): раскладку модель считывает с картинки надёжнее, чем с текста.
+    expect(args.imageUrls).toHaveLength(8);
     expect(args.prompt).toContain("APPROVED anchor creative");
+    expect(args.prompt).toContain("PROP MAP");
+    // Набор предметов кампании из контекста якоря — в промпт и в приёмку
+    // (правка 2026-08-15): три формата собираются из одного инвентаря.
+    expect(args.prompt).toContain("The campaign prop set is: golden coin with a ruby");
+    expect(reviewer.reviewComposition).toHaveBeenCalledWith(
+      expect.objectContaining({ propInventory: "golden coin with a ruby, red poker chip" }),
+    );
+    expect(args.prompt).toContain("BOTH gray panels must end up occupied");
+    // Схема ЯКОРЯ (пустой центр под текст) зависимым форматам не подаётся.
     expect(args.prompt).not.toContain("LAYOUT GUIDE");
     expect(args.width).toBe(1024);
     expect(args.height).toBe(512);
@@ -555,8 +822,10 @@ describe("processAiReferenceAsset — зависимый формат (DI2-3)", 
 
   it("чек чистого центра не выполняется, приёмка идёт профилем secondary (DI2-4)", async () => {
     await processAiReferenceAsset(PUSH_OPTS);
+    // Чек центра у зависимых не выполняется, зато выполняется чек боков:
+    // у них центр занят героем, а пустовать не должны края (правка 2026-08-13).
     const techOpts = validator.validateAiAsset.mock.calls[0]![3];
-    expect(techOpts).toEqual({});
+    expect(techOpts).toEqual({ minSideFill: 0.12 });
     const [qaArgs] = reviewer.reviewComposition.mock.calls[0]!;
     expect(qaArgs.profile).toBe("secondary");
     expect(qaArgs.anchorUrl).toBe("https://cdn/email-base.png");
@@ -613,6 +882,83 @@ describe("processAiReferenceAsset — зависимый формат (DI2-3)", 
   });
 });
 
+// Правка 2026-08-13 (боевая ошибка «center: 90% белого (порог 95%), 3 попыток»
+// → ассет FAILED → каскад «якорный ассет не сгенерирован»). Провал ТЕХНИКИ на
+// всех попытках раньше ронял ассет, минуя auto-healing, хотя лечение «убери
+// объекты из центра» — ровно тот случай, ради которого healing и делался.
+describe("провал техвалидации на всех попытках лечится, а не роняет ассет", () => {
+  const techFail = (ratio: number) => ({
+    passed: false,
+    centerRatio: ratio,
+    checks: [
+      { key: "center", passed: false, detail: `чистая зона: ${Math.round(ratio * 100)}% белого (порог 95%)` },
+    ],
+  });
+
+  it("лечение запускается от самого чистого кадра, ассет становится DONE", async () => {
+    validator.validateAiAsset
+      .mockResolvedValueOnce(techFail(0.6))
+      .mockResolvedValueOnce(techFail(0.9)) // лучший — его и лечим
+      .mockResolvedValueOnce(techFail(0.75));
+    fit.fitAndStoreAsset
+      .mockResolvedValueOnce({ ok: true, url: "https://cdn/try1.png", publicId: "t1" })
+      .mockResolvedValueOnce({ ok: true, url: "https://cdn/try2.png", publicId: "t2" })
+      .mockResolvedValueOnce({ ok: true, url: "https://cdn/try3.png", publicId: "t3" });
+    healing.healComposition.mockResolvedValue({
+      attempts: [{ imageUrl: "https://cdn/healed.png", score: 88, pass: true, reasons: [], tech: null }],
+      winner: { imageUrl: "https://cdn/healed.png", pass: true, score: 88, healingIndex: 0 },
+    });
+
+    const result = await processAiReferenceAsset(OPTS);
+
+    expect(result.ok).toBe(true);
+    const [healArgs] = healing.healComposition.mock.calls[0]!;
+    expect(healArgs.source.imageUrl).toBe("https://cdn/try2.png");
+    expect(healArgs.source.reasons[0]).toContain("center:");
+    const parent = parentDoneCall()!;
+    expect(parent.data.status).toBe("DONE");
+    expect(parent.data.metadata.qa.qaPassed).toBe(true);
+  });
+
+  it("ни одного кадра вообще (генерация не отдала картинку) → FAILED как раньше", async () => {
+    fal.runGptImage2Edit.mockResolvedValue({ success: false, error: "HTTP 500" });
+    const result = await processAiReferenceAsset(OPTS);
+    expect(result.ok).toBe(false);
+    expect(healing.healComposition).not.toHaveBeenCalled();
+  });
+});
+
+// Правка 2026-08-13 (запрос заказчика): «у части брендов персонаж один в
+// один, у части немного вариативный» — настройка Brand.characterFidelity.
+describe("сходство персонажа с референсами", () => {
+  it("дефолт — вариативный: пол и черты варьируются, персонаж узнаваем", async () => {
+    db.brand.findUnique.mockResolvedValue({ characterFidelity: null });
+    await processAiReferenceAsset(OPTS);
+    const [args] = fal.runGptImage2Edit.mock.calls[0]!;
+    expect(args.prompt).toContain("give this particular creative its own take");
+    expect(args.prompt).not.toContain("fixed asset");
+    const [qaArgs] = reviewer.reviewComposition.mock.calls[0]!;
+    expect(qaArgs.fidelity).toBe("variant");
+  });
+
+  it("exact — маскот копируется один в один, приёмка судит строго", async () => {
+    db.brand.findUnique.mockResolvedValue({ characterFidelity: "exact" });
+    await processAiReferenceAsset(OPTS);
+    const [args] = fal.runGptImage2Edit.mock.calls[0]!;
+    expect(args.prompt).toContain("reproduce the character from the reference banners EXACTLY");
+    expect(args.prompt).toContain("fixed asset");
+    const [qaArgs] = reviewer.reviewComposition.mock.calls[0]!;
+    expect(qaArgs.fidelity).toBe("exact");
+  });
+
+  it("настройка читается по ТОЧНОМУ имени тон-варианта, не по базовому", async () => {
+    await processAiReferenceAsset(OPTS);
+    expect(db.brand.findUnique).toHaveBeenCalledWith(
+      expect.objectContaining({ where: { name: "Betnella(Men)" } }),
+    );
+  });
+});
+
 // TASK glow-fade-density (DI3-15): эффекты — оформление поверх готового
 // ассета, поэтому их отключение и их сбой не должны менять судьбу ассета.
 describe("эффекты в пайплайне: рубильники и fail-open", () => {
@@ -623,7 +969,9 @@ describe("эффекты в пайплайне: рубильники и fail-ope
     };
     expect(parent.data.imageUrl).toBe("https://cdn/stored.png");
     expect(parent.data.metadata.effects).toMatchObject({ applied: false, glowHex: null });
-    expect(cloud.uploadBuffer).not.toHaveBeenCalled();
+    // Чистый вырез заливается всегда; версия с эффектами — нет.
+    const ids = cloud.uploadBuffer.mock.calls.map((c) => c[1] as string);
+    expect(ids).toEqual(["v1_email_transparent"]);
     expect(fal.runVisionQa).not.toHaveBeenCalled();
   });
 
@@ -638,7 +986,13 @@ describe("эффекты в пайплайне: рубильники и fail-ope
   });
 
   it("сбой заливки эффектов не валит ассет — остаётся чистый вырез с причиной", async () => {
-    cloud.uploadBuffer.mockResolvedValue({ success: false, error: "HTTP 500" });
+    cloud.uploadBuffer.mockImplementation((_b: unknown, publicId: string) =>
+      Promise.resolve(
+        publicId.endsWith("_final")
+          ? { success: false, error: "HTTP 500" }
+          : { success: true, secure_url: "https://cdn/stored.png" },
+      ),
+    );
     const result = await processAiReferenceAsset(OPTS);
     expect(result.ok).toBe(true);
     const parent = parentDoneCall()! as unknown as {
@@ -667,13 +1021,34 @@ describe("processAiReferenceAsset — якорь отдаёт стиль дал�
   it("сохраняет базу ДО removeBg и описание стиля, возвращает их процессору", async () => {
     const result = await processAiReferenceAsset(OPTS);
 
-    expect(style.describeCampaignStyle).toHaveBeenCalledWith("https://cdn/fit.png");
+    // Бриф уходит в тот же запрос (правка 2026-08-15) — набор предметов
+    // называется в терминах кампании.
+    expect(style.describeCampaignStyle).toHaveBeenCalledWith(
+      "https://cdn/fit.png",
+      "VIP Exclusive weekend BONUS",
+      // TASK no-baked-text: режим текста уходит и в съём инвентаря — иначе
+      // буква с якоря попала бы в набор кампании и легализовала себя в push.
+      false,
+    );
     expect(result).toEqual({
       ok: true,
       baseUrl: "https://cdn/fit.png",
       styleText: "Campaign style to reproduce — Palette: neon purple.",
+      // Набор предметов кампании — на нём соберутся push и pop-up. Источник —
+      // планировщик по референсам бренда и брифу, а не то, что случайно
+      // попало в кадр email (правка 2026-08-15).
+      propInventory:
+        "golden coin with a ruby, red poker chip. KEY objects of the campaign: golden coin with a ruby.",
       // Цвет свечения кампании уходит процессору вместе со стилем (DI3-4).
       glowHex: "#63CBD9",
+    });
+    expect(propPlan.planCampaignProps).toHaveBeenCalledWith({
+      refUrls: expect.arrayContaining([expect.stringContaining("http")]),
+      variationText: "VIP Exclusive weekend BONUS",
+      brandName: "Betnella",
+      // TASK no-baked-text: планировщик — главный канал утечки букв в
+      // push/pop-up, режим обязан доехать и до него.
+      allowText: false,
     });
     const parent = parentDoneCall()! as unknown as {
       data: { metadata: Record<string, unknown> & { qa: Record<string, unknown> } };
@@ -683,17 +1058,54 @@ describe("processAiReferenceAsset — якорь отдаёт стиль дал�
     expect(parent.data.metadata.qa.threshold).toBe(80);
     expect(parent.data.metadata.styleAnchor).toContain("neon purple");
     expect(parent.data.metadata.isStyleAnchor).toBe(true);
+    // Набор предметов кампании ложится в metadata якоря: оттуда его берут и
+    // каскадная генерация push/pop-up, и их одиночная регенерация (DI2-9).
+    expect(parent.data.metadata.styleAnchorProps).toContain("golden coin with a ruby");
   });
 
   it("сбой описания стиля не валит якорь (fail-open)", async () => {
-    style.describeCampaignStyle.mockResolvedValue({ text: "", anchor: null, error: "HTTP 500" });
+    style.describeCampaignStyle.mockResolvedValue({
+      text: "",
+      propInventory: "",
+      anchor: null,
+      error: "HTTP 500",
+    });
     const result = await processAiReferenceAsset(OPTS);
     expect(result.ok).toBe(true);
     expect(result.styleText).toBe("");
+    // Набор при этом уцелел: планировщик работает по референсам, а не по
+    // описанию якоря, — два независимых источника (правка 2026-08-15).
+    expect(result.propInventory).toContain("golden coin with a ruby");
+  });
+
+  it("сбой планировщика → набор берётся с готовой композиции email (фолбэк)", async () => {
+    propPlan.planCampaignProps.mockResolvedValue({
+      text: "",
+      plan: null,
+      error: "prop-plan-unparseable",
+    });
+    const result = await processAiReferenceAsset(OPTS);
+    expect(result.ok).toBe(true);
+    expect(result.propInventory).toBe("golden coin with a ruby, red poker chip");
+  });
+
+  it("оба источника набора отказали → зависимые форматы едут по старой логике", async () => {
+    propPlan.planCampaignProps.mockResolvedValue({ text: "", plan: null, error: "vision недоступен" });
+    style.describeCampaignStyle.mockResolvedValue({
+      text: "",
+      propInventory: "",
+      anchor: null,
+      error: "HTTP 500",
+    });
+    const result = await processAiReferenceAsset(OPTS);
+    expect(result.ok).toBe(true);
+    expect(result.propInventory).toBeUndefined();
   });
 
   it("провал ассета возвращает ok:false — зависимые форматы не поедут", async () => {
-    fal.runBriaRemoveBg.mockResolvedValue({ success: false, error: "HTTP 500" });
+    // Bria сама по себе ассет больше не валит (её заменяет кей), поэтому
+    // берём причину, после которой результата нет вовсе.
+    fit.fitAndStoreAsset.mockResolvedValue({ ok: false, reason: "fit: канвас не сошёлся" });
     expect(await processAiReferenceAsset(OPTS)).toEqual({ ok: false });
   });
 });
@@ -748,6 +1160,25 @@ describe("loadAnchorContext (DI2-9)", () => {
     });
   });
 
+  // Правка 2026-08-15: набор предметов кампании наследуется тем же путём, что
+  // и цвет свечения, — переживает регенерацию push спустя недели.
+  it("подхватывает набор предметов кампании", async () => {
+    db.bundleAsset.findUnique.mockResolvedValue({
+      status: "DONE",
+      imageUrl: "https://cdn/email-transparent.png",
+      metadata: {
+        styleAnchor: "Palette: neon purple.",
+        styleAnchorProps: "golden coin with a ruby, red poker chip",
+        qa: { baseUrl: "https://cdn/base.png" },
+      },
+    });
+    expect(await loadAnchorContext("v1", "email")).toEqual({
+      imageUrl: "https://cdn/base.png",
+      styleText: "Palette: neon purple.",
+      propInventory: "golden coin with a ruby, red poker chip",
+    });
+  });
+
   it("старый бандл без baseUrl → фолбэк на картинку ассета с пометкой", async () => {
     db.bundleAsset.findUnique.mockResolvedValue({
       status: "DONE",
@@ -770,5 +1201,112 @@ describe("loadAnchorContext (DI2-9)", () => {
     expect(await loadAnchorContext("v1", "email")).toBeNull();
     db.bundleAsset.findUnique.mockResolvedValue(null);
     expect(await loadAnchorContext("v1", "email")).toBeNull();
+  });
+});
+
+/**
+ * Текстовый гейт (TASK no-baked-text) — третий эшелон после промпта и
+ * приёмки. Проверяем ровно то, ради чего он строился: ленивое сканирование,
+ * перевыбор победителя, форс-лечение поверх пройденной приёмки и
+ * best-effort при недоступном детекторе.
+ */
+describe("текстовый гейт (TASK no-baked-text)", () => {
+  /** Скан по URL: чистый ответ либо найденная надпись. */
+  const scan = (hasText: boolean, text = "") => ({
+    md5: "m", hasText, text, confidence: 0.9, approvedOk: false,
+  });
+
+  it("чистый победитель — один скан, лечение не запускается", async () => {
+    await processAiReferenceAsset(OPTS);
+    expect(textScan.scanImageUrl).toHaveBeenCalledTimes(1);
+    expect(healing.healComposition).not.toHaveBeenCalled();
+    const done = parentDoneCall();
+    expect(done?.data.metadata.qa.textGate).toMatchObject({ clean: true, scanned: 1 });
+  });
+
+  it("грязный лучший + чистый следующий → гейт перевыбирает победителя", async () => {
+    // Все попытки валят приёмку (цикл генерации останавливается только на
+    // прошедшей), поэтому кандидатов у гейта трое. Лучший по score — с текстом.
+    reviewer.reviewComposition
+      .mockResolvedValueOnce({ pass: false, score: 70, reasons: ["композиция"] })
+      .mockResolvedValue({ pass: false, score: 50, reasons: ["композиция"] });
+    fit.fitAndStoreAsset
+      .mockResolvedValueOnce({ ok: true, url: "https://cdn/try1.png", publicId: "f1" })
+      .mockResolvedValue({ ok: true, url: "https://cdn/try2.png", publicId: "f2" });
+    textScan.scanImageUrl
+      .mockResolvedValueOnce(scan(true, "FS")) // лучший по score — грязный
+      .mockResolvedValue(scan(false)); // следующий — чистый
+    healing.healComposition.mockResolvedValue({
+      attempts: [],
+      winner: { imageUrl: "https://cdn/try2.png", pass: false, score: 50, healingIndex: null, textClean: true, textFound: "" },
+      textScanned: 0,
+    });
+
+    await processAiReferenceAsset(OPTS);
+
+    // Сканировали ровно двоих: на первом чистом останавливаемся, третий
+    // кандидат не стоил вызова.
+    expect(textScan.scanImageUrl).toHaveBeenCalledTimes(2);
+    const [args] = healing.healComposition.mock.calls[0]!;
+    // В лечение уходит ЧИСТЫЙ кандидат с меньшим score, а не лучший с «FS».
+    expect(args.source.imageUrl).toBe("https://cdn/try2.png");
+    // И замечания про текст в нём нет — стирать нечего.
+    expect(args.source.reasons.join(" ")).not.toContain("«FS»");
+    expect(args.allowText).toBe(false);
+    expect(args.textBudget).toBeDefined();
+  });
+
+  it("приёмка пройдена, но текст найден → всё равно лечим", async () => {
+    reviewer.reviewComposition.mockResolvedValue({ pass: true, score: 96, reasons: [] });
+    textScan.scanImageUrl.mockResolvedValue(scan(true, "Free spins"));
+    healing.healComposition.mockResolvedValue({
+      attempts: [{ imageUrl: "https://cdn/healed.png", score: 88, pass: true, reasons: [], tech: null }],
+      winner: { imageUrl: "https://cdn/healed.png", pass: true, score: 88, healingIndex: 0, textClean: true, textFound: "" },
+      textScanned: 1,
+    });
+    await processAiReferenceAsset(OPTS);
+    // Высокий score не индульгенция: для этого правила вердикт бинарный.
+    expect(healing.healComposition).toHaveBeenCalledTimes(1);
+    const done = parentDoneCall();
+    // В metadata лежит состояние ФИНАЛЬНОГО ассета, а не исходника.
+    expect(done?.data.metadata.qa.textGate).toMatchObject({ clean: true, found: "" });
+  });
+
+  it("текст пережил лечение → ассет DONE с предупреждением, не FAILED", async () => {
+    reviewer.reviewComposition.mockResolvedValue({ pass: true, score: 90, reasons: [] });
+    textScan.scanImageUrl.mockResolvedValue(scan(true, "BONUS"));
+    healing.healComposition.mockResolvedValue({
+      attempts: [{ imageUrl: "https://cdn/healed.png", score: 70, pass: false, reasons: [], tech: null }],
+      winner: { imageUrl: "https://cdn/healed.png", pass: false, score: 70, healingIndex: 0, textClean: false, textFound: "BONUS" },
+      textScanned: 2,
+    });
+    await processAiReferenceAsset(OPTS);
+    const done = parentDoneCall();
+    // Спор 2 R-Plan: отдаём лучшее с прочитанным текстом — это ТЗ на ретушь.
+    expect(done).toBeDefined();
+    expect(done?.data.metadata.qa.textGate).toMatchObject({ clean: false, found: "BONUS" });
+  });
+
+  it("детектор недоступен → генерация не падает, гейт помечен skipped", async () => {
+    textScan.scanImageUrl.mockResolvedValue(null);
+    await processAiReferenceAsset(OPTS);
+    expect(healing.healComposition).not.toHaveBeenCalled();
+    const done = parentDoneCall();
+    expect(done?.data.metadata.qa.textGate).toMatchObject({ clean: true, skipped: true });
+  });
+
+  it("allowText=true — гейт не включается вовсе, сканов нет", async () => {
+    db.bundle.findUnique.mockResolvedValue({
+      neuralPrompt: "VIP Exclusive weekend BONUS",
+      presetId: "p1",
+      preset: { title: "VIP Exclusive", text: "VIP Exclusive campaign", allowText: true },
+    });
+    await processAiReferenceAsset(OPTS);
+    expect(textScan.scanImageUrl).not.toHaveBeenCalled();
+    const done = parentDoneCall();
+    expect(done?.data.metadata.qa.textGate).toBeUndefined();
+    // И промпт уезжает в разрешающей редакции.
+    const [args] = fal.runGptImage2Edit.mock.calls[0]!;
+    expect(args.prompt).toContain("FS, SCATTER, BONUS, VIP");
   });
 });

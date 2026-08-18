@@ -41,12 +41,23 @@ export interface PromptPreset {
   id: string;
   title: string;
   text: string;
+  /**
+   * Разрешён ли запечённый текст на баннерах этой вариации (TASK no-baked-text).
+   * В мастере — только для показа: настройка живёт в «Вариации и референсы».
+   */
+  allowText: boolean;
 }
 
 export interface BrandGroup {
   key: string; // base name (one toggle = both tone variants, D3/D7)
   displayName: string;
   variants: Array<{ name: string; displayName: string }>;
+  /**
+   * Персонаж копируется с референсов один в один (правка 2026-08-13).
+   * false — вариативный (дефолт): узнаваем, но с собственными чертами.
+   * Настройка бренда целиком, ставится в «Вариациях и референсах».
+   */
+  exactCharacter: boolean;
 }
 
 /** Composition metadata of an engine-rendered asset (TASK email-composition):
@@ -72,7 +83,18 @@ export interface BundleAssetMeta {
     /** Оценка победителя и порог приёмки (DI2-5). */
     score: number | null;
     threshold: number | null;
+    /**
+     * Текстовый гейт (TASK no-baked-text). null — текст разрешён или ассет
+     * сгенерирован до правки; `clean: false` — надпись осталась, `found` = что
+     * именно прочитал детектор.
+     */
+    textGate: { clean: boolean; found: string; skipped: boolean } | null;
   } | null;
+  /**
+   * Свечение стоит в фиксированной точке холста и за объектом не следует:
+   * `ok: false` — свет горит мимо, стоит посмотреть глазами. Не блокирует.
+   */
+  glowCheck: { ok: boolean; coverage: number } | null;
 }
 
 export interface BundleDetails {
@@ -360,7 +382,14 @@ export const useBundlesStore = defineStore("bundles", () => {
       return true;
     } catch (err) {
       const status = (err as { statusCode?: number })?.statusCode;
-      actionError.value = status === 503 ? "queue_unavailable" : errorLabel;
+      // Код ошибки бэкенда (правка 2026-08-17). До неё сохранялся только
+      // статус, и всё, кроме 503, схлопывалось в общий errorLabel — поэтому
+      // «зависимые форматы ещё генерируются» доходило до менеджера как
+      // «Действие не выполнено, попробуйте ещё раз», то есть как предложение
+      // повторить действие, которое заведомо не пройдёт.
+      const code = (err as { data?: { error?: string } })?.data?.error;
+      actionError.value =
+        typeof code === "string" && code ? code : status === 503 ? "queue_unavailable" : errorLabel;
       await refreshSelected();
       return false;
     }

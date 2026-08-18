@@ -12,7 +12,7 @@ import sharp from "sharp";
  */
 
 export interface AiTechCheck {
-  key: "size" | "sharpness" | "borders" | "center";
+  key: "size" | "sharpness" | "borders" | "center" | "sides";
   passed: boolean;
   detail: string;
 }
@@ -28,6 +28,12 @@ export interface FractionZone {
 export interface AiTechReport {
   passed: boolean;
   checks: AiTechCheck[];
+  /**
+   * Доля почти-белых пикселей в зоне чистого центра (0..1); отсутствует, если
+   * чек не выполнялся. Нужна пайплайну, чтобы при провале ВСЕХ попыток выбрать
+   * наименее испорченный кадр и отдать его на auto-healing, а не ронять ассет.
+   */
+  centerRatio?: number;
 }
 
 /**
@@ -60,6 +66,20 @@ const BORDER_DARK_MEAN = 10;
  * Чек только судит попытку (ретрай/best-of) — кадр banana НЕ модифицируется.
  */
 export const CENTER_BG_MIN_LUMA = 235;
+
+/**
+ * Минимальная заполненность боковых третей для push/pop-up (правка
+ * 2026-08-13: «иногда не генерирует предметы», «в одном бренде в push есть
+ * предметы, во втором нет»). Замеры эталонов дизайнера (доля не-белых
+ * пикселей в трети): push1 24.6/49.4, push2 35.3/46.5, pop-up ok1 21.8/27.4,
+ * pop-up ok2 30.4/35.2. Порог 12 % берёт худший эталон почти вдвое с запасом —
+ * чек ловит именно ПУСТОЙ бок (герой в центре и белые поля), а не «чуть
+ * скромнее эталона».
+ *
+ * Проверка детерминированная и бесплатная, поэтому она надёжнее промпта и
+ * VLM: провал уводит попытку в ретрай, а исчерпание ретраев — в auto-healing.
+ */
+export const SIDE_FILL_MIN_RATIO = 0.12;
 export const CENTER_CLEAR_MIN_RATIO = 0.95;
 
 /** Дисперсия лапласиана (4-соседний) по грейскейл-байтам. */
@@ -125,9 +145,16 @@ export async function validateAiAsset(
   opts?: {
     /** Зона, обязанная быть чисто-белой (доли канваса); без неё чек не выполняется. */
     centerClearZone?: FractionZone;
+    /**
+     * Минимальная доля не-белых пикселей в каждой боковой трети (0..1); без
+     * неё чек не выполняется. Ставится только зависимым форматам — у email
+     * своя раскладка, там боковые секции сторожит приёмщик.
+     */
+    minSideFill?: number;
   },
 ): Promise<AiTechReport> {
   const checks: AiTechCheck[] = [];
+  let centerRatio: number | undefined;
 
   let meta: Awaited<ReturnType<ReturnType<typeof sharp>["metadata"]>>;
   try {
@@ -205,7 +232,37 @@ export async function validateAiAsset(
       passed: centerOk,
       detail: `чистая зона: ${Math.round(ratio * 100)}% белого (порог ${Math.round(CENTER_CLEAR_MIN_RATIO * 100)}%)`,
     });
+    centerRatio = ratio;
   }
 
-  return { passed: checks.every((c) => c.passed), checks };
+  // Заполненность боков (зависимые форматы): герой занимает центр, предметы
+  // обязаны жить по краям — именно их отсутствие заказчик видит как «пусто».
+  if (opts?.minSideFill !== undefined) {
+    const third = Math.max(1, Math.floor(pw / 3));
+    const sideFill = (x0: number, x1: number) => {
+      let ink = 0;
+      let total = 0;
+      for (let y = 0; y < ph; y++)
+        for (let x = x0; x < x1; x++) {
+          if (gray[y * pw + x]! < CENTER_BG_MIN_LUMA) ink++;
+          total++;
+        }
+      return total > 0 ? ink / total : 0;
+    };
+    const left = sideFill(0, third);
+    const right = sideFill(pw - third, pw);
+    const worst = Math.min(left, right);
+    const pct = (v: number) => `${Math.round(v * 1000) / 10}%`;
+    checks.push({
+      key: "sides",
+      passed: worst >= opts.minSideFill,
+      detail: `предметы по краям: слева ${pct(left)}, справа ${pct(right)} (минимум ${pct(opts.minSideFill)})`,
+    });
+  }
+
+  return {
+    passed: checks.every((c) => c.passed),
+    checks,
+    ...(centerRatio !== undefined ? { centerRatio } : {}),
+  };
 }

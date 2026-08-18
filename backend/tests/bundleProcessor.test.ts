@@ -51,6 +51,10 @@ const scenePipeline = vi.hoisted(() => ({ renderSceneAsset: vi.fn() }));
 const aiRef = vi.hoisted(() => ({
   processAiReferenceAsset: vi.fn(),
   loadAnchorContext: vi.fn(),
+  // Хвост правки ai_reference (2026-08-17): вырез и эффекты живут на своих
+  // тестах, здесь важен факт, что правка через них ПРОХОДИТ.
+  cutoutComposition: vi.fn(),
+  applyEffectsToAsset: vi.fn(),
 }));
 
 vi.mock("../src/lib/prisma.js", () => ({ prisma: db }));
@@ -78,6 +82,8 @@ vi.mock("../src/services/aiReferencePipeline.js", async (importOriginal) => {
     ...actual,
     processAiReferenceAsset: aiRef.processAiReferenceAsset,
     loadAnchorContext: aiRef.loadAnchorContext,
+    cutoutComposition: aiRef.cutoutComposition,
+    applyEffectsToAsset: aiRef.applyEffectsToAsset,
   };
 });
 
@@ -118,6 +124,18 @@ beforeEach(() => {
   cloud.uploadBuffer.mockReset();
   aiRef.processAiReferenceAsset.mockReset();
   aiRef.loadAnchorContext.mockReset();
+  aiRef.cutoutComposition.mockReset();
+  aiRef.applyEffectsToAsset.mockReset();
+  aiRef.cutoutComposition.mockResolvedValue({
+    cutout: Buffer.from("cut"),
+    source: "hybrid",
+    holes: 1,
+  });
+  aiRef.applyEffectsToAsset.mockResolvedValue({
+    imageUrl: "https://cdn/edited_final.png",
+    meta: { applied: true, glowHex: "#2FCDD1" },
+    textColor: "#111111",
+  });
   aiRef.processAiReferenceAsset.mockResolvedValue({ ok: true, baseUrl: "https://cdn/base.png", styleText: "Palette: neon." });
   validator.validateComposedAsset.mockReset();
   validator.personLayerSanity.mockReset();
@@ -727,7 +745,13 @@ describe("processEditAssetJob (D9)", () => {
     width: 1200,
     height: 600,
     imageUrl: "https://cdn/email.png",
-    variant: { id: "v1", brandName: "Betnella(Men)" },
+    variant: {
+      id: "v1",
+      brandName: "Betnella(Men)",
+      // Режим сборки формата (правка 2026-08-17): от него зависит контракт
+      // фона в промпте правки. Здесь движковый рендер — прежний full-bleed.
+      bundle: { bundleType: { assets: [{ key: "email", label: "Email" }] } },
+    },
   };
 
   it("edits img2img from the CURRENT image and preserves the canvas size", async () => {
@@ -747,6 +771,124 @@ describe("processEditAssetJob (D9)", () => {
       data: { status: "DONE", imageUrl: "https://cdn/edited.png", errorMessage: null },
     });
     expect(recompute).toHaveBeenCalledWith("bun1");
+  });
+
+  /**
+   * Правка 2026-08-17 (заказчик: «нажимаю Edit — оно меняет фон»). Промпт
+   * правки безусловно требовал «full-bleed: фон на весь канвас», хотя у
+   * ai_reference контракт обратный — вырезанная композиция на чисто-белом.
+   * Любая правка заливала белое сплошной картинкой, и ассет переставал
+   * годиться для наложения.
+   */
+  /** Ассет ai_reference: якорь с базой до эффектов и уже выбранным свечением. */
+  const aiRefEditRow = {
+    ...editRow,
+    metadata: {
+      qa: { baseUrl: "https://cdn/base_before_effects.png" },
+      effects: { glowHex: "#2FCDD1" },
+    },
+    variant: {
+      ...editRow.variant,
+      bundle: {
+        bundleType: {
+          assets: [
+            { key: "email", label: "Email", composeMode: "ai_reference" },
+            { key: "push", label: "Push", composeMode: "ai_reference" },
+          ],
+        },
+      },
+    },
+  };
+
+  it("ai_reference: правка сохраняет белый фон и держит copy space", async () => {
+    db.bundleAsset.findUnique.mockResolvedValue(aiRefEditRow);
+    fal.runPersonFal.mockResolvedValue({ success: true, imageUrl: "https://fal/edited.png" });
+    imageSize.probeImageSize.mockResolvedValue({ width: 1200, height: 600 });
+    cloud.uploadFromUrl.mockResolvedValue({ success: true, secure_url: "https://cdn/edited.png" });
+    cloud.uploadBuffer.mockResolvedValue({ success: true, secure_url: "https://cdn/edited_tr.png" });
+
+    await processEditAssetJob("bun1", "v1", "a1", "поменяй цвет платья");
+
+    const prompt = fal.runPersonFal.mock.calls[0]![0] as string;
+    expect(prompt).toContain("поменяй цвет платья");
+    expect(prompt).toContain("pure solid white");
+    expect(prompt).not.toContain("Full-bleed");
+    // Прежнее «Keep the protected empty areas empty» не говорило ГДЕ зона,
+    // и модель заполняла центр — макет письма ломался.
+    expect(prompt).toContain("COPY SPACE");
+    expect(prompt).toContain("middle half of the canvas");
+  });
+
+  /**
+   * Заказчик 2026-08-17: «через Edit не соблюдается safe zone, фейд пропадает
+   * и пропадает пятно по центру». Правка работала по `_final` — картинке с уже
+   * наложенными свечением и фейдом — и записывала результат модели напрямую,
+   * минуя вырезание и эффекты.
+   */
+  it("ai_reference: правка идёт по базе ДО эффектов, а не по финальной картинке", async () => {
+    db.bundleAsset.findUnique.mockResolvedValue(aiRefEditRow);
+    fal.runPersonFal.mockResolvedValue({ success: true, imageUrl: "https://fal/edited.png" });
+    imageSize.probeImageSize.mockResolvedValue({ width: 1200, height: 600 });
+    cloud.uploadFromUrl.mockResolvedValue({ success: true, secure_url: "https://cdn/edited.png" });
+    cloud.uploadBuffer.mockResolvedValue({ success: true, secure_url: "https://cdn/edited_tr.png" });
+
+    await processEditAssetJob("bun1", "v1", "a1", "x");
+    // Источник — metadata.qa.baseUrl, иначе свечение легло бы на свечение.
+    expect(fal.runPersonFal.mock.calls[0]![1]).toEqual(["https://cdn/base_before_effects.png"]);
+  });
+
+  it("ai_reference: после правки заново идут вырезание и эффекты", async () => {
+    db.bundleAsset.findUnique.mockResolvedValue(aiRefEditRow);
+    fal.runPersonFal.mockResolvedValue({ success: true, imageUrl: "https://fal/edited.png" });
+    imageSize.probeImageSize.mockResolvedValue({ width: 1200, height: 600 });
+    cloud.uploadFromUrl.mockResolvedValue({ success: true, secure_url: "https://cdn/edited.png" });
+    cloud.uploadBuffer.mockResolvedValue({ success: true, secure_url: "https://cdn/edited_tr.png" });
+
+    await processEditAssetJob("bun1", "v1", "a1", "x");
+
+    expect(aiRef.cutoutComposition).toHaveBeenCalledTimes(1);
+    const [effArgs] = aiRef.applyEffectsToAsset.mock.calls[0]!;
+    // Цвет свечения кампании фиксирован: правка платья не меняет свет.
+    expect(effArgs.inheritedGlowHex).toBe("#2FCDD1");
+    // Safe zone — только у якоря.
+    expect(effArgs.safeZone).not.toBeNull();
+
+    const write = db.bundleAsset.update.mock.calls.at(-1)![0] as {
+      data: { imageUrl: string; metadata: Record<string, unknown> };
+    };
+    // В ассет уходит картинка С эффектами, а не сырой результат модели.
+    expect(write.data.imageUrl).toBe("https://cdn/edited_final.png");
+    expect(write.data.metadata.transparent).toBe(true);
+    expect(write.data.metadata.edited).toBe(true);
+    // База обновлена: регенерация push/pop-up унаследует ПРАВЛЕНЫЙ стиль.
+    expect((write.data.metadata.qa as { baseUrl: string }).baseUrl).toBe("https://cdn/edited.png");
+  });
+
+  it("ai_reference: у зависимого формата copy space не требуется", async () => {
+    db.bundleAsset.findUnique.mockResolvedValue({
+      ...aiRefEditRow,
+      assetKey: "push",
+    });
+    fal.runPersonFal.mockResolvedValue({ success: true, imageUrl: "https://fal/edited.png" });
+    imageSize.probeImageSize.mockResolvedValue({ width: 1200, height: 600 });
+    cloud.uploadFromUrl.mockResolvedValue({ success: true, secure_url: "https://cdn/edited.png" });
+    cloud.uploadBuffer.mockResolvedValue({ success: true, secure_url: "https://cdn/edited_tr.png" });
+
+    await processEditAssetJob("bun1", "v1", "a1", "x");
+    // На push текст не накладывается — пустая середина выгрызла бы баннер.
+    expect(fal.runPersonFal.mock.calls[0]![0]).not.toContain("COPY SPACE");
+    const [effArgs] = aiRef.applyEffectsToAsset.mock.calls[0]!;
+    expect(effArgs.safeZone).toBeNull();
+  });
+
+  it("движковый рендер: прежний full-bleed сохраняется", async () => {
+    db.bundleAsset.findUnique.mockResolvedValue(editRow);
+    fal.runPersonFal.mockResolvedValue({ success: true, imageUrl: "https://fal/edited.png" });
+    imageSize.probeImageSize.mockResolvedValue({ width: 1200, height: 600 });
+    cloud.uploadFromUrl.mockResolvedValue({ success: true, secure_url: "https://cdn/edited.png" });
+
+    await processEditAssetJob("bun1", "v1", "a1", "x");
+    expect(fal.runPersonFal.mock.calls[0]![0]).toContain("Full-bleed");
   });
 
   it("re-expands (with bleed) to the canvas when the edit drifts the size", async () => {
