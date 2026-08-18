@@ -30,7 +30,7 @@ const DEFAULT_DICTIONARY: Record<string, { language: string; isDefault: boolean 
     { language: "FR", isDefault: true },
     { language: "EN", isDefault: false }
   ],
-  "Bosnia and Herzegovina": [
+  "Bosnia & Herzegovina": [
     { language: "BS", isDefault: true }
   ],
   "Brazil": [
