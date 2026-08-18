@@ -476,15 +476,21 @@ generateRouter.post("/generate/inpaint", async (req: Request, res: Response) => 
 //   pipeline yet, so that tab returns nothing (Phase 0 decision). Edited images
 //   (isEdit=true) show up in "generated" (= General) and "edited"; the typed
 //   Person/Item tabs stay edit-free (задача 3).
-type ContentType = "Person" | "Item" | "Background" | "Tournament";
-function contentTypeOf(actionType: "FULL" | "CREATE_ITEM" | "NANO_REF" | "TOURNAMENT"): ContentType {
+type ContentType = "Person" | "Item" | "Background" | "Tournament" | "Welcome";
+function contentTypeOf(
+  actionType: "FULL" | "CREATE_ITEM" | "NANO_REF" | "TOURNAMENT" | "WELCOME",
+): ContentType {
   if (actionType === "TOURNAMENT") return "Tournament";
+  if (actionType === "WELCOME") return "Welcome";
   return actionType === "CREATE_ITEM" ? "Item" : "Person";
 }
 
+/** Pack results live in their own tabs, never in the general gallery. */
+const PACK_ACTION_TYPES = ["TOURNAMENT", "WELCOME"] as const;
+
 /** Tab-specific Generation filter, merged into the base gallery where clause. */
 function tabWhere(
-  tab: "generated" | "person" | "item" | "background" | "edited" | "tournament",
+  tab: "generated" | "person" | "item" | "background" | "edited" | "tournament" | "welcome",
 ): Prisma.GenerationWhereInput {
   switch (tab) {
     case "person":
@@ -500,12 +506,15 @@ function tabWhere(
       // Archive's "Tournament Pack" tab (задача 4): the flat read-only view of
       // tournament results, with the standard period/search filters.
       return { actionType: "TOURNAMENT" };
+    case "welcome":
+      // "Welcome Pack" tab (TASK welcome-packs): same flat read-only view.
+      return { actionType: "WELCOME" };
     case "generated":
     default:
       // "General" (задача 3): EVERYTHING the user generated, edits included —
-      // the Edited tab stays the edits-only view. Tournament results live in
-      // their own tab ("Tournament Pack", Phase 6), so they stay excluded.
-      return { actionType: { not: "TOURNAMENT" } };
+      // the Edited tab stays the edits-only view. Pack results (Tournament,
+      // Welcome) live in their own tabs, so they stay excluded here.
+      return { actionType: { notIn: [...PACK_ACTION_TYPES] } };
   }
 }
 
@@ -540,11 +549,18 @@ const gallerySchema = z.object({
   search: z.string().trim().min(1).optional(), // partial brand match (Archive search)
   period: z.enum(["today", "week", "month", "3months"]).default("3months"),
   tab: z
-    .enum(["generated", "person", "item", "background", "edited", "tournament"])
+    .enum(["generated", "person", "item", "background", "edited", "tournament", "welcome"])
     .default("generated"),
 });
 
-type GalleryTab = "generated" | "person" | "item" | "background" | "edited" | "tournament";
+type GalleryTab =
+  | "generated"
+  | "person"
+  | "item"
+  | "background"
+  | "edited"
+  | "tournament"
+  | "welcome";
 
 /** Shared gallery where-clause builder, reused by the list + ZIP export routes. */
 function galleryWhere(
@@ -598,6 +614,7 @@ generateRouter.get("/generations", async (req: Request, res: Response) => {
         isEdit: true,
         createdAt: true,
         tourFileName: true, // Archive tournament tab shows the fixed ZIP name
+        welFileName: true, // ditto for the Welcome Pack tab
       },
     }),
   ]);

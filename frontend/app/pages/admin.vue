@@ -705,6 +705,241 @@ async function loadTourLog() {
   }
 }
 
+// ---- Welcome packs (TASK welcome-packs) ----
+// Та же тройка поверхностей, что у турниров: эта панель (ADMIN/MANAGER), окно
+// «Edit Welcome packs» у супер-дизайнера и страница дизайнера. Отличия от
+// турниров: у элемента ОДИН промпт (нет Base/VIP), а «свои референсы» —
+// переключатель категории, а не захардкоженный ключ. Журнал отдельный.
+interface WelAdminElement {
+  id: string;
+  name: string;
+  order: number;
+  isActive: boolean;
+  referenceImages: string[];
+  prompt: { content: string; updatedAt: string } | null;
+}
+interface WelAdminCategory {
+  id: string;
+  key: string;
+  name: string;
+  usesOwnReferences: boolean;
+  order: number;
+  elements: WelAdminElement[];
+}
+
+const welCategories = ref<WelAdminCategory[]>([]);
+const welSystemPrompt = ref("");
+const welMsg = ref<Record<string, string>>({}); // element id | "system" | category id
+const welNewElementName = ref<Record<string, string>>({}); // per category id
+/** Draft prompt per element — the textarea is not bound to the loaded row. */
+const welPromptDraft = ref<Record<string, string>>({});
+
+async function loadWelcome() {
+  try {
+    const res = await api<{ categories: WelAdminCategory[]; systemPrompt: string }>(
+      "/api/welcome-admin/config",
+    );
+    welCategories.value = res.categories.map((c) => ({
+      ...c,
+      elements: c.elements.map((e) => ({
+        ...e,
+        referenceImages: c.usesOwnReferences ? padTo2(e.referenceImages) : e.referenceImages,
+      })),
+    }));
+    for (const c of welCategories.value)
+      for (const e of c.elements) welPromptDraft.value[e.id] = e.prompt?.content ?? "";
+    welSystemPrompt.value = res.systemPrompt;
+    void loadWelLog();
+  } catch {
+    error.value = "Не удалось загрузить Welcome packs.";
+  }
+}
+
+const welNewCatName = ref("");
+const welNewCatOwnRefs = ref(false);
+
+async function addWelCategory() {
+  const name = welNewCatName.value.trim();
+  if (!name) return;
+  welMsg.value.newcat = "";
+  try {
+    await api("/api/welcome-admin/categories", {
+      method: "POST",
+      body: { name, usesOwnReferences: welNewCatOwnRefs.value },
+    });
+    welNewCatName.value = "";
+    welNewCatOwnRefs.value = false;
+    welMsg.value.newcat = "Категория создана ✓";
+    await loadWelcome();
+  } catch {
+    welMsg.value.newcat = "Не удалось создать категорию.";
+  }
+}
+
+async function saveWelCategory(cat: WelAdminCategory) {
+  welMsg.value[cat.id] = "";
+  try {
+    await api(`/api/welcome-admin/categories/${cat.id}`, {
+      method: "PATCH",
+      body: { name: cat.name.trim(), usesOwnReferences: cat.usesOwnReferences },
+    });
+    welMsg.value[cat.id] = "Сохранено ✓";
+    await loadWelcome();
+  } catch {
+    welMsg.value[cat.id] = "Ошибка сохранения";
+  }
+}
+
+/** Hard delete: элементы, дефолты и локальные правки уходят; история остаётся. */
+async function deleteWelCategory(cat: WelAdminCategory) {
+  const n = cat.elements.length;
+  const ok = window.confirm(
+    `Удалить категорию «${cat.name}»${n ? ` вместе с ${n} элемент(ами)` : ""}?\n` +
+      "Дефолтные промпты и локальные правки дизайнеров по этим элементам будут удалены. " +
+      "История генераций и старые ZIP не пострадают.",
+  );
+  if (!ok) return;
+  try {
+    await api(`/api/welcome-admin/categories/${cat.id}`, { method: "DELETE" });
+    welCategories.value = welCategories.value.filter((c) => c.id !== cat.id);
+    void loadWelLog();
+  } catch {
+    welMsg.value[cat.id] = "Не удалось удалить категорию.";
+  }
+}
+
+async function addWelElement(cat: WelAdminCategory) {
+  const name = (welNewElementName.value[cat.id] ?? "").trim();
+  if (!name) return;
+  welMsg.value[cat.id] = "";
+  try {
+    await api("/api/welcome-admin/elements", {
+      method: "POST",
+      body: { categoryId: cat.id, name },
+    });
+    welNewElementName.value[cat.id] = "";
+    welMsg.value[cat.id] = "Элемент добавлен ✓";
+    await loadWelcome();
+  } catch (e: unknown) {
+    const code = (e as { data?: { error?: string } })?.data?.error;
+    welMsg.value[cat.id] =
+      code === "already_exists" ? "Такой элемент уже есть." : "Не удалось добавить элемент.";
+  }
+}
+
+async function saveWelPrompt(el: WelAdminElement) {
+  welMsg.value[el.id] = "";
+  const content = (welPromptDraft.value[el.id] ?? "").trim();
+  if (!content) {
+    welMsg.value[el.id] = "Промпт не может быть пустым.";
+    return;
+  }
+  try {
+    await api("/api/welcome-admin/prompts", {
+      method: "PUT",
+      body: { elementId: el.id, content },
+    });
+    welMsg.value[el.id] = "Промпт сохранён ✓ (у пользователей с правкой появится плашка)";
+    void loadWelLog();
+  } catch {
+    welMsg.value[el.id] = "Ошибка сохранения промпта";
+  }
+}
+
+/** Save the element's name (+ own refs) — the card's Сохранить button. */
+async function saveWelElement(cat: WelAdminCategory, el: WelAdminElement) {
+  welMsg.value[el.id] = "";
+  try {
+    const body: { name: string; referenceImages?: string[] } = { name: el.name.trim() };
+    if (cat.usesOwnReferences)
+      body.referenceImages = el.referenceImages.map((s) => s.trim()).filter(Boolean);
+    await api(`/api/welcome-admin/elements/${el.id}`, { method: "PATCH", body });
+    welMsg.value[el.id] = "Сохранено ✓";
+    void loadWelLog();
+  } catch (e: unknown) {
+    const code = (e as { data?: { error?: string } })?.data?.error;
+    welMsg.value[el.id] =
+      code === "already_exists" ? "Имя уже занято в этой категории." : "Ошибка сохранения";
+  }
+}
+
+async function toggleWelActive(el: WelAdminElement) {
+  welMsg.value[el.id] = "";
+  try {
+    await api(`/api/welcome-admin/elements/${el.id}`, {
+      method: "PATCH",
+      body: { isActive: !el.isActive },
+    });
+    el.isActive = !el.isActive;
+    welMsg.value[el.id] = el.isActive ? "Включён ✓" : "Выключен (скрыт у дизайнеров)";
+    void loadWelLog();
+  } catch {
+    welMsg.value[el.id] = "Ошибка";
+  }
+}
+
+/** Removal is soft (isActive=false) — generation history keeps the name. */
+async function deleteWelElement(el: WelAdminElement) {
+  welMsg.value[el.id] = "";
+  try {
+    await api(`/api/welcome-admin/elements/${el.id}`, { method: "DELETE" });
+    el.isActive = false;
+    welMsg.value[el.id] = "Выключен (скрыт у дизайнеров)";
+    void loadWelLog();
+  } catch {
+    welMsg.value[el.id] = "Ошибка";
+  }
+}
+
+async function uploadWelRef(el: WelAdminElement, slot: number, e: Event) {
+  const input = e.target as HTMLInputElement;
+  const file = input.files?.[0];
+  input.value = "";
+  if (!file) return;
+  welMsg.value[el.id] = "Загрузка картинки…";
+  try {
+    const dataUrl = await fileToDataUrl(file);
+    const res = await api<{ secure_url: string }>("/api/welcome-admin/upload", {
+      method: "POST",
+      body: { dataUrl },
+    });
+    el.referenceImages[slot] = res.secure_url;
+    welMsg.value[el.id] = "Картинка загружена — нажми Сохранить";
+  } catch {
+    welMsg.value[el.id] = "Ошибка загрузки картинки";
+  }
+}
+
+async function saveWelSystemPrompt() {
+  welMsg.value.system = "";
+  try {
+    await api("/api/welcome-admin/system-prompt", {
+      method: "PUT",
+      body: { content: welSystemPrompt.value },
+    });
+    welMsg.value.system = "Сохранено ✓";
+    void loadWelLog();
+  } catch {
+    welMsg.value.system = "Ошибка сохранения";
+  }
+}
+
+// Отдельный журнал (заказчик: «разными вкладками»), тот же формат записей.
+const welLog = ref<TourLogEntry[]>([]);
+const welLogLoading = ref(false);
+
+async function loadWelLog() {
+  welLogLoading.value = true;
+  try {
+    const res = await api<{ entries: TourLogEntry[] }>("/api/welcome-admin/change-log?limit=50");
+    welLog.value = res.entries;
+  } catch {
+    welMsg.value.log = "Не удалось загрузить журнал.";
+  } finally {
+    welLogLoading.value = false;
+  }
+}
+
 // ---- Image Bundles: шаблоны типов (TASK crm-bundle, D13) ----
 // Фон-шаблон подаётся генерации ПЕРВЫМ референсом — модель копирует его
 // композиционные зоны. Хранится в BundleType.assets[].templateUrl.
@@ -1268,8 +1503,8 @@ async function loadAiRefLogs(reset = true) {
 }
 
 onMounted(() => {
-  // MANAGER only reaches the Tournaments section — the ADMIN-only loads would
-  // just 403 on /api/admin, so they are skipped entirely.
+  // MANAGER only reaches the pack sections (Tournaments / Welcome packs) — the
+  // ADMIN-only loads would just 403 on /api/admin, so they are skipped entirely.
   if (auth.isAdmin) {
     void load();
     void loadCatalog();
@@ -1282,6 +1517,7 @@ onMounted(() => {
     void loadAiRefLogs();
   }
   void loadTournaments();
+  void loadWelcome();
 });
 </script>
 
@@ -1888,6 +2124,173 @@ onMounted(() => {
           </div>
         </details>
         <p v-if="!tourLog.length && !tourLogLoading" class="muted">Записей пока нет.</p>
+      </div>
+    </section>
+
+    <!-- Welcome packs (TASK welcome-packs). Visible to ADMIN and MANAGER, like
+         the Tournaments panel above — the same three-surface split. -->
+    <section class="panel">
+      <h2>Welcome packs</h2>
+      <p class="muted small">
+        Категории, элементы и дефолтные промпты страницы Welcome packs. Ничего не
+        засеивается автоматически — начните с создания категории. У элемента ОДИН
+        промпт (режимов Base/VIP здесь нет). Дефолты видны всем дизайнерам; их
+        локальные правки не затрагиваются, но при изменении дефолта появится плашка.
+      </p>
+
+      <!-- System wrapper -->
+      <div class="item-prompt">
+        <div class="brand-card__head">
+          <span class="brand-card__name">Системная обёртка</span>
+          <span class="badge badge--off" v-text="'{{prompt}} = промпт элемента'" />
+          <span v-if="welMsg.system" class="brand-card__msg">{{ welMsg.system }}</span>
+        </div>
+        <p class="muted small">
+          Необязательная текстовая добавка к промпту элемента, общая для ВСЕХ
+          генераций Welcome packs. Пусто = промпт элемента уходит prompt writer'у
+          как есть.
+        </p>
+        <textarea v-model="welSystemPrompt" class="prompt" rows="3" />
+        <div class="brand-card__foot">
+          <button class="btn-primary" @click="saveWelSystemPrompt">Сохранить</button>
+        </div>
+      </div>
+
+      <!-- New category: the own-references flag replaces the Base/VIP picker -->
+      <form class="add-form" @submit.prevent="addWelCategory">
+        <input v-model="welNewCatName" type="text" placeholder="Новая категория (напр. Welcome Series)…" />
+        <label class="checkbox" title="Элементы будут нести свои картинки вместо картинок бренда">
+          <input v-model="welNewCatOwnRefs" type="checkbox" />
+          Свои референсы
+        </label>
+        <button type="submit" class="btn-primary">Создать категорию</button>
+        <span v-if="welMsg.newcat" class="brand-card__msg">{{ welMsg.newcat }}</span>
+      </form>
+
+      <div v-for="cat in welCategories" :key="cat.id" class="tour-cat">
+        <div class="tour-cat__head">
+          <input v-model="cat.name" class="field__input tour-cat__name" type="text" />
+          <span class="badge badge--off" :title="'Папка в ZIP'">{{ cat.key }}</span>
+          <label
+            class="checkbox"
+            title="Выключение не удаляет уже загруженные картинки элементов"
+          >
+            <input v-model="cat.usesOwnReferences" type="checkbox" />
+            Свои референсы
+          </label>
+          <button class="btn-primary btn-small" @click="saveWelCategory(cat)">Сохранить</button>
+          <button class="btn-danger btn-small" @click="deleteWelCategory(cat)">
+            Удалить категорию
+          </button>
+          <span v-if="welMsg[cat.id]" class="brand-card__msg">{{ welMsg[cat.id] }}</span>
+        </div>
+
+        <form class="add-form" @submit.prevent="addWelElement(cat)">
+          <input v-model="welNewElementName[cat.id]" type="text" placeholder="Новый элемент…" />
+          <button type="submit" class="btn-primary">Добавить</button>
+        </form>
+
+        <div class="brand-list">
+          <div
+            v-for="el in cat.elements"
+            :key="el.id"
+            :class="['brand-card', { 'tour-el--off': !el.isActive }]"
+          >
+            <div class="brand-card__head">
+              <input v-model="el.name" class="field__input tour-el__name" type="text" />
+              <span v-if="!el.isActive" class="badge badge--warn">выключен</span>
+              <span v-if="!el.prompt" class="badge badge--warn">без промпта</span>
+              <span v-if="welMsg[el.id]" class="brand-card__msg">{{ welMsg[el.id] }}</span>
+            </div>
+
+            <!-- Own references: the 2 images baked into this element's generations -->
+            <div v-if="cat.usesOwnReferences" class="refs refs--two">
+              <div v-for="(url, i) in el.referenceImages" :key="i" class="ref">
+                <div class="ref__preview">
+                  <img v-if="url" :src="url" alt="" />
+                  <span v-else class="ref__ph">Ref{{ i + 1 }}</span>
+                </div>
+                <input
+                  v-model="el.referenceImages[i]"
+                  class="ref__url"
+                  type="text"
+                  :placeholder="`Ref${i + 1} URL`"
+                />
+                <label class="ref__upload">
+                  Загрузить
+                  <input type="file" accept="image/*" hidden @change="(e) => uploadWelRef(el, i, e)" />
+                </label>
+              </div>
+            </div>
+
+            <!-- The single default prompt -->
+            <div class="tour-prompt">
+              <div class="tour-prompt__row">
+                <span class="badge badge--ok">Промпт</span>
+                <button class="btn-primary btn-small" @click="saveWelPrompt(el)">
+                  Сохранить промпт
+                </button>
+              </div>
+              <textarea v-model="welPromptDraft[el.id]" class="prompt" rows="3" />
+            </div>
+
+            <div class="brand-card__foot">
+              <label class="checkbox" title="Выключенный элемент скрыт на странице Welcome packs">
+                <input type="checkbox" :checked="el.isActive" @change="toggleWelActive(el)" />
+                Активен
+              </label>
+              <button v-if="el.isActive" class="btn-danger" @click="deleteWelElement(el)">
+                Удалить
+              </button>
+              <button class="btn-primary" @click="saveWelElement(cat, el)">Сохранить</button>
+            </div>
+          </div>
+          <p v-if="!cat.elements.length" class="muted">Элементов нет.</p>
+        </div>
+      </div>
+      <p v-if="!welCategories.length" class="muted">
+        Категорий пока нет — создайте первую выше.
+      </p>
+
+      <!-- Отдельный журнал Welcome packs -->
+      <div class="tour-log">
+        <div class="brand-card__head">
+          <span class="brand-card__name">Журнал изменений</span>
+          <button class="btn-toggle btn-small" :disabled="welLogLoading" @click="loadWelLog">
+            {{ welLogLoading ? "Обновление…" : "Обновить" }}
+          </button>
+          <span v-if="welMsg.log" class="brand-card__msg">{{ welMsg.log }}</span>
+        </div>
+        <p class="muted small">
+          Последние 50 правок Welcome packs — и из этой панели, и из окна
+          «Edit Welcome packs» у супер-дизайнеров.
+        </p>
+
+        <details v-for="e in welLog" :key="e.id" class="tour-log__entry">
+          <summary class="tour-log__head">
+            <span class="tour-log__date">{{ tourLogDate(e.createdAt) }}</span>
+            <span class="tour-log__who">{{ e.userEmail }}</span>
+            <span :class="['badge', e.action === 'DELETE' ? 'badge--warn' : 'badge--ok']">
+              {{ tourLogAction(e.action) }}
+            </span>
+            <span class="tour-log__what">
+              {{ tourLogEntity(e.entityType) }} «{{ e.entityName }}»
+            </span>
+            <span class="tour-log__fields">
+              {{ e.changes.length ? e.changes.map((c) => c.field).join(", ") : "без изменений полей" }}
+            </span>
+          </summary>
+          <div class="tour-log__body">
+            <div v-for="c in e.changes" :key="c.field" class="tour-log__diff">
+              <span class="tour-log__field">{{ c.field }}</span>
+              <span class="tour-log__was">{{ c.before }}</span>
+              <span class="tour-log__arrow">→</span>
+              <span class="tour-log__now">{{ c.after }}</span>
+            </div>
+            <p v-if="!e.changes.length" class="muted small">Полей не изменилось.</p>
+          </div>
+        </details>
+        <p v-if="!welLog.length && !welLogLoading" class="muted">Записей пока нет.</p>
       </div>
     </section>
 

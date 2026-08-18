@@ -45,13 +45,14 @@ export async function processItemJob(generationId: string, aspectRatio = "1:1"):
 
   // Edits (Result page) run nano-banana-2/edit on the source image with the user's
   // raw instruction — no ITEM style template, so the edit isn't re-styled.
-  // Tournament rows carry the element prompt: the brand's PERSON prompt-writer
-  // (nano-gpt, same as the Person flow) rewrites it into the final image prompt,
-  // then the brand stylePrompt is appended verbatim.
+  // Pack rows (Tournament / Welcome) carry the element prompt: the brand's PERSON
+  // prompt-writer (nano-gpt, same as the Person flow) rewrites it into the final
+  // image prompt, then the brand stylePrompt is appended verbatim.
+  const isPackRow = gen.actionType === "TOURNAMENT" || gen.actionType === "WELCOME";
   let finalPrompt: string;
   if (gen.isEdit) {
     finalPrompt = (gen.description ?? "").trim();
-  } else if (gen.actionType === "TOURNAMENT") {
+  } else if (isPackRow) {
     const built = await buildPersonPromptMemoized(
       gen.batchId ?? "",
       gen.brandName,
@@ -65,14 +66,14 @@ export async function processItemJob(generationId: string, aspectRatio = "1:1"):
 
   let fal = await runPersonFal(finalPrompt, gen.referenceImages, aspectRatio, brand?.imageModel ?? null);
 
-  // Tournament rows get ONE automatic in-place retry (заказчик: fal's content
+  // Pack rows get ONE automatic in-place retry (заказчик: fal's content
   // checker occasionally flags a prompt — 422 content_policy). The prompt-writer
   // is non-deterministic, so rebuild the final prompt BYPASSING the batch memo:
   // a fresh wording usually passes the check the first one tripped. A second
   // failure finalizes as FAILED — the pack tab hides such rows entirely.
-  if ((!fal.success || !fal.imageUrl) && gen.actionType === "TOURNAMENT" && !gen.isEdit) {
+  if ((!fal.success || !fal.imageUrl) && isPackRow && !gen.isEdit) {
     console.warn(
-      `⚠️ fal failed for tournament ${generationId} (${fal.error ?? "unknown"}) — retrying once with a fresh prompt`,
+      `⚠️ fal failed for ${gen.actionType.toLowerCase()} ${generationId} (${fal.error ?? "unknown"}) — retrying once with a fresh prompt`,
     );
     await prisma.generation.update({
       where: { id: generationId },

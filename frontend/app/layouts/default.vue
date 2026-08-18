@@ -19,6 +19,9 @@
     <!-- Super-designer: «Edit Tournament pack» — the tournament editor, opened
          from the same toolbar user menu (TASK tournament-pack). -->
     <SuperDesignerTournamentPackModal />
+    <!-- Super-designer: «Edit Welcome packs» — same menu, same frame
+         (TASK welcome-packs). Also opened from the Welcome page's empty state. -->
+    <SuperDesignerWelcomePackModal />
   </div>
 </template>
 

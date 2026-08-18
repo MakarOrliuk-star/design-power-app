@@ -53,6 +53,7 @@ model User {
   itemFavorites       ItemStyleFavorite[]
   crmFavorites        CrmServiceFavorite[]
   tournamentOverrides UserTournamentPromptOverride[]
+  welcomeOverrides    UserWelcomePromptOverride[]
   brandsCreated       Brand[]
   bundles             Bundle[]
 
@@ -183,6 +184,10 @@ enum PromptType {
   // every tournament element prompt is injected into via {{prompt}}. Single
   // row: key="system". Editable by ADMIN/MANAGER via the tournament admin.
   TOURNAMENT
+  // Welcome packs page (TASK welcome-packs): the same idea, its own wrapper.
+  // Single row: key="system". Editable from the admin panel and from the
+  // super-designer's «Edit Welcome packs» window.
+  WELCOME
 }
 
 /// System prompts (legacy "Prompts" tab).
@@ -222,6 +227,7 @@ enum ActionType {
   CREATE_ITEM // Create Items (nano-gpt)
   NANO_REF // Brand-locked Person generation
   TOURNAMENT // Tournaments page batch (one batch per category)
+  WELCOME // Welcome packs page batch (one batch per category)
 }
 
 enum GenerationStatus {
@@ -300,6 +306,12 @@ model Generation {
   tourElementName   String? // e.g. "Tournament_1", "Playson & Booongo"
   tourMode          TournamentMode?
   tourFileName      String? // e.g. "Bonuskong_Tournament_1_2" (no extension)
+  // Welcome packs page (actionType=WELCOME only, null elsewhere). Deliberately
+  // NOT sharing the tour* columns: the two pages are separate features, and a
+  // shared column whose name lies about its owner is a bug waiting to happen.
+  welCategoryKey    String? // category key, doubles as the ZIP folder name
+  welElementName    String? // denormalized element name (survives soft delete)
+  welFileName       String? // e.g. "Bonuskong_Welcome_1_2" (no extension)
   createdAt         DateTime         @default(now())
   updatedAt         DateTime         @updatedAt
 
@@ -493,6 +505,100 @@ model UserTournamentPromptOverride {
 /// so a hard delete stays recoverable by hand) | SYSTEM (the global wrapper).
 /// Rollback exists for ELEMENT only and writes its own ROLLBACK entry.
 model TournamentChangeLog {
+  id         String   @id @default(cuid())
+  entityType String // ELEMENT | CATEGORY | SYSTEM
+  entityId   String? // no FK — the log must outlive the entity
+  entityName String
+  userId     String?
+  userEmail  String
+  action     String // CREATE | UPDATE | DELETE | ROLLBACK
+  before     Json
+  after      Json
+  createdAt  DateTime @default(now())
+
+  @@index([entityType, entityId, createdAt])
+  @@index([createdAt])
+}
+
+// ============================================================
+// Welcome packs (TASK welcome-packs)
+// ============================================================
+
+/// Generation categories of the Welcome packs page. Unlike tournaments NOTHING
+/// is seeded — every category is created by hand from «Edit Welcome packs».
+/// `key` is slugified from the name at creation, unique, frozen afterwards, and
+/// doubles as the ZIP folder name. Deletion is HARD (cascades to elements /
+/// prompts / overrides) — Generation rows keep denormalized names, so old ZIP
+/// exports survive.
+model WelcomeCategory {
+  id   String @id @default(cuid())
+  key  String @unique // slug of the name at creation time, e.g. "welcome_series"
+  name String // column title
+  /// The category's elements carry their OWN reference images instead of the
+  /// brand's (the tournaments' hardcoded `provider` rule, but as data). Turning
+  /// it OFF keeps the uploaded images in the DB — they simply stop reaching
+  /// generation; turning it back on restores them.
+  usesOwnReferences Boolean @default(false)
+  order             Int     @default(0)
+
+  elements WelcomeElement[]
+}
+
+/// Elements inside a category. Removal is soft (isActive=false) — Generation
+/// history keeps the denormalized element name.
+model WelcomeElement {
+  id         String          @id @default(cuid())
+  categoryId String
+  category   WelcomeCategory @relation(fields: [categoryId], references: [id], onDelete: Cascade)
+  name       String
+  order      Int             @default(0)
+  isActive   Boolean         @default(true)
+  /// Used only while the category has usesOwnReferences=true. Max 2 (BRAND_REFS_PER_JOB).
+  referenceImages String[]
+  createdAt       DateTime @default(now())
+
+  prompt    WelcomePrompt?
+  overrides UserWelcomePromptOverride[]
+
+  @@unique([categoryId, name])
+}
+
+/// The single global default prompt of an element (Welcome packs have no
+/// Base/VIP modes). A separate table on purpose: `@updatedAt` must move ONLY
+/// when the prompt text changes, otherwise renaming or reordering an element
+/// would raise the designers' "default changed" banner for nothing.
+model WelcomePrompt {
+  id        String         @id @default(cuid())
+  elementId String         @unique
+  element   WelcomeElement @relation(fields: [elementId], references: [id], onDelete: Cascade)
+  content   String
+  updatedAt DateTime       @updatedAt
+}
+
+/// Per-user prompt edits (in the DB, not localStorage; live until reset).
+/// baseUpdatedAt snapshots the default's updatedAt at edit/ack time:
+/// default.updatedAt > baseUpdatedAt -> the UI shows "default changed:
+/// keep mine / take new default".
+model UserWelcomePromptOverride {
+  userId        String
+  elementId     String
+  content       String
+  baseUpdatedAt DateTime
+  updatedAt     DateTime @updatedAt
+
+  user    User           @relation(fields: [userId], references: [id], onDelete: Cascade)
+  element WelcomeElement @relation(fields: [elementId], references: [id], onDelete: Cascade)
+
+  @@id([userId, elementId])
+}
+
+/// Audit trail of «Edit Welcome packs». A table of its own rather than a shared
+/// one with tournaments: the admin panel shows the two journals as separate
+/// tabs. entityId carries no FK — the log must outlive a hard-deleted category.
+/// entityType: ELEMENT (snapshot includes its prompt) | CATEGORY (includes every
+/// element, so a hard delete stays recoverable by hand) | SYSTEM (the wrapper).
+/// Rollback exists for ELEMENT only and writes its own ROLLBACK entry.
+model WelcomeChangeLog {
   id         String   @id @default(cuid())
   entityType String // ELEMENT | CATEGORY | SYSTEM
   entityId   String? // no FK — the log must outlive the entity

@@ -136,9 +136,15 @@ describe("GET /api/generations — tab filters", () => {
     expect(where.createdAt?.gte).toBeInstanceOf(Date);
   });
 
-  it("generated (default) still EXCLUDES tournament rows", async () => {
+  it("generated (default) still EXCLUDES pack rows (tournament AND welcome)", async () => {
     await request(makeApp()).get("/api/generations");
-    expect(lastWhere().actionType).toEqual({ not: "TOURNAMENT" });
+    // Both pack pages own a tab of their own, so neither leaks into General.
+    expect(lastWhere().actionType).toEqual({ notIn: ["TOURNAMENT", "WELCOME"] });
+  });
+
+  it("welcome is a tab of its own, filtered to WELCOME rows", async () => {
+    await request(makeApp()).get("/api/generations?tab=welcome");
+    expect(lastWhere().actionType).toBe("WELCOME");
   });
 
   it("generated (= General) INCLUDES edits, unlike the typed tabs (задача 3)", async () => {

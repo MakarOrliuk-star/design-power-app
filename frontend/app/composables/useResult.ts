@@ -15,9 +15,16 @@ import {
   type ComputedRef,
 } from "vue";
 
-export type TabKey = "generated" | "person" | "item" | "background" | "edited" | "tournament";
+export type TabKey =
+  | "generated"
+  | "person"
+  | "item"
+  | "background"
+  | "edited"
+  | "tournament"
+  | "welcome";
 export type SelectMode = "ALL" | "EACH";
-export type ContentType = "Person" | "Item" | "Background" | "Tournament";
+export type ContentType = "Person" | "Item" | "Background" | "Tournament" | "Welcome";
 
 /** Shared gallery tabs (Archive uses exactly these). */
 export const TABS: { key: TabKey; label: string; disabled?: boolean }[] = [
@@ -29,14 +36,25 @@ export const TABS: { key: TabKey; label: string; disabled?: boolean }[] = [
 ];
 
 /**
- * Result page tabs = the shared ones + "Tournament Pack" (Phase 6). The
- * tournament tab has its own data source (/api/tournament/packs, see
- * useTournamentPack) — the generic gallery load skips it.
+ * Result page tabs = the shared ones + the two pack tabs. Each pack tab has its
+ * own data source (/api/tournament/packs, /api/welcome/packs — see
+ * useTournamentPack / useWelcomePack); the generic gallery load skips both.
  */
 export const RESULT_TABS: { key: TabKey; label: string; disabled?: boolean }[] = [
   ...TABS,
   { key: "tournament", label: "Tournament Pack" },
+  { key: "welcome", label: "Welcome Pack" },
 ];
+
+/**
+ * Tabs whose data comes from a pack endpoint of its own rather than the generic
+ * gallery. On the Result page these are rendered by dedicated components; the
+ * Archive shows them through the gallery (tab=tournament / tab=welcome), so this
+ * predicate is only consulted by useResult.
+ */
+export function isPackTab(tab: TabKey): boolean {
+  return tab === "tournament" || tab === "welcome";
+}
 
 export interface GalleryImage {
   id: string;
@@ -49,6 +67,8 @@ export interface GalleryImage {
   createdAt: string;
   /** Fixed ZIP file name — present on tournament rows only (Archive tab). */
   tourFileName?: string | null;
+  /** Same, for Welcome rows (Archive "Welcome Pack" tab). */
+  welFileName?: string | null;
 }
 export interface Group {
   id: string;
@@ -308,9 +328,9 @@ export function useResult(deps: {
   const loading = ref(false);
 
   async function load(reset = true) {
-    // The Tournament Pack tab owns its data (useTournamentPack) — the generic
-    // gallery endpoint doesn't even accept tab=tournament.
-    if (activeTab.value === "tournament") return;
+    // The pack tabs own their data (useTournamentPack / useWelcomePack) — on the
+    // Result page the generic gallery endpoint is not used for them at all.
+    if (isPackTab(activeTab.value)) return;
     loading.value = true;
     try {
       const offset = reset ? 0 : images.value.length;
@@ -575,7 +595,7 @@ export function useResult(deps: {
   let pollTimer: ReturnType<typeof setInterval> | null = null;
 
   async function refresh() {
-    if (activeTab.value === "tournament") return; // owned by useTournamentPack
+    if (isPackTab(activeTab.value)) return; // owned by the pack composables
     try {
       const res = await api<GalleryResponse>("/api/generations", {
         query: { tab: activeTab.value, limit: LIMIT, offset: 0 },
