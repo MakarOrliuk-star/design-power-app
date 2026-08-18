@@ -62,32 +62,42 @@ const {
   },
 });
 
-// The Tournament tab owns its data + selection (useTournamentPack) — the bar's
-// buttons delegate to it there; All/Each is passed down as a prop.
-const packRef = ref<{
+// The pack tabs own their data + selection (useTournamentPack / useWelcomePack)
+// — the bar's buttons delegate to whichever one is active; All/Each is passed
+// down as a prop.
+interface PackTabApi {
   selectAll: () => void;
   clearSelection: () => void;
   selectedCount: number;
   loading: boolean;
   reload: () => void;
-} | null>(null);
+}
+const packRef = ref<PackTabApi | null>(null);
+const welcomePackRef = ref<PackTabApi | null>(null);
 const isTournament = computed(() => activeTab.value === "tournament");
-/** Drives «Clear All» / «Обновить» — the Tournament tab reports its own state. */
-const canClear = computed(() =>
-  isTournament.value ? (packRef.value?.selectedCount ?? 0) > 0 : hasSelection.value,
+const isWelcome = computed(() => activeTab.value === "welcome");
+const isPack = computed(() => isTournament.value || isWelcome.value);
+/** The pack component behind the bar's buttons, or null on a gallery tab. */
+const activePack = computed<PackTabApi | null>(() =>
+  isTournament.value ? packRef.value : isWelcome.value ? welcomePackRef.value : null,
 );
-const busy = computed(() => (isTournament.value ? !!packRef.value?.loading : loading.value));
+
+/** Drives «Clear All» / «Обновить» — a pack tab reports its own state. */
+const canClear = computed(() =>
+  isPack.value ? (activePack.value?.selectedCount ?? 0) > 0 : hasSelection.value,
+);
+const busy = computed(() => (isPack.value ? !!activePack.value?.loading : loading.value));
 
 function onSelectAll() {
-  if (isTournament.value) packRef.value?.selectAll();
+  if (isPack.value) activePack.value?.selectAll();
   else selectAll();
 }
 function onClearAll() {
-  if (isTournament.value) packRef.value?.clearSelection();
+  if (isPack.value) activePack.value?.clearSelection();
   else clearSelection();
 }
 function onReload() {
-  if (isTournament.value) packRef.value?.reload();
+  if (isPack.value) activePack.value?.reload();
   else reload();
 }
 
@@ -162,9 +172,9 @@ const viewerItems = computed(() =>
 
         <div class="bar__right">
           <!-- ZIP download of the ticked images. Regular gallery tabs only — the
-               Tournament tab has its own DES-numbered export. -->
+               pack tabs have their own DES-numbered export. -->
           <button
-            v-if="!isTournament"
+            v-if="!isPack"
             class="iconbtn"
             type="button"
             aria-label="Download ZIP"
@@ -222,6 +232,14 @@ const viewerItems = computed(() =>
       <ResultTournamentPack
         v-if="isTournament"
         ref="packRef"
+        :select-mode="selectMode"
+      />
+
+      <!-- Welcome tab (TASK welcome-packs): the same frame, grouped by category
+           → element, with its own DES ZIP export. -->
+      <ResultWelcomePack
+        v-else-if="isWelcome"
+        ref="welcomePackRef"
         :select-mode="selectMode"
       />
 

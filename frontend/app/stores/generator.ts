@@ -50,8 +50,8 @@ export interface BatchStatus {
 /** One launched generation, polled independently so runs stay concurrent. */
 export interface ActiveBatch {
   id: string;
-  kind: "person" | "item" | "tournament";
-  /** Tournament batches: the category key ("tournament" | "lotterie" | ...). */
+  kind: "person" | "item" | "tournament" | "welcome";
+  /** Pack batches (tournament / welcome): the category key. */
   label?: string;
   createdAt: number;
   status: BatchStatus | null;
@@ -366,7 +366,11 @@ export const useGeneratorStore = defineStore("generator", () => {
    * Tournaments run) so it shows up in the toolbar progress + completion toast
    * and is polled like a RUN batch. `label` = tournament category key.
    */
-  function addBatch(id: string, kind: "person" | "item" | "tournament", label?: string) {
+  function addBatch(
+    id: string,
+    kind: "person" | "item" | "tournament" | "welcome",
+    label?: string,
+  ) {
     if (batches.value.some((b) => b.id === id)) return;
     batches.value = [
       ...batches.value,

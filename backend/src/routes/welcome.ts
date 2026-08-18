@@ -5,10 +5,10 @@ import { z } from "zod";
 import { prisma } from "../lib/prisma.js";
 import { itemPipelineReady } from "../env.js";
 import {
-  createTournamentBatches,
-  MAX_TOURNAMENT_BRANDS,
-  MAX_TOURNAMENT_COUNT,
-} from "../services/tournament.service.js";
+  createWelcomeBatches,
+  MAX_WELCOME_BRANDS,
+  MAX_WELCOME_COUNT,
+} from "../services/welcome.service.js";
 import {
   nextDesNumber,
   packFolderOf,
@@ -19,30 +19,24 @@ import {
   uniqueEntryPath,
 } from "../lib/packShared.js";
 
-// The ZIP path helpers now live in lib/packShared.ts (shared with Welcome
-// packs); re-exported here so existing importers and tests keep working.
-export { packFolderOf, splitBrandGender, toPngUrl, trailingIndexOf, uniqueEntryPath };
+// Welcome packs page API (TASK welcome-packs, Phase 4). Mounted behind
+// loadUser + requireAuth + requireZone("DESIGNER") — see index.ts. Mirrors
+// routes/tournament.ts; the pack-editing surfaces live in welcomePack.ts
+// (super-designer) and welcomeAdmin.ts (admin panel).
+export const welcomeRouter: Router = Router();
 
-// Tournaments page API (Phase 3). Mounted behind loadUser + requireAuth +
-// requireZone("DESIGNER") — see index.ts.
-export const tournamentRouter: Router = Router();
+// ---- Config: categories -> elements -> default prompt + my override ----
 
-const MODES = ["BASE", "VIP"] as const;
-type Mode = (typeof MODES)[number];
-
-// ---- Config: categories -> elements -> default prompts + my overrides ----
-
-tournamentRouter.get("/config", async (req: Request, res: Response) => {
+welcomeRouter.get("/config", async (req: Request, res: Response) => {
   const userId = req.user!.sub;
   const [categories, overrides] = await Promise.all([
-    prisma.tournamentCategory.findMany({
+    prisma.welcomeCategory.findMany({
       orderBy: { order: "asc" },
       select: {
         id: true,
         key: true,
         name: true,
-        hasModes: true,
-        fixedMode: true,
+        usesOwnReferences: true,
         order: true,
         elements: {
           where: { isActive: true },
@@ -50,85 +44,80 @@ tournamentRouter.get("/config", async (req: Request, res: Response) => {
           select: {
             id: true,
             name: true,
-            nameVip: true,
             order: true,
             referenceImages: true,
-            prompts: { select: { mode: true, content: true, updatedAt: true } },
+            prompt: { select: { content: true, updatedAt: true } },
           },
         },
       },
     }),
-    prisma.userTournamentPromptOverride.findMany({
+    prisma.userWelcomePromptOverride.findMany({
       where: { userId },
-      select: { elementId: true, mode: true, content: true, baseUpdatedAt: true },
+      select: { elementId: true, content: true, baseUpdatedAt: true },
     }),
   ]);
 
-  const overrideByKey = new Map(overrides.map((o) => [`${o.elementId}:${o.mode}`, o]));
+  const overrideByElement = new Map(overrides.map((o) => [o.elementId, o]));
 
   res.json({
     categories: categories.map((c) => ({
       id: c.id,
       key: c.key,
       name: c.name,
-      hasModes: c.hasModes,
-      fixedMode: c.fixedMode,
+      usesOwnReferences: c.usesOwnReferences,
       order: c.order,
       elements: c.elements.map((e) => {
-        const prompts: Partial<Record<Mode, { content: string; updatedAt: string }>> = {};
-        const ovr: Partial<Record<Mode, { content: string; defaultChanged: boolean }>> = {};
-        for (const p of e.prompts) {
-          prompts[p.mode] = { content: p.content, updatedAt: p.updatedAt.toISOString() };
-          const o = overrideByKey.get(`${e.id}:${p.mode}`);
-          if (o) {
-            ovr[p.mode] = {
-              content: o.content,
-              // The admin touched the default AFTER the user's edit/ack ->
-              // the UI shows "default changed: keep mine / take new default".
-              defaultChanged: p.updatedAt.getTime() > o.baseUpdatedAt.getTime(),
-            };
-          }
-        }
+        const o = overrideByElement.get(e.id);
         return {
           id: e.id,
           name: e.name,
-          nameVip: e.nameVip,
           order: e.order,
           referenceImages: e.referenceImages,
-          prompts,
-          overrides: ovr,
+          prompt: e.prompt
+            ? { content: e.prompt.content, updatedAt: e.prompt.updatedAt.toISOString() }
+            : null,
+          override:
+            o && e.prompt
+              ? {
+                  content: o.content,
+                  // The default was touched AFTER the user's edit/ack -> the UI
+                  // shows "default changed: keep mine / take new default".
+                  defaultChanged: e.prompt.updatedAt.getTime() > o.baseUpdatedAt.getTime(),
+                }
+              : o
+                ? { content: o.content, defaultChanged: false }
+                : null,
         };
       }),
     })),
   });
 });
 
-// ---- Per-user prompt overrides (Phase 0: stored in DB, live until reset) ----
+// ---- Per-user prompt overrides (stored in the DB, live until reset) ----
 
-/** The element's default prompt row for a mode — overrides require one. */
-async function findDefaultPrompt(elementId: string, mode: Mode) {
-  return prisma.tournamentPrompt.findUnique({
-    where: { elementId_mode: { elementId, mode } },
+/** The element's default prompt row — overrides require one. */
+async function findDefaultPrompt(elementId: string) {
+  return prisma.welcomePrompt.findUnique({
+    where: { elementId },
     select: { updatedAt: true, content: true, element: { select: { isActive: true } } },
   });
 }
 
 const overridePutSchema = z.object({
   elementId: z.string().min(1),
-  mode: z.enum(MODES),
   content: z.string().trim().min(1).max(5000),
 });
 
-tournamentRouter.put("/overrides", async (req: Request, res: Response) => {
+welcomeRouter.put("/overrides", async (req: Request, res: Response) => {
   const parsed = overridePutSchema.safeParse(req.body);
   if (!parsed.success) {
     res.status(400).json({ error: "invalid_body", details: parsed.error.flatten().fieldErrors });
     return;
   }
-  const { elementId, mode, content } = parsed.data;
+  const { elementId, content } = parsed.data;
   const userId = req.user!.sub;
 
-  const def = await findDefaultPrompt(elementId, mode);
+  const def = await findDefaultPrompt(elementId);
   if (!def || !def.element.isActive) {
     res.status(404).json({ error: "prompt_not_found" });
     return;
@@ -136,51 +125,47 @@ tournamentRouter.put("/overrides", async (req: Request, res: Response) => {
 
   // Editing implies the user saw the CURRENT default — snapshot its updatedAt
   // so the "default changed" banner only reappears on a future admin edit.
-  const row = await prisma.userTournamentPromptOverride.upsert({
-    where: { userId_elementId_mode: { userId, elementId, mode } },
-    create: { userId, elementId, mode, content, baseUpdatedAt: def.updatedAt },
+  const row = await prisma.userWelcomePromptOverride.upsert({
+    where: { userId_elementId: { userId, elementId } },
+    create: { userId, elementId, content, baseUpdatedAt: def.updatedAt },
     update: { content, baseUpdatedAt: def.updatedAt },
-    select: { elementId: true, mode: true, content: true },
+    select: { elementId: true, content: true },
   });
   res.json({ override: row });
 });
 
-const overrideKeySchema = z.object({
-  elementId: z.string().min(1),
-  mode: z.enum(MODES),
-});
+const overrideKeySchema = z.object({ elementId: z.string().min(1) });
 
-/** Reset to default: DELETE /overrides?elementId=..&mode=BASE */
-tournamentRouter.delete("/overrides", async (req: Request, res: Response) => {
+/** Reset to default: DELETE /overrides?elementId=.. */
+welcomeRouter.delete("/overrides", async (req: Request, res: Response) => {
   const parsed = overrideKeySchema.safeParse(req.query);
   if (!parsed.success) {
     res.status(400).json({ error: "invalid_query" });
     return;
   }
-  const { elementId, mode } = parsed.data;
-  const del = await prisma.userTournamentPromptOverride.deleteMany({
-    where: { userId: req.user!.sub, elementId, mode },
+  const del = await prisma.userWelcomePromptOverride.deleteMany({
+    where: { userId: req.user!.sub, elementId: parsed.data.elementId },
   });
   res.json({ ok: true, deleted: del.count });
 });
 
 /** "Keep mine" on the default-changed banner: re-snapshot baseUpdatedAt. */
-tournamentRouter.post("/overrides/ack", async (req: Request, res: Response) => {
+welcomeRouter.post("/overrides/ack", async (req: Request, res: Response) => {
   const parsed = overrideKeySchema.safeParse(req.body);
   if (!parsed.success) {
     res.status(400).json({ error: "invalid_body" });
     return;
   }
-  const { elementId, mode } = parsed.data;
+  const { elementId } = parsed.data;
   const userId = req.user!.sub;
 
-  const def = await findDefaultPrompt(elementId, mode);
+  const def = await findDefaultPrompt(elementId);
   if (!def) {
     res.status(404).json({ error: "prompt_not_found" });
     return;
   }
-  const upd = await prisma.userTournamentPromptOverride.updateMany({
-    where: { userId, elementId, mode },
+  const upd = await prisma.userWelcomePromptOverride.updateMany({
+    where: { userId, elementId },
     data: { baseUpdatedAt: def.updatedAt },
   });
   if (upd.count === 0) {
@@ -193,26 +178,24 @@ tournamentRouter.post("/overrides/ack", async (req: Request, res: Response) => {
 // ---- Generate: one batch per selected category ----
 
 const generateSchema = z.object({
-  brandIds: z.array(z.string().min(1)).min(1).max(MAX_TOURNAMENT_BRANDS),
-  count: z.number().int().min(1).max(MAX_TOURNAMENT_COUNT).default(1),
+  brandIds: z.array(z.string().min(1)).min(1).max(MAX_WELCOME_BRANDS),
+  count: z.number().int().min(1).max(MAX_WELCOME_COUNT).default(1),
   aspect: z.enum(["1:1", "9:16"]).default("1:1"),
-  selections: z
-    .array(z.object({ elementId: z.string().min(1), mode: z.enum(MODES).optional() }))
-    .min(1),
+  selections: z.array(z.object({ elementId: z.string().min(1) })).min(1),
 });
 
-tournamentRouter.post("/generate", async (req: Request, res: Response) => {
+welcomeRouter.post("/generate", async (req: Request, res: Response) => {
   const parsed = generateSchema.safeParse(req.body);
   if (!parsed.success) {
     res.status(400).json({ error: "invalid_body", details: parsed.error.flatten().fieldErrors });
     return;
   }
   if (!itemPipelineReady) {
-    res.status(503).json({ error: "tournament_pipeline_not_configured" });
+    res.status(503).json({ error: "welcome_pipeline_not_configured" });
     return;
   }
   try {
-    const batches = await createTournamentBatches({
+    const batches = await createWelcomeBatches({
       userId: req.user!.sub,
       brandIds: parsed.data.brandIds,
       count: parsed.data.count,
@@ -226,21 +209,21 @@ tournamentRouter.post("/generate", async (req: Request, res: Response) => {
   }
 });
 
-// ---- Tournament Pack (Result tab): batch history, newest first ----
+// ---- Welcome Pack (Result tab): batch history, newest first ----
 
 const packsSchema = z.object({
   limit: z.coerce.number().int().min(1).max(50).default(10),
   offset: z.coerce.number().int().min(0).default(0),
 });
 
-tournamentRouter.get("/packs", async (req: Request, res: Response) => {
+welcomeRouter.get("/packs", async (req: Request, res: Response) => {
   const parsed = packsSchema.safeParse(req.query);
   if (!parsed.success) {
     res.status(400).json({ error: "invalid_query" });
     return;
   }
   const { limit, offset } = parsed.data;
-  const where = { userId: req.user!.sub, actionType: "TOURNAMENT" as const };
+  const where = { userId: req.user!.sub, actionType: "WELCOME" as const };
 
   const [total, batches] = await Promise.all([
     prisma.batch.count({ where }),
@@ -261,10 +244,9 @@ tournamentRouter.get("/packs", async (req: Request, res: Response) => {
             statusMessage: true,
             generatedImageUrl: true,
             brandName: true,
-            tourCategoryKey: true,
-            tourElementName: true,
-            tourMode: true,
-            tourFileName: true,
+            welCategoryKey: true,
+            welElementName: true,
+            welFileName: true,
           },
         },
       },
@@ -287,7 +269,7 @@ const MAX_EXPORT = 500; // safety cap on a single archive
 
 // GET so the browser downloads it via same-origin navigation (session cookie
 // rides along through the frontend proxy) — same pattern as the Archive export.
-tournamentRouter.get("/export.zip", async (req: Request, res: Response) => {
+welcomeRouter.get("/export.zip", async (req: Request, res: Response) => {
   const parsed = exportSchema.safeParse(req.query);
   if (!parsed.success) {
     res.status(400).json({ error: "invalid_query" });
@@ -303,10 +285,10 @@ tournamentRouter.get("/export.zip", async (req: Request, res: Response) => {
   const rows = await prisma.generation.findMany({
     where: {
       userId,
-      actionType: "TOURNAMENT",
+      actionType: "WELCOME",
       status: "DONE",
       generatedImageUrl: { not: null },
-      tourFileName: { not: null },
+      welFileName: { not: null },
       ...(ids.length ? { id: { in: ids } } : { batchId: batchId! }),
     },
     orderBy: { createdAt: "asc" },
@@ -315,8 +297,8 @@ tournamentRouter.get("/export.zip", async (req: Request, res: Response) => {
       id: true,
       generatedImageUrl: true,
       brandName: true,
-      tourElementName: true,
-      tourFileName: true,
+      welElementName: true,
+      welFileName: true,
     },
   });
   if (rows.length === 0) {
@@ -324,7 +306,8 @@ tournamentRouter.get("/export.zip", async (req: Request, res: Response) => {
     return;
   }
 
-  // A new sequential DES number is issued on EVERY download (Phase 0 decision).
+  // A new sequential DES number is issued on EVERY download — the counter is
+  // shared with the tournament export (one DES sequence for the whole app).
   const desNumber = await nextDesNumber();
   await prisma.zipExport.create({
     data: {
@@ -340,22 +323,21 @@ tournamentRouter.get("/export.zip", async (req: Request, res: Response) => {
 
   const archive = archiver("zip", { zlib: { level: 9 } });
   archive.on("error", (err) => {
-    console.error("Tournament ZIP export error:", err);
+    console.error("Welcome ZIP export error:", err);
     res.destroy(err);
   });
   archive.pipe(res);
 
-  // Folder layout (revised 2026-07-10, flat): {Brand}/{Element}_N[_gender].png —
+  // Folder layout (same as tournaments): {Brand}/{Element}_N[_gender].png —
   // brand folders right at the archive root; the (Men)/(Women) variants share
-  // one folder, the gender becomes a file-name suffix ("Tournament_1_1_women").
-  // Old rows work too (element/brand are denormalized on Generation).
+  // one folder, the gender becomes a file-name suffix.
   const used = new Set<string>();
   for (const r of rows) {
     // The client closed the connection (cancelled download / left the page) —
     // stop fetching images nobody will receive.
     if (res.destroyed) return;
-    const fileName = r.tourFileName!;
-    const element = sanitizeName(r.tourElementName ?? "") || packFolderOf(fileName);
+    const fileName = r.welFileName!;
+    const element = sanitizeName(r.welElementName ?? "") || packFolderOf(fileName);
     const { base, gender } = splitBrandGender(r.brandName);
     const brand = sanitizeName(base) || "Unknown";
     try {
@@ -368,7 +350,7 @@ tournamentRouter.get("/export.zip", async (req: Request, res: Response) => {
       );
       archive.append(buf, { name: path });
     } catch (err) {
-      console.warn(`Tournament ZIP export: skipped ${r.id}`, err);
+      console.warn(`Welcome ZIP export: skipped ${r.id}`, err);
     }
   }
 

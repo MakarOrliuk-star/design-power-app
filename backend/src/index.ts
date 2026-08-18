@@ -13,6 +13,9 @@ import { generateRouter } from "./routes/generate.js";
 import { tournamentRouter } from "./routes/tournament.js";
 import { tournamentAdminRouter } from "./routes/tournamentAdmin.js";
 import { tournamentPackRouter } from "./routes/tournamentPack.js";
+import { welcomeRouter } from "./routes/welcome.js";
+import { welcomeAdminRouter } from "./routes/welcomeAdmin.js";
+import { welcomePackRouter } from "./routes/welcomePack.js";
 import { myBrandsRouter } from "./routes/myBrands.js";
 import {
   loadUser,
@@ -75,6 +78,12 @@ app.use("/api/tournament-admin", loadUser, requireAuth, requireAdminOrManager, t
 // admin panel, but audited + rollback-able, for SUPER_DESIGNER / ADMIN / MANAGER.
 app.use("/api/tournament-pack", loadUser, requireAuth, requireSuperDesigner, tournamentPackRouter);
 app.use("/api/tournament", loadUser, requireAuth, requireZone("DESIGNER"), tournamentRouter);
+// Welcome packs (TASK welcome-packs): the same three-surface split as the
+// tournaments — admin panel, the audited super-designer window, and the
+// designers' page itself. Order matters: the more specific prefixes first.
+app.use("/api/welcome-admin", loadUser, requireAuth, requireAdminOrManager, welcomeAdminRouter);
+app.use("/api/welcome-pack", loadUser, requireAuth, requireSuperDesigner, welcomePackRouter);
+app.use("/api/welcome", loadUser, requireAuth, requireZone("DESIGNER"), welcomeRouter);
 // Super-designer surface (own-brand CRUD + brand test runs).
 app.use("/api/my-brands", loadUser, requireAuth, requireSuperDesigner, myBrandsRouter);
 // Generic /api (generate) is a Design-zone route — keep it last so the more

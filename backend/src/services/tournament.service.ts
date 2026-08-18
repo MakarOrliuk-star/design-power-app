@@ -1,6 +1,12 @@
 import { prisma } from "../lib/prisma.js";
 import { getItemQueue } from "../queues/index.js";
 import { getPrompt } from "./prompts.js";
+import { BRAND_REFS_PER_JOB, buildPackPrompt, nextDesNumber, sanitizeName } from "../lib/packShared.js";
+
+// The naming / prompt / DES helpers now live in lib/packShared.ts (shared with
+// Welcome packs). Re-exported here so every existing importer — and the
+// tournament test-suite — keeps working against the same names.
+export { BRAND_REFS_PER_JOB, nextDesNumber, sanitizeName };
 
 /**
  * Tournaments page (feature/tournament-page, Phase 3).
@@ -20,17 +26,6 @@ export type TournamentAspect = "1:1" | "9:16";
 export const MAX_TOURNAMENT_BRANDS = 4;
 export const MAX_TOURNAMENT_COUNT = 4;
 export const DEFAULT_TOURNAMENT_ASPECT: TournamentAspect = "1:1";
-/** How many brand reference images are mixed into one request (Phase 0). */
-export const BRAND_REFS_PER_JOB = 2;
-
-/**
- * File-name part sanitizer (Phase 0 decision): drop parentheses, spaces -> "_",
- * everything else ("&" included) stays. "Spinogambino(Men)" -> "SpinogambinoMen",
- * "Playson & Booongo" -> "Playson_&_Booongo".
- */
-export function sanitizeName(s: string): string {
-  return s.replace(/[()]/g, "").trim().replace(/\s+/g, "_");
-}
 
 /**
  * Per-mode display name: hasModes elements carry a separate VIP name
@@ -53,33 +48,7 @@ export function buildTournamentPrompt(
   elementPrompt: string,
   brandStylePrompt: string,
 ): string {
-  const p = elementPrompt.trim();
-  const wrapped = !systemWrapper
-    ? p
-    : systemWrapper.includes("{{prompt}}")
-      ? systemWrapper.split("{{prompt}}").join(p)
-      : `${systemWrapper}\n${p}`;
-  const style = brandStylePrompt.trim();
-  return style ? `${wrapped}\n${style}` : wrapped;
-}
-
-/**
- * Atomically issue the next DES number (single-row counter, seeded value=100000;
- * the first issued number is 100001 per the spec's own example). UPDATE ...
- * RETURNING makes concurrent downloads collision-free.
- */
-export async function nextDesNumber(): Promise<number> {
-  for (let attempt = 0; attempt < 2; attempt++) {
-    const rows = await prisma.$queryRaw<{ value: number }[]>`
-      UPDATE "DesCounter" SET value = value + 1 WHERE id = 1 RETURNING value`;
-    const value = rows[0]?.value;
-    if (value !== undefined) return value;
-    // Unseeded DB (config built via the admin panel, seed script never run):
-    // create the row once and retry; skipDuplicates keeps a concurrent first
-    // download from failing on the unique id.
-    await prisma.desCounter.createMany({ data: [{ id: 1, value: 100000 }], skipDuplicates: true });
-  }
-  throw new Error("des_counter_missing");
+  return buildPackPrompt(systemWrapper, elementPrompt, brandStylePrompt);
 }
 
 export interface TournamentSelection {

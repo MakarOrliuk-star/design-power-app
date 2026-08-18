@@ -306,7 +306,7 @@ export async function createBrandTestBatch(p: {
   return { batchId: batch.id, generationId: gen.id };
 }
 
-type ActionType = "FULL" | "CREATE_ITEM" | "NANO_REF" | "TOURNAMENT";
+type ActionType = "FULL" | "CREATE_ITEM" | "NANO_REF" | "TOURNAMENT" | "WELCOME";
 
 interface EditSource {
   sourceImageUrl: string; // the existing generated image to edit (fal image_urls)
