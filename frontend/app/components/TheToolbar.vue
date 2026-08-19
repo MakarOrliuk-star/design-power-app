@@ -137,6 +137,12 @@ const auth = useAuthStore();
 // The logo leads to the user's OWN home. A GAME_MANAGER has no Design zone
 // (TASK game-manager, Q2), so "/" would bounce it to /forbidden.
 const homePath = computed(() => (auth.canDesign ? "/" : "/game"));
+// Gallery icon. Design users get the Archive; a GAME_MANAGER has no Design zone
+// (TASK game-manager, Q2), so their gallery is the Results column of /game.
+// Together with the theme toggle those are the only two tools they see —
+// every other icon leads somewhere they are walled off from.
+const galleryPath = computed(() => (auth.canDesign ? "/archive" : "/game"));
+const isGallery = computed(() => (auth.canDesign ? isArchive.value : isGame.value));
 async function logout() {
   await auth.logout();
   await navigateTo("/login");
@@ -417,15 +423,15 @@ onBeforeUnmount(() => document.removeEventListener("click", onDocClick));
         </svg>
       </button>
       <button
-        v-if="auth.canDesign"
+        v-if="auth.canDesign || auth.canGame"
         class="tool"
-        :class="{ 'tool--on': isArchive }"
+        :class="{ 'tool--on': isGallery }"
         type="button"
         aria-label="Images"
-        title="Архив"
-        @click="navigateTo('/archive')"
+        :title="auth.canDesign ? 'Архив' : 'Галерея'"
+        @click="navigateTo(galleryPath)"
       >
-        <svg v-if="!isArchive" viewBox="0 0 24 24" width="20" height="20" fill="none">
+        <svg v-if="!isGallery" viewBox="0 0 24 24" width="20" height="20" fill="none">
           <rect x="3.75" y="3.75" width="16.5" height="16.5" rx="5" stroke="currentColor" stroke-width="1.7" />
           <circle cx="15.9" cy="8.1" r="1.5" stroke="currentColor" stroke-width="1.4" />
           <path d="M6.9 15.3c1.6-2 3.2-2 4.7 0 1.3 1.6 2.9 1.1 5.2-1.1" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" />
@@ -436,10 +442,11 @@ onBeforeUnmount(() => document.removeEventListener("click", onDocClick));
           <path d="M6.9 15.3c1.6-2 3.2-2 4.7 0 1.3 1.6 2.9 1.1 5.2-1.1" stroke="#fff" stroke-width="1.6" stroke-linecap="round" />
         </svg>
       </button>
-      <!-- Game (TASK game-manager, Phase 1): a gamepad. Visible only to roles
-           that may enter the Game zone — mirrors the backend requireGameZone. -->
+      <!-- Game (TASK game-manager): a gamepad — the way INTO the Game zone from
+           the Design side. A GAME_MANAGER is already there and has nowhere else
+           to go, so the icon would be a no-op for them and is left out. -->
       <button
-        v-if="auth.canGame"
+        v-if="auth.canGame && auth.canDesign"
         class="tool"
         :class="{ 'tool--on': isGame }"
         type="button"
