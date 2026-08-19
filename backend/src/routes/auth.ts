@@ -9,6 +9,7 @@ import {
   exchangeCodeForDriveToken,
 } from "../lib/google.js";
 import { SESSION_COOKIE, signSession } from "../lib/jwt.js";
+import { sanitizeNext } from "../lib/nextTarget.js";
 import { resolveLogin } from "../services/auth.service.js";
 import { prisma } from "../lib/prisma.js";
 import { loadUser, requireAuth } from "../middleware/auth.js";
@@ -26,12 +27,6 @@ const DRIVE_STATE_COOKIE = "drive_oauth_state";
 // nonce and session mechanics stay untouched. Exact-match whitelist only —
 // anything else (e.g. "//evil.com") collapses to "/".
 const NEXT_COOKIE = "oauth_next";
-const ALLOWED_NEXT = new Set(["/", "/crm"]);
-
-function sanitizeNext(value: unknown): string {
-  return typeof value === "string" && ALLOWED_NEXT.has(value) ? value : "/";
-}
-
 // In production the frontend and backend live on different Railway domains
 // (cross-site), so the session cookie must be SameSite=None; Secure to be sent
 // on credentialed XHR. Locally (same-site localhost) Lax is fine.

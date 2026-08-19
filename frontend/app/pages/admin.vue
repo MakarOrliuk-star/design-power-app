@@ -4,10 +4,25 @@ import type { TournamentMode } from "~/types/tournament";
 
 useHead({ title: "Design Power — Admin" });
 
+type AppRole = "ADMIN" | "DESIGNER" | "CRM" | "MANAGER" | "SUPER_DESIGNER" | "CRM_SUPER" | "GAME_MANAGER";
+
+/** Role options offered in both allowlist and user tables, in one place. */
+const ROLE_OPTIONS: AppRole[] = [
+  "DESIGNER",
+  "SUPER_DESIGNER",
+  "CRM",
+  "CRM_SUPER",
+  "GAME_MANAGER",
+  "MANAGER",
+  "ADMIN",
+];
+
 interface AllowedEmail {
   id: string;
   email: string;
   note: string | null;
+  // Role granted on first login (TASK game-manager, Q3). null → DESIGNER.
+  role: AppRole | null;
   addedBy: string | null;
   createdAt: string;
 }
@@ -15,7 +30,7 @@ interface AdminUser {
   id: string;
   email: string;
   name: string | null;
-  role: "ADMIN" | "DESIGNER" | "CRM" | "MANAGER" | "SUPER_DESIGNER" | "CRM_SUPER";
+  role: AppRole;
   isActive: boolean;
   lastLoginAt: string | null;
 }
@@ -26,6 +41,7 @@ const auth = useAuthStore();
 const allowedEmails = ref<AllowedEmail[]>([]);
 const users = ref<AdminUser[]>([]);
 const newEmail = ref("");
+const newRole = ref<AppRole>("DESIGNER");
 const newNote = ref("");
 const error = ref("");
 const loading = ref(false);
@@ -53,10 +69,15 @@ async function addEmail() {
   try {
     await api("/api/admin/allowed-emails", {
       method: "POST",
-      body: { email: newEmail.value.trim(), note: newNote.value.trim() || undefined },
+      body: {
+        email: newEmail.value.trim(),
+        note: newNote.value.trim() || undefined,
+        role: newRole.value,
+      },
     });
     newEmail.value = "";
     newNote.value = "";
+    newRole.value = "DESIGNER";
     await load();
   } catch {
     error.value = "Не удалось добавить email (возможно, уже есть в списке).";
@@ -1531,22 +1552,26 @@ onMounted(() => {
       <form class="add-form" @submit.prevent="addEmail">
         <input v-model="newEmail" type="email" placeholder="email@example.com" required />
         <input v-model="newNote" type="text" placeholder="Заметка (необязательно)" />
+        <select v-model="newRole" title="Роль при первом входе">
+          <option v-for="r in ROLE_OPTIONS" :key="r" :value="r">{{ r }}</option>
+        </select>
         <button type="submit" class="btn-primary">Добавить</button>
       </form>
 
       <table class="table">
         <thead>
-          <tr><th>Email</th><th>Заметка</th><th>Добавил</th><th></th></tr>
+          <tr><th>Email</th><th>Заметка</th><th>Роль при входе</th><th>Добавил</th><th></th></tr>
         </thead>
         <tbody>
           <tr v-for="row in allowedEmails" :key="row.id">
             <td>{{ row.email }}</td>
             <td>{{ row.note || "—" }}</td>
+            <td>{{ row.role || "DESIGNER" }}</td>
             <td>{{ row.addedBy || "—" }}</td>
             <td><button class="btn-danger" @click="removeEmail(row.id)">Удалить</button></td>
           </tr>
           <tr v-if="!allowedEmails.length && !loading">
-            <td colspan="4" class="muted">Список пуст.</td>
+            <td colspan="5" class="muted">Список пуст.</td>
           </tr>
         </tbody>
       </table>
@@ -1566,14 +1591,9 @@ onMounted(() => {
               <select
                 :value="u.role"
                 :disabled="u.id === auth.user?.id"
-                @change="patchUser(u, { role: ($event.target as HTMLSelectElement).value as 'ADMIN' | 'DESIGNER' | 'CRM' | 'MANAGER' | 'SUPER_DESIGNER' | 'CRM_SUPER' })"
+                @change="patchUser(u, { role: ($event.target as HTMLSelectElement).value as AppRole })"
               >
-                <option value="DESIGNER">DESIGNER</option>
-                <option value="SUPER_DESIGNER">SUPER_DESIGNER</option>
-                <option value="CRM">CRM</option>
-                <option value="CRM_SUPER">CRM_SUPER</option>
-                <option value="MANAGER">MANAGER</option>
-                <option value="ADMIN">ADMIN</option>
+                <option v-for="r in ROLE_OPTIONS" :key="r" :value="r">{{ r }}</option>
               </select>
             </td>
             <td>

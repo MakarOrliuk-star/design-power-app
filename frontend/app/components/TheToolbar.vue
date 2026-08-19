@@ -18,6 +18,7 @@ const isResult = computed(() => route.path.startsWith("/result"));
 const isArchive = computed(() => route.path.startsWith("/archive"));
 const isTournaments = computed(() => route.path.startsWith("/tournaments"));
 const isWelcome = computed(() => route.path.startsWith("/welcome-packs"));
+const isGame = computed(() => route.path.startsWith("/game"));
 
 // Unified progress. Everywhere except the pack pages: ALWAYS 3 status slots —
 // one per content group (Person / Item / Background) — each reflecting the
@@ -122,11 +123,20 @@ const progressGroups = computed<ProgressSlot[]>(() => {
       ),
     );
   }
+  // Game (TASK game-manager): the mock draws ONE bar — «0 of 3 images completed
+  // (0%)» — not the Design zone's three pills. What those three images are is
+  // still open (Q17), so the pill renders its real idle state rather than a
+  // faked count; wiring a batch to it later needs no markup change, since the
+  // unnamed slot already formats exactly like the mock.
+  if (isGame.value) return [slotOf("game", null)];
   return PROGRESS_KINDS.map((kind) => slotOf(kind, latestBatch(kind)));
 });
 
 // Logged-in user (from the session / auth store).
 const auth = useAuthStore();
+// The logo leads to the user's OWN home. A GAME_MANAGER has no Design zone
+// (TASK game-manager, Q2), so "/" would bounce it to /forbidden.
+const homePath = computed(() => (auth.canDesign ? "/" : "/game"));
 async function logout() {
   await auth.logout();
   await navigateTo("/login");
@@ -194,7 +204,7 @@ onBeforeUnmount(() => document.removeEventListener("click", onDocClick));
       type="button"
       aria-label="На главную"
       title="На главную"
-      @click="navigateTo('/')"
+      @click="navigateTo(homePath)"
     >
       <img class="logo" src="/logo.png" alt="m∿k" />
     </button>
@@ -309,6 +319,7 @@ onBeforeUnmount(() => document.removeEventListener("click", onDocClick));
         </svg>
       </button>
       <button
+        v-if="auth.canDesign"
         class="tool"
         :class="{ 'tool--on': isHome }"
         type="button"
@@ -326,6 +337,7 @@ onBeforeUnmount(() => document.removeEventListener("click", onDocClick));
         </svg>
       </button>
       <button
+        v-if="auth.canDesign"
         class="tool"
         :class="{ 'tool--on': isTournaments }"
         type="button"
@@ -359,6 +371,7 @@ onBeforeUnmount(() => document.removeEventListener("click", onDocClick));
       <!-- Welcome packs (TASK welcome-packs): an envelope with a spark, drawn in
            the same outline / gradient-fill idiom as its neighbours. -->
       <button
+        v-if="auth.canDesign"
         class="tool"
         :class="{ 'tool--on': isWelcome }"
         type="button"
@@ -390,6 +403,7 @@ onBeforeUnmount(() => document.removeEventListener("click", onDocClick));
         </svg>
       </button>
       <button
+        v-if="auth.canDesign"
         class="tool"
         :class="{ 'tool--on': isResult }"
         type="button"
@@ -403,6 +417,7 @@ onBeforeUnmount(() => document.removeEventListener("click", onDocClick));
         </svg>
       </button>
       <button
+        v-if="auth.canDesign"
         class="tool"
         :class="{ 'tool--on': isArchive }"
         type="button"
@@ -419,6 +434,35 @@ onBeforeUnmount(() => document.removeEventListener("click", onDocClick));
           <rect x="3.5" y="3.5" width="17" height="17" rx="5" fill="url(#navGrad)" />
           <circle cx="15.9" cy="8.1" r="1.5" fill="#fff" />
           <path d="M6.9 15.3c1.6-2 3.2-2 4.7 0 1.3 1.6 2.9 1.1 5.2-1.1" stroke="#fff" stroke-width="1.6" stroke-linecap="round" />
+        </svg>
+      </button>
+      <!-- Game (TASK game-manager, Phase 1): a gamepad. Visible only to roles
+           that may enter the Game zone — mirrors the backend requireGameZone. -->
+      <button
+        v-if="auth.canGame"
+        class="tool"
+        :class="{ 'tool--on': isGame }"
+        type="button"
+        aria-label="Game"
+        title="Game"
+        @click="navigateTo('/game')"
+      >
+        <svg viewBox="0 0 24 24" width="20" height="20" fill="none">
+          <path
+            d="M7.6 6.8h8.8c2.4 0 4.2 1.9 4.6 4.3l.6 4c.3 2-1.2 3.7-3.1 3.7-1 0-1.9-.5-2.5-1.3l-.8-1.1H8.8L8 17.5c-.6.8-1.5 1.3-2.5 1.3-1.9 0-3.4-1.7-3.1-3.7l.6-4c.4-2.4 2.2-4.3 4.6-4.3z"
+            :fill="isGame ? 'url(#navGrad)' : 'none'"
+            :stroke="isGame ? 'none' : 'currentColor'"
+            stroke-width="1.7"
+            stroke-linejoin="round"
+          />
+          <path
+            d="M7.3 11.2v2.6M6 12.5h2.6"
+            :stroke="isGame ? '#fff' : 'currentColor'"
+            stroke-width="1.7"
+            stroke-linecap="round"
+          />
+          <circle cx="15.6" cy="11.9" r="1.05" :fill="isGame ? '#fff' : 'currentColor'" />
+          <circle cx="17.4" cy="14.1" r="1.05" :fill="isGame ? '#fff' : 'currentColor'" />
         </svg>
       </button>
       <button
