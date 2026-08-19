@@ -17,12 +17,14 @@ import { welcomeRouter } from "./routes/welcome.js";
 import { welcomeAdminRouter } from "./routes/welcomeAdmin.js";
 import { welcomePackRouter } from "./routes/welcomePack.js";
 import { myBrandsRouter } from "./routes/myBrands.js";
+import { gameRouter } from "./routes/game.js";
 import {
   loadUser,
   requireAdmin,
   requireAdminOrManager,
   requireAuth,
   requireCrmSuper,
+  requireGameZone,
   requireSuperDesigner,
   requireZone,
 } from "./middleware/auth.js";
@@ -90,6 +92,10 @@ app.use("/api/welcome-pack", loadUser, requireAuth, requireSuperDesigner, welcom
 app.use("/api/welcome", loadUser, requireAuth, requireZone("DESIGNER"), welcomeRouter);
 // Super-designer surface (own-brand CRUD + brand test runs).
 app.use("/api/my-brands", loadUser, requireAuth, requireSuperDesigner, myBrandsRouter);
+// Game module (TASK game-manager): its own zone guard, not requireZone —
+// GAME_MANAGER belongs to no other zone and MANAGER must not slip in through
+// requireZone's blanket pass. Above the catch-all /api for the usual reason.
+app.use("/api/game", loadUser, requireAuth, requireGameZone, gameRouter);
 // Generic /api (generate) is a Design-zone route — keep it last so the more
 // specific prefixes above match first.
 app.use("/api", loadUser, requireAuth, requireZone("DESIGNER"), generateRouter);

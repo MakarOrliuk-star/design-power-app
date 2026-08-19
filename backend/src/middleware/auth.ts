@@ -141,6 +141,57 @@ export async function requireCrmSuper(
 }
 
 /**
+ * 403 unless the user may enter the Game zone (TASK game-manager, Phase 1).
+ * Q1 (variant «б»): GAME_MANAGER + DESIGNER + SUPER_DESIGNER + ADMIN + MANAGER.
+ * Q2: GAME_MANAGER is walled off from everything else — it never appears in a
+ * requireZone("DESIGNER"/"CRM") list and is not ADMIN/MANAGER, so the Design
+ * and CRM guards 403 it without any extra code.
+ *
+ * Deliberately NOT expressed via requireZone: that helper lets MANAGER through
+ * every zone by construction, and the Game zone needs its own role list.
+ * The role is read FRESH from the DB, mirroring requireSuperDesigner, so an
+ * admin's promotion takes effect without the user re-logging in.
+ */
+export async function requireGameZone(
+  req: Request,
+  res: Response,
+  next: NextFunction,
+): Promise<void> {
+  if (!req.user) {
+    res.status(401).json({ error: "unauthorized" });
+    return;
+  }
+  try {
+    const user = await prisma.user.findUnique({
+      where: { id: req.user.sub },
+      select: { role: true, isActive: true },
+    });
+    if (!user || !user.isActive) {
+      res.status(401).json({ error: "unauthorized" });
+      return;
+    }
+    if (!GAME_ZONE_ROLES.has(user.role)) {
+      res.status(403).json({ error: "forbidden" });
+      return;
+    }
+    req.user.role = user.role;
+    next();
+  } catch (err) {
+    console.error("requireGameZone DB lookup failed:", err);
+    res.status(500).json({ error: "server_error" });
+  }
+}
+
+/** Single source of truth for Q1 — mirrored by the frontend store's canGame. */
+const GAME_ZONE_ROLES: ReadonlySet<SessionPayload["role"]> = new Set([
+  "GAME_MANAGER",
+  "DESIGNER",
+  "SUPER_DESIGNER",
+  "ADMIN",
+  "MANAGER",
+]);
+
+/**
  * 403 unless the authenticated user's role is in `roles`. ADMIN always passes
  * (full access across zones). Used to wall off the Design zone from CRM-only
  * users and vice-versa. Assumes loadUser + requireAuth ran earlier.
@@ -169,6 +220,9 @@ export function requireZone(...roles: SessionPayload["role"][]) {
       // are guarded separately by requireAdmin, so MANAGER never reaches them.
       // SUPER_DESIGNER is a DESIGNER-zone role (Design only, never CRM);
       // CRM_SUPER is a CRM-zone role (CRM only, never Design).
+      // GAME_MANAGER is deliberately absent from this mapping: it belongs to
+      // the Game zone alone (requireGameZone), so every requireZone list 403s
+      // it — that IS the Q2 wall ("пока не пускаем" into Design and CRM).
       const effectiveRole =
         user.role === "SUPER_DESIGNER" ? "DESIGNER" : user.role === "CRM_SUPER" ? "CRM" : user.role;
       if (user.role !== "ADMIN" && user.role !== "MANAGER" && !roles.includes(effectiveRole)) {

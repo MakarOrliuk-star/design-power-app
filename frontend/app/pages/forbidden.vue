@@ -7,10 +7,13 @@ useHead({ title: "Design Power — Нет доступа" });
 
 const auth = useAuthStore();
 
-// Where "your section" leads, by role. ADMIN reaches both — default to Design.
+// Where "your section" leads, by role. ADMIN reaches all three — default to
+// Design. A GAME_MANAGER only has canGame, so it lands on /game (TASK
+// game-manager, Q2).
 const home = computed(() => {
   if (auth.canDesign) return { path: "/", label: "Перейти в Design" };
   if (auth.canCrm) return { path: "/crm", label: "Перейти в CRM" };
+  if (auth.canGame) return { path: "/game", label: "Перейти в Game" };
   return { path: "/login", label: "На страницу входа" };
 });
 </script>

@@ -1,6 +1,7 @@
 <script setup lang="ts">
-// Start page (figma/login page/login page1.png): header cards + two video
-// zones, Design and CRM. Serves both as the login screen and as the portal —
+// Start page (figma/game manager page/макаронка 2.0 — Start page.png): header
+// cards + three video zones — Design, CRM and Game. Serves both as the login
+// screen and as the portal —
 // an authenticated user clicks a zone and goes straight in; an anonymous one
 // is sent through the existing Google OAuth with the target carried in ?next=
 // (validated server-side, see backend routes/auth.ts).
@@ -28,15 +29,17 @@ const errorMessage = computed(() => {
 const ZONES = [
   { id: "design", title: "Design", next: "/", video: "/login/design.mp4" },
   { id: "crm", title: "CRM", next: "/crm", video: "/login/crm.mp4" },
+  { id: "game", title: "Game", next: "/game", video: "/login/game.mp4" },
 ] as const;
 
-// Anonymous visitors see both zones (role is unknown until they log in).
-// Authenticated users only see the zone(s) their role can reach — ADMIN both,
-// DESIGNER only Design, CRM only CRM.
+// Anonymous visitors see all three zones (Q4: the role is unknown until they
+// log in). Authenticated users only see the zone(s) their role can reach —
+// ADMIN/MANAGER all three, DESIGNER Design + Game, CRM only CRM, and a
+// GAME_MANAGER only Game (Q2).
 const visibleZones = computed(() => {
   if (!auth.isAuthenticated) return ZONES;
   return ZONES.filter((z) =>
-    z.id === "crm" ? auth.canCrm : auth.canDesign,
+    z.id === "crm" ? auth.canCrm : z.id === "game" ? auth.canGame : auth.canDesign,
   );
 });
 
@@ -98,7 +101,7 @@ function enter(next: string) {
 
     <p v-if="errorMessage" class="error">{{ errorMessage }}</p>
 
-    <div class="zones" :class="{ 'zones--single': visibleZones.length === 1 }">
+    <div class="zones" :class="`zones--${visibleZones.length}`">
       <button
         v-for="z in visibleZones"
         :key="z.id"
@@ -204,17 +207,22 @@ function enter(next: string) {
   text-align: center;
 }
 
-/* the two clickable zones — fill the rest of the screen */
+/* the clickable zones — fill the rest of the screen. Three equal tiles is the
+   default (figma/game manager page/макаронка 2.0 — Start page.png); the 1- and
+   2-up cases are for roles that reach fewer zones. */
 .zones {
   flex: 1;
   min-height: 0;
   display: grid;
-  grid-template-columns: 1fr 1fr;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
   gap: 20px;
 }
-/* Single accessible zone (e.g. a CRM-only or Designer-only user) — don't
-   stretch the lone tile across the full width. */
-.zones--single {
+.zones--2 {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+/* Single accessible zone (e.g. a CRM-only or Game-only user) — don't stretch
+   the lone tile across the full width. */
+.zones--1 {
   grid-template-columns: minmax(0, 720px);
   justify-content: center;
 }
@@ -253,9 +261,19 @@ function enter(next: string) {
   line-height: 1;
 }
 
+@media (max-width: 1100px) {
+  .zones,
+  .zones--2 {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+
 @media (max-width: 760px) {
-  .zones {
+  .zones,
+  .zones--2,
+  .zones--1 {
     grid-template-columns: 1fr;
+    justify-content: stretch;
   }
   .card--title {
     display: none;

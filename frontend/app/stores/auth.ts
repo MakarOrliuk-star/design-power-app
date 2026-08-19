@@ -1,11 +1,17 @@
 import { defineStore } from "pinia";
+import {
+  canAdminPanel as roleCanAdminPanel,
+  canCreateStyles as roleCanCreateStyles,
+  canEnterZone,
+  type AppRole,
+} from "~/utils/zones";
 
 export interface AuthUser {
   id: string;
   email: string;
   name?: string | null;
   avatarUrl?: string | null;
-  role: "ADMIN" | "DESIGNER" | "CRM" | "MANAGER" | "SUPER_DESIGNER" | "CRM_SUPER";
+  role: AppRole;
 }
 
 /**
@@ -24,25 +30,16 @@ export const useAuthStore = defineStore("auth", () => {
   // /admin access: ADMIN sees everything; MANAGER sees ONLY the Tournaments
   // section there (the other panels stay ADMIN-only, mirrored by the backend
   // guards requireAdmin vs requireAdminOrManager).
-  const canAdminPanel = computed(
-    () => user.value?.role === "ADMIN" || user.value?.role === "MANAGER",
-  );
-  // Zone access — ADMIN and MANAGER reach both zones; DESIGNER/CRM are walled off
-  // to their own. (MANAGER = Design + CRM, but not /admin → see isAdmin.)
-  const canDesign = computed(
-    () =>
-      user.value?.role === "ADMIN" ||
-      user.value?.role === "MANAGER" ||
-      user.value?.role === "DESIGNER" ||
-      user.value?.role === "SUPER_DESIGNER",
-  );
-  const canCrm = computed(
-    () =>
-      user.value?.role === "ADMIN" ||
-      user.value?.role === "MANAGER" ||
-      user.value?.role === "CRM" ||
-      user.value?.role === "CRM_SUPER",
-  );
+  const canAdminPanel = computed(() => roleCanAdminPanel(user.value?.role));
+  // Zone access. The role lists live in utils/zones.ts — shared with the route
+  // guard so the two can't drift — and mirror the backend requireZone /
+  // requireGameZone guards. ADMIN and MANAGER reach all three zones; DESIGNER
+  // reaches Design + Game; CRM only CRM; GAME_MANAGER only Game (TASK
+  // game-manager, Q2).
+  const canDesign = computed(() => canEnterZone(user.value?.role, "design"));
+  const canCrm = computed(() => canEnterZone(user.value?.role, "crm"));
+  const canGame = computed(() => canEnterZone(user.value?.role, "game"));
+  const isGameManager = computed(() => user.value?.role === "GAME_MANAGER");
   const isSuperDesigner = computed(() => user.value?.role === "SUPER_DESIGNER");
   const isCrmSuper = computed(() => user.value?.role === "CRM_SUPER");
   // Image Bundles service (TASK crm-bundle, D4): CRM_SUPER plus ADMIN/MANAGER —
@@ -56,12 +53,7 @@ export const useAuthStore = defineStore("auth", () => {
   // The Create a New Style / Library surface (TASK super-designer): visible to
   // SUPER_DESIGNER plus ADMIN/MANAGER (Phase 0 decision) — mirrors the backend
   // requireSuperDesigner guard.
-  const canCreateStyles = computed(
-    () =>
-      user.value?.role === "SUPER_DESIGNER" ||
-      user.value?.role === "ADMIN" ||
-      user.value?.role === "MANAGER",
-  );
+  const canCreateStyles = computed(() => roleCanCreateStyles(user.value?.role));
 
   async function fetchMe() {
     try {
@@ -92,6 +84,8 @@ export const useAuthStore = defineStore("auth", () => {
     isManager,
     isSuperDesigner,
     isCrmSuper,
+    isGameManager,
+    canGame,
     canBundles,
     canCreateStyles,
     canAdminPanel,
