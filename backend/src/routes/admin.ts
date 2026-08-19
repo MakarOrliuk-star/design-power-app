@@ -14,9 +14,23 @@ import { Prisma } from "../../generated/prisma/client.js";
 // All routes here are mounted behind loadUser + requireAdmin (see index.ts).
 export const adminRouter: Router = Router();
 
+/** Every assignable role. Single source of truth for both allowlist and user PATCH. */
+const roleEnum = z.enum([
+  "ADMIN",
+  "DESIGNER",
+  "CRM",
+  "MANAGER",
+  "SUPER_DESIGNER",
+  "CRM_SUPER",
+  "GAME_MANAGER",
+]);
+
 const addEmailSchema = z.object({
   email: z.string().email().transform((e) => e.toLowerCase()),
   note: z.string().max(500).optional(),
+  // Role granted on first login (TASK game-manager, Q3). Omitted → DESIGNER,
+  // the historical default applied by services/auth.service.ts.
+  role: roleEnum.optional(),
 });
 
 // ---- Allowlist ----
@@ -31,7 +45,7 @@ adminRouter.post("/allowed-emails", async (req: Request, res: Response) => {
     res.status(400).json({ error: "invalid_body", details: parsed.error.flatten().fieldErrors });
     return;
   }
-  const { email, note } = parsed.data;
+  const { email, note, role } = parsed.data;
 
   const existing = await prisma.allowedEmail.findUnique({ where: { email } });
   if (existing) {
@@ -40,7 +54,7 @@ adminRouter.post("/allowed-emails", async (req: Request, res: Response) => {
   }
 
   const created = await prisma.allowedEmail.create({
-    data: { email, note: note ?? null, addedBy: req.user!.email },
+    data: { email, note: note ?? null, role: role ?? null, addedBy: req.user!.email },
   });
   res.status(201).json({ allowedEmail: created });
 });
@@ -77,7 +91,7 @@ adminRouter.get("/users", async (_req: Request, res: Response) => {
 });
 
 const patchUserSchema = z.object({
-  role: z.enum(["ADMIN", "DESIGNER", "CRM", "MANAGER", "SUPER_DESIGNER", "CRM_SUPER"]).optional(),
+  role: roleEnum.optional(),
   isActive: z.boolean().optional(),
 });
 
@@ -103,7 +117,7 @@ adminRouter.patch("/users/:id", async (req: Request, res: Response) => {
 
   // Build the update payload without explicit `undefined` (exactOptionalPropertyTypes).
   const data: {
-    role?: "ADMIN" | "DESIGNER" | "CRM" | "MANAGER" | "SUPER_DESIGNER" | "CRM_SUPER";
+    role?: "ADMIN" | "DESIGNER" | "CRM" | "MANAGER" | "SUPER_DESIGNER" | "CRM_SUPER" | "GAME_MANAGER";
     isActive?: boolean;
   } = {};
   if (parsed.data.role !== undefined) data.role = parsed.data.role;

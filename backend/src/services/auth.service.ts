@@ -27,16 +27,19 @@ export async function resolveLogin(profile: GoogleProfile): Promise<LoginResult>
     return { ok: false, reason: "deactivated" };
   }
 
-  const allowed =
-    isBootstrapAdmin ||
-    existing !== null ||
-    (await prisma.allowedEmail.findUnique({ where: { email } })) !== null;
+  const allowedEntry = await prisma.allowedEmail.findUnique({ where: { email } });
+  const allowed = isBootstrapAdmin || existing !== null || allowedEntry !== null;
 
   if (!allowed) {
     return { ok: false, reason: "not_allowed" };
   }
 
-  const role = isBootstrapAdmin ? "ADMIN" : (existing?.role ?? "DESIGNER");
+  // Role on FIRST login: the one the admin picked when whitelisting (TASK
+  // game-manager, Q3), else the historical DESIGNER default. An existing user's
+  // stored role always wins — whitelisting never demotes anybody.
+  const role = isBootstrapAdmin
+    ? "ADMIN"
+    : (existing?.role ?? allowedEntry?.role ?? "DESIGNER");
 
   const user = await prisma.user.upsert({
     where: { email },

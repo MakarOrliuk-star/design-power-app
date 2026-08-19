@@ -34,6 +34,12 @@ enum Role {
   // service via /api/bundles. Bundles are also open to ADMIN and MANAGER;
   // plain CRM users never see them. No Design zone, no /admin.
   CRM_SUPER
+  // Game manager (TASK game-manager, Phase 1 / Q1-Q2): the Game zone ONLY —
+  // the /game module and /api/game. Deliberately walled off from BOTH the
+  // Design zone and CRM (Q2: "пока не пускаем"), and never /admin. The Game
+  // zone itself is also open to DESIGNER, SUPER_DESIGNER, ADMIN and MANAGER
+  // (Q1, variant «б» — consistent with how every other zone treats them).
+  GAME_MANAGER
 }
 
 model User {
@@ -56,6 +62,9 @@ model User {
   welcomeOverrides    UserWelcomePromptOverride[]
   brandsCreated       Brand[]
   bundles             Bundle[]
+  gamePacks           GameAssetPack[]
+  gameAssets          GameAsset[]
+  gameCompositions    GameComposition[]
 
   @@index([email])
 }
@@ -66,6 +75,10 @@ model AllowedEmail {
   email     String   @unique
   note      String?
   addedBy   String? // email of the admin who added it
+  /// Role granted on FIRST login (TASK game-manager, Q3: the admin picks the
+  /// role when whitelisting, so a Game manager never has to be demoted from the
+  /// DESIGNER default afterwards). Null keeps the historical default.
+  role      Role?
   createdAt DateTime @default(now())
 }
 
@@ -531,9 +544,9 @@ model TournamentChangeLog {
 /// prompts / overrides) — Generation rows keep denormalized names, so old ZIP
 /// exports survive.
 model WelcomeCategory {
-  id   String @id @default(cuid())
-  key  String @unique // slug of the name at creation time, e.g. "welcome_series"
-  name String // column title
+  id                String  @id @default(cuid())
+  key               String  @unique // slug of the name at creation time, e.g. "welcome_series"
+  name              String // column title
   /// The category's elements carry their OWN reference images instead of the
   /// brand's (the tournaments' hardcoded `provider` rule, but as data). Turning
   /// it OFF keeps the uploaded images in the DB — they simply stop reaching
@@ -547,15 +560,15 @@ model WelcomeCategory {
 /// Elements inside a category. Removal is soft (isActive=false) — Generation
 /// history keeps the denormalized element name.
 model WelcomeElement {
-  id         String          @id @default(cuid())
-  categoryId String
-  category   WelcomeCategory @relation(fields: [categoryId], references: [id], onDelete: Cascade)
-  name       String
-  order      Int             @default(0)
-  isActive   Boolean         @default(true)
+  id              String          @id @default(cuid())
+  categoryId      String
+  category        WelcomeCategory @relation(fields: [categoryId], references: [id], onDelete: Cascade)
+  name            String
+  order           Int             @default(0)
+  isActive        Boolean         @default(true)
   /// Used only while the category has usesOwnReferences=true. Max 2 (BRAND_REFS_PER_JOB).
   referenceImages String[]
-  createdAt       DateTime @default(now())
+  createdAt       DateTime        @default(now())
 
   prompt    WelcomePrompt?
   overrides UserWelcomePromptOverride[]
@@ -672,23 +685,23 @@ model BundleType {
 /// names picked in the wizard (one toggle covers both (Men)/(Women), D3/D7);
 /// they are expanded into concrete BundleBrandVariant rows at generate time.
 model Bundle {
-  id            String       @id @default(cuid())
+  id            String              @id @default(cuid())
   name          String
   plannedSendAt DateTime? // label only (D1)
-  neuralPrompt  String       @default("") // <= 1500 chars, enforced in the API
-  status        BundleStatus @default(DRAFT)
+  neuralPrompt  String              @default("") // <= 1500 chars, enforced in the API
+  status        BundleStatus        @default(DRAFT)
   brandNames    Json // string[] of base brand names
   bundleTypeId  String
-  bundleType    BundleType   @relation(fields: [bundleTypeId], references: [id])
+  bundleType    BundleType          @relation(fields: [bundleTypeId], references: [id])
   /// Chosen variation for the ai_reference compose mode (TASK ai-reference):
   /// required at generate time when the bundle type has an ai_reference asset,
   /// null for layered/scene bundles. SetNull so bundles survive preset deletes.
   presetId      String?
   preset        NeuralPromptPreset? @relation(fields: [presetId], references: [id], onDelete: SetNull)
   createdById   String?
-  createdBy     User?        @relation(fields: [createdById], references: [id], onDelete: SetNull)
-  createdAt     DateTime     @default(now())
-  updatedAt     DateTime     @updatedAt
+  createdBy     User?               @relation(fields: [createdById], references: [id], onDelete: SetNull)
+  createdAt     DateTime            @default(now())
+  updatedAt     DateTime            @updatedAt
 
   variants BundleBrandVariant[]
   sends    BundleSend[]
@@ -702,18 +715,18 @@ model Bundle {
 /// personImageUrl/itemImageUrl are the stage-A pipeline artifacts (D11/D12),
 /// reused by all assets of the variant and by per-asset regenerates.
 model BundleBrandVariant {
-  id             String  @id @default(cuid())
-  bundleId       String
-  bundle         Bundle  @relation(fields: [bundleId], references: [id], onDelete: Cascade)
-  brandId        String?
-  brandName      String // internal name snapshot, e.g. "Betnella(Men)"
-  displayName    String // UI label, e.g. "Betnella (Men)"
-  personImageUrl String?
-  itemImageUrl   String?
+  id              String  @id @default(cuid())
+  bundleId        String
+  bundle          Bundle  @relation(fields: [bundleId], references: [id], onDelete: Cascade)
+  brandId         String?
+  brandName       String // internal name snapshot, e.g. "Betnella(Men)"
+  displayName     String // UI label, e.g. "Betnella (Men)"
+  personImageUrl  String?
+  itemImageUrl    String?
   // Transparent-cutout Cloudinary public ids (layered compose, D10 v2): the
   // layer compositor references overlays by public id, not URL.
-  personCutoutId String?
-  itemCutoutId   String?
+  personCutoutId  String?
+  itemCutoutId    String?
   /// sha256 of the SOURCE image bytes each cutout was normalized from
   /// (Phase 2): links the variant to the NormalizedLayer cache rows and lets
   /// the composition engine (Phase 3) look up bbox dimensions.
@@ -735,7 +748,7 @@ model BundleBrandVariant {
 /// Regeneration reuses this row (idempotent — no duplicates) and resets
 /// `approved`. width/height snapshot the canonical mask size (D2).
 model BundleAsset {
-  id           String            @id @default(cuid())
+  id           String             @id @default(cuid())
   bundleId     String
   variantId    String
   variant      BundleBrandVariant @relation(fields: [variantId], references: [id], onDelete: Cascade)
@@ -743,15 +756,15 @@ model BundleAsset {
   width        Int
   height       Int
   imageUrl     String?
-  status       BundleAssetStatus @default(PENDING)
-  approved     Boolean           @default(false)
+  status       BundleAssetStatus  @default(PENDING)
+  approved     Boolean            @default(false)
   errorMessage String?
   /// Composition metadata for the email template + debugging (Phase 3):
   /// spec key/version, seed, safe-zone %, luminance/contrast, recommended
   /// text color, layer bboxes, retina URL. Written by the engine render path.
   metadata     Json?
-  createdAt    DateTime          @default(now())
-  updatedAt    DateTime          @updatedAt
+  createdAt    DateTime           @default(now())
+  updatedAt    DateTime           @updatedAt
 
   @@unique([variantId, assetKey])
   @@index([bundleId])
@@ -854,18 +867,18 @@ model NeuralPromptPreset {
 /// BundleType.assets[].key; the "email" default migrates every pre-existing
 /// row (all of them were email banners) without a data script.
 model VariationReference {
-  id          String   @id @default(cuid())
+  id          String             @id @default(cuid())
   presetId    String
   preset      NeuralPromptPreset @relation(fields: [presetId], references: [id], onDelete: Cascade)
   brandName   String // BASE brand name, same values as Bundle.brandNames entries
-  assetKey    String   @default("email") // email | popup | push (BundleType asset key)
+  assetKey    String             @default("email") // email | popup | push (BundleType asset key)
   imageUrl    String // Cloudinary secure_url
   publicId    String // Cloudinary public_id (for delete)
   width       Int
   height      Int
-  sortOrder   Int      @default(0) // admin order = priority when trimming to 14
+  sortOrder   Int                @default(0) // admin order = priority when trimming to 14
   createdById String?
-  createdAt   DateTime @default(now())
+  createdAt   DateTime           @default(now())
 
   // Уникальность СОЗНАТЕЛЬНО остаётся по [presetId, brandName, publicId] и не
   // включает assetKey: Cloudinary отдаёт public_id вместе с папкой, а папка у
@@ -893,16 +906,16 @@ model BundleSend {
 }
 
 model SmsCampaign {
-  id        String       @id @default(uuid())
+  id        String   @id @default(uuid())
   userId    String
   provider  String
-  status    String       @default("pending") // pending, processing, completed, failed
+  status    String   @default("pending") // pending, processing, completed, failed
   sheetUrl  String?
-  stats     Json         @default("{\"total\": 0, \"sent\": 0, \"delivered\": 0, \"failed\": 0}")
-  createdAt DateTime     @default(now())
-  updatedAt DateTime     @updatedAt
+  stats     Json     @default("{\"total\": 0, \"sent\": 0, \"delivered\": 0, \"failed\": 0}")
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
 
-  messages  SmsMessage[]
+  messages SmsMessage[]
 
   @@map("sms_campaigns")
 }
@@ -938,4 +951,125 @@ model SmsTemplate {
 
   @@unique([userId, country, language])
   @@map("sms_templates")
+}
+
+// ============================================================
+// Game manager (TASK game-manager, Phase 2)
+// ============================================================
+
+/// Q5: the mock's "Item" button IS the character — the composer has exactly
+/// two layers, a background and a person on top of it.
+enum GameLayerKind {
+  BACKGROUND
+  PERSON
+}
+
+enum GameAssetSource {
+  /// Extracted from a designer's ZIP.
+  UPLOAD
+  /// Produced by the (future) neural pipeline — Q18: stubbed for now.
+  GENERATED
+}
+
+/// Q8: Live vs Slot will steer generation; the field is the placeholder the
+/// customer asked for until the exact rules arrive.
+enum GameSegment {
+  LIVE
+  SLOT
+}
+
+enum GamePackStatus {
+  PARSING
+  READY
+  FAILED
+}
+
+enum GameCompositionStatus {
+  DONE
+  FAILED
+}
+
+/// The stencil ("трафарет"). Q6: one template for everything — geometry was
+/// measured off figma/game manager page/макаронка 2.0 — Game manager.png and
+/// is stored relative to the canvas, so it survives a format change.
+/// See lib/gameTemplate.ts for the spec shape and the measured defaults.
+model GameTemplate {
+  id        String   @id @default(cuid())
+  key       String   @unique
+  name      String
+  canvasW   Int
+  canvasH   Int
+  spec      Json
+  isActive  Boolean  @default(true)
+  createdAt DateTime @default(now())
+
+  compositions GameComposition[]
+}
+
+/// One uploaded ZIP. Q13: a new pack REPLACES the previous set — the old pack
+/// is flipped to isActive=false rather than deleted, so a bad upload can be
+/// diagnosed and the Cloudinary bytes stay reachable.
+model GameAssetPack {
+  id         String         @id @default(cuid())
+  userId     String
+  user       User           @relation(fields: [userId], references: [id], onDelete: Cascade)
+  filename   String
+  status     GamePackStatus @default(PARSING)
+  error      String?
+  /// Progress for the polling client: assets stored so far / entries worth reading.
+  assetCount Int            @default(0)
+  totalCount Int            @default(0)
+  isActive   Boolean        @default(true)
+  createdAt  DateTime       @default(now())
+
+  assets GameAsset[]
+
+  @@index([userId, isActive])
+}
+
+model GameAsset {
+  id        String          @id @default(cuid())
+  packId    String?
+  pack      GameAssetPack?  @relation(fields: [packId], references: [id], onDelete: Cascade)
+  userId    String
+  user      User            @relation(fields: [userId], references: [id], onDelete: Cascade)
+  kind      GameLayerKind
+  source    GameAssetSource @default(UPLOAD)
+  segment   GameSegment?
+  name      String
+  url       String
+  width     Int
+  height    Int
+  /// SHA-1 of the raw bytes — Q13 dedup within a pack.
+  checksum  String
+  createdAt DateTime        @default(now())
+
+  backgroundOf GameComposition[] @relation("GameCompositionBackground")
+  personOf     GameComposition[] @relation("GameCompositionPerson")
+
+  @@unique([packId, checksum])
+  @@index([userId, kind])
+}
+
+/// A finished composite. Q15: persistent. Q16: "Clear all" only hides the row
+/// (isDeleted) — the file itself stays in Cloudinary.
+model GameComposition {
+  id                String                @id @default(cuid())
+  userId            String
+  user              User                  @relation(fields: [userId], references: [id], onDelete: Cascade)
+  templateId        String
+  template          GameTemplate          @relation(fields: [templateId], references: [id])
+  backgroundAssetId String?
+  backgroundAsset   GameAsset?            @relation("GameCompositionBackground", fields: [backgroundAssetId], references: [id], onDelete: SetNull)
+  personAssetId     String?
+  personAsset       GameAsset?            @relation("GameCompositionPerson", fields: [personAssetId], references: [id], onDelete: SetNull)
+  /// { blur: boolean, blurSigma: number, scale: number } — see lib/gameCompose.ts.
+  options           Json
+  url               String?
+  status            GameCompositionStatus @default(DONE)
+  error             String?
+  isDeleted         Boolean               @default(false)
+  createdAt         DateTime              @default(now())
+
+  @@index([userId, isDeleted, createdAt])
 }

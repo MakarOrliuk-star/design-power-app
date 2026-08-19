@@ -4,7 +4,7 @@ import { JWT_SECRET } from "../env.js";
 export interface SessionPayload {
   sub: string; // userId
   email: string;
-  role: "ADMIN" | "DESIGNER" | "CRM" | "MANAGER" | "SUPER_DESIGNER" | "CRM_SUPER";
+  role: "ADMIN" | "DESIGNER" | "CRM" | "MANAGER" | "SUPER_DESIGNER" | "CRM_SUPER" | "GAME_MANAGER";
 }
 
 const EXPIRES_IN = "7d";
@@ -26,7 +26,8 @@ export function verifySession(token: string): SessionPayload | null {
       role !== "CRM" &&
       role !== "MANAGER" &&
       role !== "SUPER_DESIGNER" &&
-      role !== "CRM_SUPER"
+      role !== "CRM_SUPER" &&
+      role !== "GAME_MANAGER"
     )
       return null;
     return { sub, email, role };
