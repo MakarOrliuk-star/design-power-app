@@ -370,15 +370,15 @@ async function sendSMS(params: {
 
       case "dm":
       default: {
-        const rawDmUrl =
-          process.env.DM_API_URL || "https://api.sms.dynamicmessaging.co.uk";
-        const dmUrl = rawDmUrl.replace(/\/$/, "");
+        const isOtp = Boolean(params.dmTokenKey?.toUpperCase().includes("OTP"));
 
-        const isOtp = params.dmTokenKey?.toUpperCase().includes("OTP");
+       
+        const envUrl = isOtp ? process.env.DM_OTP_API_URL : process.env.DM_API_URL;
+        const baseUrl = (envUrl || "").replace(/\/$/, "");
 
         const endpoint = isOtp
-          ? `${dmUrl}/api/smsverify/message`
-          : `${dmUrl}/api/SMSMessages/v2`;
+          ? `${baseUrl}/api/smsverify/message`
+          : `${baseUrl}/api/SMSMessages/v2`;
 
         const token =
           (params.dmTokenKey && process.env[params.dmTokenKey]) ||
@@ -390,7 +390,7 @@ async function sendSMS(params: {
         if (isOtp) {
           payload = {
             phoneNumber: cleanPhone,
-            sender: params.senderId?.substring(0, 11),
+            sender: params.senderId?.substring(0, 11) || "Info",
             message: params.text,
           };
         } else {
@@ -404,7 +404,7 @@ async function sendSMS(params: {
         const res = await fetch(endpoint, {
           method: "POST",
           headers: {
-            Authorization: `Bearer ${token}`,
+            "Authorization": `Bearer ${token}`,
             "Content-Type": "application/json",
           },
           body: JSON.stringify(payload),
@@ -415,7 +415,7 @@ async function sendSMS(params: {
         if (!res.ok) {
           return {
             success: false,
-            error: `DM Error [HTTP ${res.status}]: ${body || res.statusText}`,
+            error: `DM Error [HTTP ${res.status}]: ${body || res.statusText}. URL: ${endpoint}`,
           };
         }
 
