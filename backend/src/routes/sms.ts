@@ -6,7 +6,7 @@ import { SMS_QUEUE, getBullConnection } from "../queues/index.js";
 import { env } from "../env.js";
 
 const DEFAULT_ALLOWED_COUNTRIES = [
-  "albania", "australia", "austria", "belgium", "bosnia and herzegovina",
+  "albania", "australia", "austria", "belgium", "bosnia & herzegovina",
   "brazil", "bulgaria", "canada", "croatia", "czech republic", "denmark",
   "estonia", "finland", "france", "germany", "greece", "hungary", "ireland",
   "italy", "luxembourg", "montenegro", "netherlands", "new zealand",
@@ -30,7 +30,7 @@ const DEFAULT_DICTIONARY: Record<string, { language: string; isDefault: boolean 
     { language: "FR", isDefault: true },
     { language: "EN", isDefault: false }
   ],
-  "Bosnia and Herzegovina": [
+  "Bosnia & Herzegovina": [
     { language: "BS", isDefault: true }
   ],
   "Brazil": [

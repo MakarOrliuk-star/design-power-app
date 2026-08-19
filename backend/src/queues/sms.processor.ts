@@ -16,7 +16,11 @@ export async function processSmsJob(jobData: SmsBatchJobData) {
     });
 
     const telqToken = await getTelqToken();
-    const reservedNumbers = await reserveTelqNumbers(telqToken, targets);
+    
+    const isOtp = Boolean(dmTokenKey && dmTokenKey.toUpperCase().includes("OTP"));
+    
+    // Передаем флаг isOtp в функцию резервации
+    const reservedNumbers = await reserveTelqNumbers(telqToken, targets, isOtp);
 
     const createdMessages = [];
     for (const item of reservedNumbers) {
@@ -71,11 +75,13 @@ export async function processSmsJob(jobData: SmsBatchJobData) {
       }
 
       const templateBody = userTemplate.body || "Code: [[TOKEN]]";
-      const messagePrefix = templateBody.includes("[[TOKEN]]")
-        ? templateBody.replace("[[TOKEN]]", testToken)
-        : templateBody;
-
-      const fullMessageBody = `${testToken} ${messagePrefix}`.trim();
+      
+      let fullMessageBody = "";
+      if (templateBody.includes("[[TOKEN]]")) {
+        fullMessageBody = templateBody.replace(/\[\[TOKEN\]\]/g, testToken);
+      } else {
+        fullMessageBody = `${testToken} ${templateBody}`.trim();
+      }
 
       await prisma.smsMessage.update({
         where: { id: msg.id },
@@ -239,16 +245,23 @@ async function getTelqToken(): Promise<string> {
   return data.value || data.token || data.accessToken;
 }
 
-async function reserveTelqNumbers(token: string, targets: SmsBatchJobData["targets"]) {
+async function reserveTelqNumbers(token: string, targets: SmsBatchJobData["targets"], isOtp: boolean = false) {
+  const payload: any = {
+    destinationNetworks: targets.map((t) => ({ mcc: t.mcc, mnc: t.mnc })),
+  };
+
+  if (isOtp) {
+    payload.testIdTextType = "NUMERIC";
+    payload.testIdTextLength = 6;
+  }
+
   const res = await fetch("https://api.telqtele.com/v3/client/tests", {
     method: "POST",
     headers: {
       Authorization: `Bearer ${token}`,
       "Content-Type": "application/json",
     },
-    body: JSON.stringify({
-      destinationNetworks: targets.map((t) => ({ mcc: t.mcc, mnc: t.mnc })),
-    }),
+    body: JSON.stringify(payload),
   });
 
   if (!res.ok) throw new Error(`TelQ Batch Reserve Failed: ${await res.text()}`);
@@ -357,32 +370,56 @@ async function sendSMS(params: {
 
       case "dm":
       default: {
-        const dmUrl = process.env.DM_API_URL || "https://api.sms.dynamicmessaging.co.uk";
-        const isOtp = params.dmTokenKey?.toUpperCase().includes("OTP");
+        const isOtp = Boolean(params.dmTokenKey?.toUpperCase().includes("OTP"));
+
+       
+        const envUrl = isOtp ? process.env.DM_OTP_API_URL : process.env.DM_API_URL;
+        const baseUrl = (envUrl || "").replace(/\/$/, "");
+
         const endpoint = isOtp
-          ? `${dmUrl}/api/smsverify/message`
-          : `${dmUrl}/api/SMSMessages/v2`;
+          ? `${baseUrl}/api/smsverify/message`
+          : `${baseUrl}/api/SMSMessages/v2`;
 
         const token =
           (params.dmTokenKey && process.env[params.dmTokenKey]) ||
           process.env.DM_API_KEY ||
           "";
 
-        const payload = isOtp
-          ? { phoneNumber: cleanPhone, sender: params.senderId, message: params.text }
-          : { message: params.text, sender: params.senderId, contacts: [{ phoneNumber: cleanPhone }] };
+        let payload: any;
+
+        if (isOtp) {
+          payload = {
+            phoneNumber: cleanPhone,
+            sender: params.senderId?.substring(0, 11) || "Info",
+            message: params.text,
+          };
+        } else {
+          payload = {
+            message: params.text,
+            sender: params.senderId || "Info",
+            contacts: [{ phoneNumber: cleanPhone }],
+          };
+        }
 
         const res = await fetch(endpoint, {
           method: "POST",
           headers: {
-            Authorization: `Bearer ${token}`,
+            "Authorization": `Bearer ${token}`,
             "Content-Type": "application/json",
           },
           body: JSON.stringify(payload),
         });
 
         const body = await res.text();
-        return res.ok ? { success: true } : { success: false, error: body };
+
+        if (!res.ok) {
+          return {
+            success: false,
+            error: `DM Error [HTTP ${res.status}]: ${body || res.statusText}. URL: ${endpoint}`,
+          };
+        }
+
+        return { success: true };
       }
     }
   } catch (err: any) {
