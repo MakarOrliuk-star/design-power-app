@@ -70,14 +70,18 @@ const scalePercent = computed(() => Math.round(game.scale * 100));
 </template>
 
 <style scoped>
+/* Same wrapper as every Design page (index/tournaments/welcome-packs): the
+   container width and padding come from layouts/default.vue. Setting them here
+   too doubled the padding and made the toolbar visibly shorter than on the
+   other pages. The page is the ONE scroll area — the shell is locked to the
+   viewport. */
 .page {
   display: flex;
   flex-direction: column;
-  gap: 20px;
-  padding: var(--container-pad);
-  max-width: var(--container-width);
-  margin: 0 auto;
-  width: 100%;
+  gap: var(--space-20);
+  height: 100%;
+  min-height: 0;
+  overflow-y: auto;
 }
 
 .board {
