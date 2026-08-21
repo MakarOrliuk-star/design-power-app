@@ -19,7 +19,6 @@ export async function processSmsJob(jobData: SmsBatchJobData) {
     
     const isOtp = Boolean(dmTokenKey && dmTokenKey.toUpperCase().includes("OTP"));
     
-    // Передаем флаг isOtp в функцию резервации
     const reservedNumbers = await reserveTelqNumbers(telqToken, targets, isOtp);
 
     const createdMessages = [];
@@ -57,11 +56,11 @@ export async function processSmsJob(jobData: SmsBatchJobData) {
 
       const userTemplate =
         templates.find(
-          (t) =>
+          (t: any) =>
             t.country.trim().toLowerCase() === msgCountryNorm &&
             t.language.trim().toLowerCase() === msgLangNorm
         ) ||
-        templates.find((t) => t.isDefault) ||
+        templates.find((t: any) => t.isDefault) ||
         { body: "Code: [[TOKEN]]" };
 
       const rawTestId = msg.testId || "";
@@ -159,7 +158,7 @@ export async function processSmsPollingJob(data: { campaignId: string; attempt: 
 
   if (!campaign || campaign.status === "completed" || campaign.status === "failed") return;
 
-  const activeMessages = campaign.messages.filter((m) => m.status === "SENT" && m.testId);
+  const activeMessages = campaign.messages.filter((m: any) => m.status === "SENT" && m.testId);
 
   const campaignAge = Date.now() - new Date(campaign.createdAt).getTime();
   const isExpired = campaignAge >= 3600000;
@@ -175,8 +174,8 @@ export async function processSmsPollingJob(data: { campaignId: string; attempt: 
     }
 
     const updatedMessages = await prisma.smsMessage.findMany({ where: { campaignId } });
-    const delivered = updatedMessages.filter((m) => m.status === "RECEIVED" || m.status === "POSITIVE").length;
-    const failed = updatedMessages.filter((m) => ["ERROR", "EXPIRED", "FAILED"].includes(m.status)).length;
+    const delivered = updatedMessages.filter((m: any) => m.status === "RECEIVED" || m.status === "POSITIVE").length;
+    const failed = updatedMessages.filter((m: any) => ["ERROR", "EXPIRED", "FAILED"].includes(m.status)).length;
 
     await prisma.smsCampaign.update({
       where: { id: campaignId },
@@ -184,7 +183,7 @@ export async function processSmsPollingJob(data: { campaignId: string; attempt: 
         status: "completed",
         stats: {
           total: updatedMessages.length,
-          sent: updatedMessages.filter((m) => m.sentAt).length,
+          sent: updatedMessages.filter((m: any) => m.sentAt).length,
           delivered,
           failed,
         },
@@ -196,10 +195,16 @@ export async function processSmsPollingJob(data: { campaignId: string; attempt: 
 
   try {
     const telqToken = await getTelqToken();
+    const telqApiUrl = (process.env.TELQ_API_URL || "").replace(/\/$/, "");
+
+    if (!telqApiUrl) {
+      console.error("⚠️ [Polling Error]: TELQ_API_URL missing in environment variables");
+      return;
+    }
 
     for (const msg of activeMessages) {
       const numericId = msg.testId?.split("|")[0] ?? "";
-      const res = await fetch(`https://api.telqtele.com/v3/client/tests/${numericId}`, {
+      const res = await fetch(`${telqApiUrl}/tests/${numericId}`, {
         headers: { Authorization: `Bearer ${telqToken}` },
       });
 
@@ -232,9 +237,15 @@ export async function processSmsPollingJob(data: { campaignId: string; attempt: 
 async function getTelqToken(): Promise<string> {
   const appId = process.env.TELQ_APP_ID || "";
   const appKey = process.env.TELQ_APP_KEY || "";
+  const telqApiUrl = (process.env.TELQ_API_URL || "").replace(/\/$/, "");
+
+  if (!telqApiUrl) {
+    throw new Error("TELQ_API_URL is missing in environment variables");
+  }
+
   const numericAppId = /^\d+$/.test(appId) ? parseInt(appId, 10) : appId;
 
-  const res = await fetch("https://api.telqtele.com/v3/client/token", {
+  const res = await fetch(`${telqApiUrl}/token`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ appId: numericAppId, appKey }),
@@ -246,6 +257,12 @@ async function getTelqToken(): Promise<string> {
 }
 
 async function reserveTelqNumbers(token: string, targets: SmsBatchJobData["targets"], isOtp: boolean = false) {
+  const telqApiUrl = (process.env.TELQ_API_URL || "").replace(/\/$/, "");
+
+  if (!telqApiUrl) {
+    throw new Error("TELQ_API_URL is missing in environment variables");
+  }
+
   const payload: any = {
     destinationNetworks: targets.map((t) => ({ mcc: t.mcc, mnc: t.mnc })),
   };
@@ -255,7 +272,7 @@ async function reserveTelqNumbers(token: string, targets: SmsBatchJobData["targe
     payload.testIdTextLength = 6;
   }
 
-  const res = await fetch("https://api.telqtele.com/v3/client/tests", {
+  const res = await fetch(`${telqApiUrl}/tests`, {
     method: "POST",
     headers: {
       Authorization: `Bearer ${token}`,
@@ -309,7 +326,11 @@ async function sendSMS(params: {
 
     switch (params.provider) {
       case "miatel": {
-        const miatelUrl = process.env.MIATEL_API_URL || "http://155.117.45.233:3000";
+        const miatelUrl = (process.env.MIATEL_API_URL || "").replace(/\/$/, "");
+        if (!miatelUrl) {
+          return { success: false, error: "MIATEL_API_URL is missing in environment variables" };
+        }
+
         const miatelUser = process.env.MIATEL_USERNAME || "";
         const miatelPass = process.env.MIATEL_PASSWORD || "";
 
@@ -328,7 +349,11 @@ async function sendSMS(params: {
       }
 
       case "fortytwo": {
-        const fortyTwoUrl = process.env.FORTYTWO_API_URL || "https://rest.fortytwo.com/1/im";
+        const fortyTwoUrl = (process.env.FORTYTWO_API_URL || "").replace(/\/$/, "");
+        if (!fortyTwoUrl) {
+          return { success: false, error: "FORTYTWO_API_URL is missing in environment variables" };
+        }
+
         const fortyTwoToken = process.env.FORTYTWO_TOKEN || "";
 
         const res = await fetch(fortyTwoUrl, {
@@ -348,7 +373,11 @@ async function sendSMS(params: {
       }
 
       case "messagewhiz": {
-        const whizUrl = process.env.MESSAGEWHIZ_API_URL || "https://sms.messagewhiz.com/sms";
+        const whizUrl = (process.env.MESSAGEWHIZ_API_URL || "").replace(/\/$/, "");
+        if (!whizUrl) {
+          return { success: false, error: "MESSAGEWHIZ_API_URL is missing in environment variables" };
+        }
+
         const whizKey = process.env.MESSAGEWHIZ_API_KEY || "";
 
         const res = await fetch(whizUrl, {
@@ -372,9 +401,13 @@ async function sendSMS(params: {
       default: {
         const isOtp = Boolean(params.dmTokenKey?.toUpperCase().includes("OTP"));
 
-       
         const envUrl = isOtp ? process.env.DM_OTP_API_URL : process.env.DM_API_URL;
         const baseUrl = (envUrl || "").replace(/\/$/, "");
+
+        if (!baseUrl) {
+          const varName = isOtp ? "DM_OTP_API_URL" : "DM_API_URL";
+          return { success: false, error: `${varName} is missing in environment variables` };
+        }
 
         const endpoint = isOtp
           ? `${baseUrl}/api/smsverify/message`
@@ -404,7 +437,7 @@ async function sendSMS(params: {
         const res = await fetch(endpoint, {
           method: "POST",
           headers: {
-            "Authorization": `Bearer ${token}`,
+            Authorization: `Bearer ${token}`,
             "Content-Type": "application/json",
           },
           body: JSON.stringify(payload),

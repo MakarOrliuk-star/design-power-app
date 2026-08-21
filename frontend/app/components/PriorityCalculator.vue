@@ -70,7 +70,7 @@ const priorityScore = computed(() => {
 const priorityClass = computed(() => {
   if (priorityScore.value === "High") return "priority-High";
   if (priorityScore.value === "Medium") return "priority-Medium";
-  return "priority-Low"; // Используется для Low и Lowest
+  return "priority-Low"; 
 });
 </script>
 

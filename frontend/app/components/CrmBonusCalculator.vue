@@ -88,7 +88,7 @@
 <script setup>
 import { ref, computed } from 'vue';
 
-// Constants strictly mapped from GAS script
+// Constants
 const RTP = 0.955;
 const BonusWageringFactor = 5;
 const MoneyWageringFactor = 12;
@@ -103,7 +103,7 @@ const hy = ref({ wager: 10, percent: 100, amount: 30, costPerSpin: 0.1, provider
 // Helper function to format numbers precisely
 const fmt = (num) => Number(num || 0).toFixed(2);
 
-// 1. Free Spins Logic
+// 1. FS Logic
 const fsResult = computed(() => {
   const wagerDone = wagerMap[fs.value.wager] || 0.6;
   const gameProviderFee = fs.value.providerFee / 100;
@@ -132,7 +132,7 @@ const fsResult = computed(() => {
   };
 });
 
-// 2. Deposit Bonus Logic
+// 2. DB Logic
 const dbResult = computed(() => {
   const wagerDone = wagerMap[db.value.wager] || 0.6;
   const gameProviderFee = db.value.providerFee / 100;
@@ -206,9 +206,7 @@ const hyResult = computed(() => {
   color: var(--color-text);
 }
 
-/* Три карточки всегда в один ряд и ужимаются по ширине экрана.
-   minmax(0, 1fr) разрешает колонкам сжиматься ниже контента — без
-   переноса и горизонтального скролла. */
+/* Grid settings */
 .calc-grid {
   display: grid;
   grid-template-columns: repeat(3, minmax(0, 1fr));
