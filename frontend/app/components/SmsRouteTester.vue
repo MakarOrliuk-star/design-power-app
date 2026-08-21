@@ -399,7 +399,7 @@ async function handleExportToServer(campaignId: string) {
   }
 }
 
-// Скачивание CSV файла
+// Download CSV 
 function handleDownloadCsv(campaignId: string) {
   if (!campaignId) return;
   window.open(`/api/sms/export/csv/${campaignId}`, '_blank');

@@ -1,5 +1,5 @@
 import { calculatorCache } from "./calculator-cache.service.js";
-import { redis } from "../lib/redis.js"; // Добавлен импорт redis для хранения таймстампов
+import { redis } from "../lib/redis.js"; 
 import { 
   CURRENCY_DATA, FIAT_CURRENCIES, CRYPTO_CODES, STABLECOINS_HARDCODED,
   SECOND_CRM_OVERRIDES, THIRD_CRM_OVERRIDES, ALWAYS_FORCE_BLUE
@@ -46,24 +46,20 @@ export const calculatorService = {
       const lastFiatTime = lastFiat ? parseInt(lastFiat, 10) : 0;
       
       if (now - lastFiatTime >= ONE_DAY) {
-        console.log("🔄 Делаем плановый запрос к Fiat API...");
         await this.fetchFiatRates();
         await redis.set("rate:last_fiat_api_fetch", now.toString());
       } else {
         const remainingMin = Math.round((ONE_DAY - (now - lastFiatTime)) / 60);
-        console.log(`ℹ️ Fiat API актуален. Запрос пропущен. Следующий через: ${remainingMin} мин.`);
       }
 
       const lastCrypto = await redis.get("rate:last_crypto_api_fetch");
       const lastCryptoTime = lastCrypto ? parseInt(lastCrypto, 10) : 0;
 
       if (now - lastCryptoTime >= ONE_DAY) {
-        console.log("🔄 Делаем плановый запрос к Crypto API...");
         await this.fetchCryptoRates(CRYPTO_CODES);
         await redis.set("rate:last_crypto_api_fetch", now.toString());
       } else {
         const remainingMin = Math.round((ONE_DAY - (now - lastCryptoTime)) / 60);
-        console.log(`ℹ️ Crypto API актуален. Запрос пропущен. Следующий через: ${remainingMin} мин.`);
       }
     } catch (e) {
       console.error("❌ Ошибка при проверке расписания курсов валют:", e);
@@ -84,7 +80,6 @@ export const calculatorService = {
         return d.rates;
       }
     } catch (e) {
-      console.error("⚠️ FX fetch error (frankfurter)");
     }
     return null;
   },

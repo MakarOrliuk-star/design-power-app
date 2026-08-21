@@ -65,6 +65,17 @@ exportSmsRouter.post("/server/:campaignId", async (req: Request, res: Response) 
       return;
     }
 
+    const exportServerUrl = (process.env.EXPORT_SERVER_URL || "").replace(/\/$/, "");
+    if (!exportServerUrl) {
+      res.status(500).json({
+        success: false,
+        error: "EXPORT_SERVER_URL не настроен в переменных окружения",
+      });
+      return;
+    }
+
+    const authSecret = process.env.NGINX_AUTH || "";
+
     const campaign = await prisma.smsCampaign.findUnique({
       where: { id: campaignId },
       include: { messages: true },
@@ -78,9 +89,9 @@ exportSmsRouter.post("/server/:campaignId", async (req: Request, res: Response) 
     const csvContent = generateReportCsv(campaign);
     const fileName = `report_${new Date().toISOString().replace(/[:.]/g, "-")}.csv`;
     
-    const exportServerUrl = process.env.EXPORT_SERVER_URL || "http://127.0.0.1/upload-report";
-    const endpoint = `${exportServerUrl}?filename=${fileName}`;
-    const authSecret = process.env.NGINX_AUTH || "";
+    const endpoint = exportServerUrl.includes("?")
+      ? `${exportServerUrl}&filename=${fileName}`
+      : `${exportServerUrl}?filename=${fileName}`;
 
     const response = await fetch(endpoint, {
       method: "POST",
@@ -92,7 +103,6 @@ exportSmsRouter.post("/server/:campaignId", async (req: Request, res: Response) 
     });
 
     const resCode = response.status;
-    const body = await response.text();
 
     if (resCode >= 200 && resCode < 300) {
       res.json({ success: true, code: resCode, message: "Отчет успешно отправлен на сервер" });
