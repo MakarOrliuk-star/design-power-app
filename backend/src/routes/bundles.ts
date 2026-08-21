@@ -12,6 +12,7 @@ import {
 import { sendBundleToSmartico } from "../services/bundleSmartico.service.js";
 import type { BundleTypeAsset } from "../services/bundle.service.js";
 import { canApproveAsset } from "../services/bundleStatus.js";
+import * as audit from "../lib/audit.js";
 import type { BundleAssetStatus } from "../services/bundleStatus.js";
 import { derivedAssetKeys, derivedAssetLabel } from "../services/aiReferencePipeline.js";
 import { refCountsByBrand, MIN_REFS_FOR_GENERATION } from "../services/variationRefs.js";
@@ -508,7 +509,20 @@ bundlesRouter.delete("/:id", async (req: Request, res: Response) => {
   const id = paramId(req, res);
   if (!id) return;
   try {
-    await prisma.bundle.delete({ where: { id } });
+    // Bundles are shared across CRM_SUPER / ADMIN / MANAGER by design: the list
+    // endpoint shows everyone everything, so anyone in those roles can delete
+    // anyone's work. That is the intended workflow — but until now it left no
+    // record at all, which made "where did the bundle go" unanswerable.
+    const removed = await prisma.bundle.delete({ where: { id } });
+    await audit.record({
+      action: audit.AuditAction.SHARED_DELETED,
+      actorId: req.user!.sub,
+      actorEmail: req.user!.email,
+      targetId: removed.id,
+      targetLabel: removed.name,
+      details: { entity: "Bundle", createdById: removed.createdById },
+      req,
+    });
     res.json({ ok: true });
   } catch {
     res.status(404).json({ error: "not_found" });

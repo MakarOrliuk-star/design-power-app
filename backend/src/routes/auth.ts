@@ -8,8 +8,9 @@ import {
   buildDriveAuthUrl,
   exchangeCodeForDriveToken,
 } from "../lib/google.js";
-import { SESSION_COOKIE, signSession } from "../lib/jwt.js";
+import { SESSION_COOKIE, SESSION_MAX_AGE_MS, signSession } from "../lib/jwt.js";
 import { sanitizeNext } from "../lib/nextTarget.js";
+import * as audit from "../lib/audit.js";
 import { resolveLogin } from "../services/auth.service.js";
 import { prisma } from "../lib/prisma.js";
 import { loadUser, requireAuth } from "../middleware/auth.js";
@@ -27,12 +28,28 @@ const DRIVE_STATE_COOKIE = "drive_oauth_state";
 // nonce and session mechanics stay untouched. Exact-match whitelist only —
 // anything else (e.g. "//evil.com") collapses to "/".
 const NEXT_COOKIE = "oauth_next";
-// In production the frontend and backend live on different Railway domains
-// (cross-site), so the session cookie must be SameSite=None; Secure to be sent
-// on credentialed XHR. Locally (same-site localhost) Lax is fine.
+/**
+ * Session/state cookies.
+ *
+ * SameSite=Lax everywhere, including production. This used to be
+ * `isProd ? "none" : "lax"`, back when the browser talked to the backend
+ * directly: the two Railway domains are different sites, so the cookie was
+ * third-party and needed None+Secure to survive — which also switched off the
+ * browser's built-in CSRF defence on every state-changing endpoint.
+ *
+ * That reason is gone. The browser now only ever talks to the frontend origin
+ * and Nitro forwards /auth + /api server-side (frontend/server/utils/
+ * backendProxy.ts), so this cookie is first-party and Lax applies cleanly.
+ * Lax still covers the OAuth return leg: Google bounces back via a top-level
+ * GET navigation, which Lax permits — that is exactly the case it exempts.
+ *
+ * Consequence worth keeping in mind: a cross-site multipart POST (the one CSRF
+ * shape express.json's content-type check does not already block, because
+ * formidable reads the raw stream) no longer carries this cookie at all.
+ */
 const baseCookie: CookieOptions = {
   httpOnly: true,
-  sameSite: isProd ? "none" : "lax",
+  sameSite: "lax",
   secure: isProd,
   path: "/",
 };
@@ -83,16 +100,33 @@ authRouter.get("/google/callback", async (req: Request, res: Response) => {
     const result = await resolveLogin(profile);
 
     if (!result.ok) {
+      // A denial is the more interesting half of the trail: repeated
+      // "not_allowed" for one address is somebody probing the allowlist.
+      await audit.record({
+        action: audit.AuditAction.LOGIN_DENIED,
+        targetEmail: profile.email,
+        details: { reason: result.reason },
+        req,
+      });
       loginRedirect(res, result.reason);
       return;
     }
+
+    await audit.record({
+      action: audit.AuditAction.LOGIN_SUCCESS,
+      actorId: result.user.id,
+      actorEmail: result.user.email,
+      details: { role: result.user.role },
+      req,
+    });
 
     const token = signSession({
       sub: result.user.id,
       email: result.user.email,
       role: result.user.role,
     });
-    res.cookie(SESSION_COOKIE, token, { ...baseCookie, maxAge: 7 * 24 * 60 * 60 * 1000 });
+    // Kept in lockstep with the token's own expiry — see SESSION_MAX_AGE_MS.
+    res.cookie(SESSION_COOKIE, token, { ...baseCookie, maxAge: SESSION_MAX_AGE_MS });
     res.redirect(env.FRONTEND_URL.replace(/\/$/, "") + next);
   } catch (err) {
     console.error("OAuth callback error:", err);
@@ -167,7 +201,17 @@ authRouter.get("/me", loadUser, requireAuth, async (req: Request, res: Response)
   res.json({ user });
 });
 
-authRouter.post("/logout", (_req: Request, res: Response) => {
+// loadUser (not requireAuth): logging out without a valid session is still a
+// legitimate no-op, we just have nobody to attribute it to.
+authRouter.post("/logout", loadUser, async (req: Request, res: Response) => {
+  if (req.user) {
+    await audit.record({
+      action: audit.AuditAction.LOGOUT,
+      actorId: req.user.sub,
+      actorEmail: req.user.email,
+      req,
+    });
+  }
   res.clearCookie(SESSION_COOKIE, baseCookie);
   res.json({ ok: true });
 });

@@ -22,17 +22,45 @@ export function requireAuth(req: Request, res: Response, next: NextFunction): vo
   next();
 }
 
-/** 403 unless the authenticated user is an admin. */
-export function requireAdmin(req: Request, res: Response, next: NextFunction): void {
+/**
+ * 403 unless the authenticated user is an admin.
+ *
+ * The role is read FRESH from the DB, exactly like requireZone and the other
+ * role guards below. This is not an optimisation — it is the revocation path:
+ * the session cookie lives 24 hours and caches the role from login time, so a
+ * guard trusting the JWT alone would keep a demoted or deactivated admin on
+ * /api/admin (32 endpoints, including PATCH /users/:id — role assignment) until
+ * their token happened to expire. Deactivation must take effect on the very
+ * next request, so it costs one indexed lookup per admin call.
+ */
+export async function requireAdmin(
+  req: Request,
+  res: Response,
+  next: NextFunction,
+): Promise<void> {
   if (!req.user) {
     res.status(401).json({ error: "unauthorized" });
     return;
   }
-  if (req.user.role !== "ADMIN") {
-    res.status(403).json({ error: "forbidden" });
-    return;
+  try {
+    const user = await prisma.user.findUnique({
+      where: { id: req.user.sub },
+      select: { role: true, isActive: true },
+    });
+    if (!user || !user.isActive) {
+      res.status(401).json({ error: "unauthorized" });
+      return;
+    }
+    if (user.role !== "ADMIN") {
+      res.status(403).json({ error: "forbidden" });
+      return;
+    }
+    req.user.role = user.role;
+    next();
+  } catch (err) {
+    console.error("requireAdmin DB lookup failed:", err);
+    res.status(500).json({ error: "server_error" });
   }
-  next();
 }
 
 /**
@@ -198,7 +226,7 @@ const GAME_ZONE_ROLES: ReadonlySet<SessionPayload["role"]> = new Set([
  *
  * The role is read FRESH from the DB (not from the JWT), so an admin promoting a
  * user to CRM takes effect immediately — without the user re-logging in. The
- * session cookie lives 7 days and caches the role at login time, which would
+ * session cookie lives 24 hours and caches the role at login time, which would
  * otherwise keep a just-promoted user 403'd until their token expires.
  */
 export function requireZone(...roles: SessionPayload["role"][]) {

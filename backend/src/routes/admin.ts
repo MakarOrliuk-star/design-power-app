@@ -10,6 +10,7 @@ import { layoutSpecSchema, createLayoutSpecVersion } from "../services/layoutSpe
 import { clampStyleProfile } from "../lib/styleProfile.js";
 import { parseDecorEntries, decorEntryUrls } from "../lib/decorLibrary.js";
 import { Prisma } from "../../generated/prisma/client.js";
+import * as audit from "../lib/audit.js";
 
 // All routes here are mounted behind loadUser + requireAdmin (see index.ts).
 export const adminRouter: Router = Router();
@@ -56,6 +57,17 @@ adminRouter.post("/allowed-emails", async (req: Request, res: Response) => {
   const created = await prisma.allowedEmail.create({
     data: { email, note: note ?? null, role: role ?? null, addedBy: req.user!.email },
   });
+  // The allowlist decides who can ever hold a session at all — every edit to it
+  // belongs in the trail.
+  await audit.record({
+    action: audit.AuditAction.ALLOWLIST_ADDED,
+    actorId: req.user!.sub,
+    actorEmail: req.user!.email,
+    targetId: created.id,
+    targetEmail: created.email,
+    details: { grantedRole: role ?? null },
+    req,
+  });
   res.status(201).json({ allowedEmail: created });
 });
 
@@ -66,11 +78,75 @@ adminRouter.delete("/allowed-emails/:id", async (req: Request, res: Response) =>
     return;
   }
   try {
-    await prisma.allowedEmail.delete({ where: { id } });
+    // Delete returns the removed row — capture the address before it is gone,
+    // otherwise the trail records an opaque id nobody can resolve later.
+    const removed = await prisma.allowedEmail.delete({ where: { id } });
+    await audit.record({
+      action: audit.AuditAction.ALLOWLIST_REMOVED,
+      actorId: req.user!.sub,
+      actorEmail: req.user!.email,
+      targetId: removed.id,
+      targetEmail: removed.email,
+      req,
+    });
     res.json({ ok: true });
   } catch {
     res.status(404).json({ error: "not_found" });
   }
+});
+
+// ---- Security audit trail ----
+
+const auditQuerySchema = z.object({
+  action: z.string().max(64).optional(),
+  /** Matches either side — you usually know an address, not which side it sat on. */
+  email: z.string().max(320).optional(),
+  page: z.coerce.number().int().min(1).default(1),
+});
+
+const AUDIT_PAGE_SIZE = 50;
+
+/**
+ * Read the trail (TASK security, §3.1).
+ *
+ * A write-only log answers nothing, and "open a psql shell" is not an incident
+ * procedure. This is the read path: ADMIN-only (it exposes who logged in from
+ * which address), newest first, filterable by action and by address.
+ *
+ * No UI ships with it — that is deliberate scope, not an oversight. The
+ * endpoint is what makes the log usable today; a screen can come later.
+ */
+adminRouter.get("/audit-log", async (req: Request, res: Response) => {
+  const parsed = auditQuerySchema.safeParse(req.query);
+  if (!parsed.success) {
+    res.status(400).json({ error: "invalid_query", details: parsed.error.flatten().fieldErrors });
+    return;
+  }
+  const { action, email, page } = parsed.data;
+
+  const where = {
+    ...(action ? { action } : {}),
+    ...(email
+      ? {
+          OR: [
+            { actorEmail: { contains: email.toLowerCase() } },
+            { targetEmail: { contains: email.toLowerCase() } },
+          ],
+        }
+      : {}),
+  };
+
+  const [entries, total] = await Promise.all([
+    prisma.securityAuditLog.findMany({
+      where,
+      orderBy: { createdAt: "desc" },
+      skip: (page - 1) * AUDIT_PAGE_SIZE,
+      take: AUDIT_PAGE_SIZE,
+    }),
+    prisma.securityAuditLog.count({ where }),
+  ]);
+
+  res.json({ entries, total, page, pageSize: AUDIT_PAGE_SIZE });
 });
 
 // ---- Users (role / activation) ----
@@ -123,12 +199,47 @@ adminRouter.patch("/users/:id", async (req: Request, res: Response) => {
   if (parsed.data.role !== undefined) data.role = parsed.data.role;
   if (parsed.data.isActive !== undefined) data.isActive = parsed.data.isActive;
 
+  // Read the prior state so the audit trail can say what changed, not just
+  // what it became. One extra query on an admin-only route is a fair price for
+  // "who demoted this account, and from what".
+  const before = await prisma.user.findUnique({
+    where: { id },
+    select: { role: true, isActive: true },
+  });
+
   try {
     const updated = await prisma.user.update({
       where: { id },
       data,
       select: { id: true, email: true, name: true, role: true, isActive: true },
     });
+
+    // Role change and (de)activation are logged as separate events: one PATCH
+    // can do both, and an incident asks about them separately.
+    if (before && data.role !== undefined && data.role !== before.role) {
+      await audit.record({
+        action: audit.AuditAction.ROLE_CHANGED,
+        actorId: req.user!.sub,
+        actorEmail: req.user!.email,
+        targetId: updated.id,
+        targetEmail: updated.email,
+        details: { from: before.role, to: data.role },
+        req,
+      });
+    }
+    if (before && data.isActive !== undefined && data.isActive !== before.isActive) {
+      await audit.record({
+        action: data.isActive
+          ? audit.AuditAction.USER_ACTIVATED
+          : audit.AuditAction.USER_DEACTIVATED,
+        actorId: req.user!.sub,
+        actorEmail: req.user!.email,
+        targetId: updated.id,
+        targetEmail: updated.email,
+        req,
+      });
+    }
+
     res.json({ user: updated });
   } catch {
     res.status(404).json({ error: "not_found" });

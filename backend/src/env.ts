@@ -1,4 +1,5 @@
 import "dotenv/config";
+import { randomBytes } from "node:crypto";
 import { z } from "zod";
 
 /**
@@ -83,8 +84,29 @@ if (!parsed.success) {
 export const env = parsed.data;
 export const isProd = env.NODE_ENV === "production";
 
-/** Dev-only fallback so the server boots without a configured secret. */
-export const JWT_SECRET = env.JWT_SECRET ?? "dev-insecure-secret-change-me";
+/**
+ * Session signing key.
+ *
+ * Production is hard-gated by assertApiProductionConfig() below (>=16 chars, or
+ * the process exits). Outside production the server still boots without one —
+ * but on a RANDOM per-process key, never a literal.
+ *
+ * The literal that used to live here shipped in the repository, so any non-prod
+ * instance reachable from the internet was signing sessions with a key the whole
+ * world could read: forging an ADMIN cookie was a one-liner. A random key makes
+ * that impossible; the cost is that sessions do not survive a restart, which is
+ * why the warning tells you to set JWT_SECRET in backend/.env if that annoys you.
+ */
+export const JWT_SECRET =
+  env.JWT_SECRET ??
+  (() => {
+    const generated = randomBytes(32).toString("hex");
+    console.warn(
+      "⚠️  JWT_SECRET is not set — generated a random one for this process. " +
+        "Sessions will be invalidated on every restart. Set JWT_SECRET in backend/.env to keep them stable.",
+    );
+    return generated;
+  })();
 
 /** Whether Google OAuth is fully configured (routes 503 otherwise). */
 export const googleOAuthConfigured = Boolean(

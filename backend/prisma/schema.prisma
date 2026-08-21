@@ -82,6 +82,51 @@ model AllowedEmail {
   createdAt DateTime @default(now())
 }
 
+/// Security audit trail: who got in, who was turned away, who changed somebody's
+/// role or deactivated them, who deleted shared work.
+///
+/// Deliberately separate from BrandChangeLog / TournamentChangeLog /
+/// WelcomeChangeLog. Those answer "what did this entity look like before" and
+/// are scoped to one feature; this answers "who did what, from where, when" —
+/// the question an incident actually asks, across the whole app.
+///
+/// Same rule as the other logs: NO foreign keys. The trail must outlive the row
+/// it points at, otherwise removing an account erases the evidence of what that
+/// account did — which is exactly backwards.
+///
+/// `ip` and `userAgent` are personal data. They are here because an audit trail
+/// without them cannot answer "was this the same person" during an incident.
+/// See lib/audit.ts for the retention note.
+model SecurityAuditLog {
+  id     String @id @default(cuid())
+  /// One of the AuditAction values in lib/audit.ts (stored as text, like the
+  /// `action` column on every other log in this schema).
+  action String
+
+  /// Who did it. Null = an unauthenticated actor, i.e. a denied login attempt.
+  actorId    String?
+  actorEmail String?
+
+  /// Who/what it was done to. Denormalized for the same outliving reason.
+  targetId    String?
+  targetEmail String?
+  /// Human-readable target for non-user subjects (a bundle name, a brand).
+  targetLabel String?
+
+  /// Small structured context: { from: "DESIGNER", to: "ADMIN" }, { reason:
+  /// "not_allowed" }. Never a request body — this table must stay cheap to read.
+  details Json?
+
+  ip        String?
+  userAgent String?
+  createdAt DateTime @default(now())
+
+  @@index([createdAt])
+  @@index([action, createdAt])
+  @@index([actorEmail, createdAt])
+  @@index([targetId, createdAt])
+}
+
 // ============================================================
 // Catalog
 // ============================================================
